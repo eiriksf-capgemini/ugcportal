@@ -34,8 +34,9 @@ const authMock = vi.fn();
 vi.mock("@/lib/auth", () => ({ auth: authMock }));
 
 // The configured row below carries the fixture handle "fixture-handle", which
-// is configured only while the checked array derives it (ugcportal-lskg): append the
-// fixture person to the real CONFIGURED_USERS rather than seed a real name.
+// is configured only while the checked array derives it (ugcportal-lskg):
+// append the fixture person to the real CONFIGURED_USERS rather than seed a
+// real name.
 vi.mock("@/config/users", async (importOriginal) => {
   const { withFixtureConfiguredUser } = await import(
     "@/lib/test-support/fixture-configured-user"
@@ -72,8 +73,8 @@ const ORDINARY = "ordinary-ho7j";
 const ADMIN = "admin-ho7j";
 /**
  * Somebody REMOVED from the array after signing in (ugcportal-lskg): their
- * row still carries a handle — nothing clears the column — but no name in
- * CONFIGURED_USERS derives it any more.
+ * row still carries a handle — nothing clears the column — but no person in
+ * the checked CONFIGURED_USERS derives it any more.
  */
 const FORMER = "former-lskg";
 
@@ -327,7 +328,7 @@ describe("an upload by anybody else is never published automatically (ugcportal-
 });
 
 describe("a person removed from CONFIGURED_USERS is not configured, whatever their row says (ugcportal-lskg K1)", { timeout: 15_000 }, () => {
-  it("the stale handle really is on the row, and really is not in the array", async () => {
+  it("the stale handle really is on the row, and really is not in the checked list", async () => {
     // Both halves of the premise measured, so the two cases below cannot
     // pass because the seed silently lost the handle (that row would be an
     // ORDINARY uploader, and pass for the wrong reason).

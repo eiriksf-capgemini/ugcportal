@@ -97,9 +97,9 @@ export const PUBLIC_MEDIA_COLUMN_SCOPE: MediaAnonymousColumnScope = {
  * SINCE ugcportal-ho7j THE CONFIGURED USERS' SUCH ROWS ARE BACK. The scope
  * is evaluated on every read, so an already-published, attestation-less row
  * whose uploader is configured (a `configuredHandle` that the checked
- * `CONFIGURED_USERS` still derives, ugcportal-lskg) is served again on every surface
- * above, the sitemap included, with its people question decided by the
- * listing alone. That was decided on purpose (the operators' own uploads).
+ * `CONFIGURED_USERS` still derives, ugcportal-lskg) is served again on every
+ * surface above, the sitemap included, with its people question decided by
+ * the listing alone. That was decided on purpose (the operators' own uploads).
  * The owner can withdraw any one of them with DELETE
  * /api/media/[id]/publish.
  */

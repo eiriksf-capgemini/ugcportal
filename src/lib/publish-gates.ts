@@ -463,8 +463,9 @@ export function publishGateSources(
  * Not "the column is set" (ugcportal-lskg): sign-in writes the column and
  * nothing clears it, so a person removed from the array, or dropped by its
  * boot check (`reviewConfiguredUsers`), keeps a non-null handle. Asking the
- * checked array is what makes either enough to take publish-on-upload back. The Prisma arm `CONFIGURED_UPLOADER_UNDECLARED`
- * (src/lib/publishability.ts) asks the same list.
+ * checked array is what makes either enough to take publish-on-upload back.
+ * The Prisma arm `CONFIGURED_UPLOADER_UNDECLARED` (src/lib/publishability.ts)
+ * asks the same list.
  *
  * Read from the `User` row by id, never from the session: the session
  * payload does not carry the column (src/lib/auth.session-payload.test.ts),

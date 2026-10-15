@@ -36,8 +36,8 @@ export const FIXTURE_CONFIGURED_HANDLE = "fixture-handle";
 export const FIXTURE_CONFIGURED_IDENTITY = "google:fixture-handle@example.com";
 
 /**
- * A handle that is NOT derived from any name in the (mocked) array: the row
- * of a person removed from `CONFIGURED_USERS` after they signed in, whose
+ * A handle that NO person in the (mocked) checked array derives: the row of
+ * a person removed from `CONFIGURED_USERS` after they signed in, whose
  * column nothing cleared (ugcportal-lskg K1).
  */
 export const FORMER_CONFIGURED_HANDLE = "former-person";

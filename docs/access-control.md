@@ -120,12 +120,13 @@ questions asked**. That grant follows the array, not the row
 `reviewConfiguredUsers().sound` keeps, the same list sign-in and linking use,
 so a person the boot check drops (no identities, a handle that loses a
 letter, a handle collision) is not configured either
-(`CURRENT_CONFIGURED_HANDLES` in `src/lib/sign-in-policy.ts`, asked by `isConfiguredUser` in
-`src/lib/publish-gates.ts` and by the public scope in
+(`CURRENT_CONFIGURED_HANDLES` in `src/lib/sign-in-policy.ts`, asked by
+`isConfiguredUser` in `src/lib/publish-gates.ts` and by the public scope in
 `src/lib/publishability.ts`). Sign-in writes the column and nothing clears it,
-so a person removed from the array keeps their handle on the row — but from
-the deploy that removes them, their uploads are asked the rights questions
-like anybody's and their undeclared uploads leave the public site. Clearing
+so a person removed from the array, or dropped by its boot check, keeps their
+handle on the row — but from the deploy that removes or drops them, their
+uploads are asked the rights questions like anybody's and their undeclared
+uploads leave the public site. Clearing
 the stale handle by hand (`UPDATE "User" SET "configuredHandle" = NULL WHERE
 "configuredHandle" = 'old-handle';`) is no longer needed for that; it remains
 advisable for linking hygiene only, so a later person who happens to derive
@@ -184,7 +185,7 @@ every condition on the material — and a 403 with
 
 | Source | Effect |
 | --- | --- |
-| [`src/config/users.ts`](../src/config/users.ts) | The people this instance is for, each with the identities that belong to them. **Every identity listed here may sign in, and all of one person's identities share one user.** Since `ugcportal-ho7j` their uploads also publish on upload, without the rights questions (see "Signing in is not publishing" above). The usual place to add somebody (`ugcportal-t33p`). |
+| [`src/config/users.ts`](../src/config/users.ts) | The people this instance is for, each with the identities that belong to them. **Every identity listed here may sign in, and all of one person's identities share one user.** Since `ugcportal-ho7j` their uploads also publish on upload, without the rights questions, for as long as the boot check below keeps them (see "Signing in is not publishing" above). The usual place to add somebody (`ugcportal-t33p`). |
 | `ALLOWED_SIGNIN_EMAILS` | Comma-separated exact addresses permitted to sign in, each optionally bound to one provider with a `google:` or `facebook:` prefix. For somebody who is not (yet) a person in the array — a colleague who only needs to upload. |
 | `ADMIN_BOOTSTRAP_EMAILS` | First-admin bootstrap (`ugcportal-lu7`). Also grants sign-in — see below. |
 
@@ -400,8 +401,11 @@ boot log says one thing and the gate does another. The full list:
 | Two people whose names slug to the same handle | **both** are dropped — the handle is UNIQUE |
 
 **Being dropped costs the access as well as the linking**, unless something
-else admits the address. The array is a source of permission, so an identity
-removed from it is no longer permitted *by it*:
+else admits the address — and, for a person dropped whole, publish-on-upload
+too (`ugcportal-lskg`: their row's handle is no longer in
+`CURRENT_CONFIGURED_HANDLES`, so their uploads are asked the rights questions
+and their undeclared ones leave the public site). The array is a source of
+permission, so an identity removed from it is no longer permitted *by it*:
 
 * with **no** `ALLOWED_SIGNIN_EMAILS` entry for the address, the sign-in is
   refused at the gate — `no-configuration` if the array was the only source

@@ -819,8 +819,8 @@ let cachedReview: {
  *
  * FROM `reviewConfiguredUsers().sound`, NOT THE RAW ARRAY. Sign-in through
  * the array (`findConfiguredUser`, `permittedIdentities`) and linking read
- * the reviewed list, which drops a person whole for no identities, a handle that loses a letter, or a handle
- * collision. A grant read off the raw array would keep such a person
+ * the reviewed list, which drops a person whole for no identities, a handle
+ * that loses a letter, or a handle collision. A grant read off the raw array would keep such a person
  * configured while the boot log says they were removed — the state
  * docs/access-control.md says cannot exist.
  *

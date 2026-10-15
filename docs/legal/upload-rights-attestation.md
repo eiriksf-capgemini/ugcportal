@@ -186,18 +186,17 @@ both edges — see the delete-cascade runbook in `docs/access-control.md`).
 ## 5. Configured users are not asked (`ugcportal-ho7j`)
 
 A **configured user** is a person listed in `CONFIGURED_USERS`
-([`src/config/users.ts`](../../src/config/users.ts)) today, linked to their
-`User` row at sign-in by `src/lib/configured-user-link.ts`. The row counts
-only while its `configuredHandle` is one the checked array still derives
-(`ugcportal-lskg`) — the people the boot check keeps
-(`reviewConfiguredUsers().sound` in `src/lib/sign-in-policy.ts`), the same
-list sign-in uses. A person removed from the array, or dropped by that check
-(no identities, a handle that loses a letter, a handle collision), keeps the handle on their
-row — nothing clears it — but is no longer configured, so everything below
-stops applying to them from the deploy that removes them. Since
-`ugcportal-ho7j`, on
-Eirik's instruction of 2026-10-15 ("there are no need for the yes or no
-question before i upload"):
+([`src/config/users.ts`](../../src/config/users.ts)) today **and kept by its
+boot check** (`reviewConfiguredUsers().sound` in `src/lib/sign-in-policy.ts`,
+the same list sign-in uses), linked to their `User` row at sign-in by
+`src/lib/configured-user-link.ts`. The row counts only while its
+`configuredHandle` is one that checked array still derives
+(`ugcportal-lskg`). A person removed from the array, or dropped by that check
+(no identities, a handle that loses a letter, a handle collision), keeps the
+handle on their row — nothing clears it — but is not configured, so
+everything below stops applying to them from the deploy that removes or
+drops them. Since `ugcportal-ho7j`, on Eirik's instruction of 2026-10-15
+("there are no need for the yes or no question before i upload"):
 
 - **They are not asked at upload.** The upload page does not render the
   questions in §2 for them, and `POST /api/media` accepts an upload from them

@@ -84,8 +84,9 @@ import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db"
  */
 
 // The configured row below carries the fixture handle "fixture-handle", which
-// is configured only while the checked array derives it (ugcportal-lskg): append the
-// fixture person to the real CONFIGURED_USERS rather than seed a real name.
+// is configured only while the checked array derives it (ugcportal-lskg):
+// append the fixture person to the real CONFIGURED_USERS rather than seed a
+// real name.
 vi.mock("@/config/users", async (importOriginal) => {
   const { withFixtureConfiguredUser } = await import(
     "@/lib/test-support/fixture-configured-user"
@@ -123,8 +124,8 @@ const DEMOTED = "demoted-scope-3ae";
 const CONFIGURED_OWNER = "configured-owner-scope-ho7j";
 /**
  * A person REMOVED from the array after signing in (ugcportal-lskg): the
- * column still carries their handle — nothing clears it — but no name in
- * CONFIGURED_USERS derives it, so they are not configured.
+ * column still carries their handle — nothing clears it — but no person in
+ * the checked CONFIGURED_USERS derives it, so they are not configured.
  */
 const FORMER_OWNER = "former-owner-scope-lskg";
 
@@ -154,7 +155,7 @@ type Case = {
   /** The uploader is a configured user (ugcportal-ho7j). Default: not. */
   configured?: boolean;
   /**
-   * The uploader's row carries a handle the array no longer derives
+   * The uploader's row carries a handle the checked array no longer derives
    * (ugcportal-lskg). Takes precedence over `configured`.
    */
   former?: boolean;
@@ -455,7 +456,7 @@ async function predicateBlocker(id: string): Promise<string | null> {
   // function the routes decide it with (`isConfiguredUser`,
   // src/lib/publish-gates.ts) rather than a restatement of it: a copy here
   // read "not null" and would have kept agreeing with a scope that never
-  // learned the array (ugcportal-lskg).
+  // learned the checked array (ugcportal-lskg).
   return publishabilityBlocker({
     ...row,
     uploaderConfigured: await isConfiguredUser(prisma, row.userId),
@@ -597,7 +598,7 @@ describe("the configured-uploader exemption, in the scope itself (ugcportal-ho7j
  * the same direction would still agree.
  */
 describe("a person removed from CONFIGURED_USERS, in the scope itself (ugcportal-lskg K1)", () => {
-  it("the premise: the fixture handle is in today's list and the stale one is not", async () => {
+  it("the premise: the fixture handle is in today's checked list and the stale one is not", async () => {
     const { CURRENT_CONFIGURED_HANDLES } = await import("@/lib/sign-in-policy");
     expect(CURRENT_CONFIGURED_HANDLES).toContain(FIXTURE_CONFIGURED_HANDLE);
     expect(CURRENT_CONFIGURED_HANDLES).not.toContain(FORMER_CONFIGURED_HANDLE);
