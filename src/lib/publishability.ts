@@ -13,6 +13,7 @@ import {
   type GateAttestation,
   type GateLayerClearance,
 } from "@/lib/resale-rights";
+import { CURRENT_CONFIGURED_HANDLES } from "@/lib/sign-in-policy";
 
 /**
  * THE PUBLISHABILITY GATE (ugcportal-3ae).
@@ -231,9 +232,10 @@ export type PublishabilityUpload = {
   listing: PublishabilityListing | null;
   /**
    * Whether the uploader is a CONFIGURED user — `User.configuredHandle` is
-   * not null, i.e. one of the people in `CONFIGURED_USERS`
-   * (src/config/users.ts), linked by src/lib/configured-user-link.ts
-   * (ugcportal-ho7j).
+   * one of the handles the CHECKED `CONFIGURED_USERS` (src/config/users.ts)
+   * derives today (`CURRENT_CONFIGURED_HANDLES`, src/lib/sign-in-policy.ts),
+   * linked by src/lib/configured-user-link.ts (ugcportal-ho7j) and decided
+   * by `isConfiguredUser` (src/lib/publish-gates.ts, ugcportal-lskg).
    *
    * It changes exactly ONE thing below: a MISSING attestation stops being a
    * refusal, because those people are not asked the rights questions at
@@ -540,13 +542,24 @@ const NOBODY_IDENTIFIABLE_SHOWN = {
  * their undeclared uploads off every public surface on the next request,
  * with no write to any `Media` row.
  *
+ * `in` the handles the CHECKED array derives TODAY
+ * (`CURRENT_CONFIGURED_HANDLES`, src/lib/sign-in-policy.ts), not
+ * `not: null` (ugcportal-lskg): the column is written at sign-in and nothing
+ * clears it, so a person removed from `CONFIGURED_USERS`, or dropped by its
+ * boot check, keeps a non-null handle. Asking the same list
+ * `isConfiguredUser` (src/lib/publish-gates.ts) asks is what takes their
+ * undeclared uploads off the public site once the deploy that removes or
+ * drops them is live. Copied into a fresh array because Prisma's `in`
+ * takes a mutable one and the shared list is frozen. An empty list matches
+ * no row (asserted in src/lib/publishability.scope-agreement.test.ts).
+ *
  * `attestation: { is: null }` and not merely "or configured": a configured
  * uploader who DID declare is judged by the declaration, in the arm beside
  * this one, and a disclaiming declaration keeps the row out.
  */
 const CONFIGURED_UPLOADER_UNDECLARED = {
   attestation: { is: null },
-  user: { is: { configuredHandle: { not: null } } },
+  user: { is: { configuredHandle: { in: [...CURRENT_CONFIGURED_HANDLES] } } },
 };
 
 /**

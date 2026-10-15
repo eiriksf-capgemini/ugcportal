@@ -83,6 +83,17 @@ import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db"
  * or delete the attestation in the same transaction.
  */
 
+// The configured row below carries the fixture handle "fixture-handle", which
+// is configured only while the checked array derives it (ugcportal-lskg):
+// append the fixture person to the real CONFIGURED_USERS rather than seed a
+// real name.
+vi.mock("@/config/users", async (importOriginal) => {
+  const { withFixtureConfiguredUser } = await import(
+    "@/lib/test-support/fixture-configured-user"
+  );
+  return withFixtureConfiguredUser(await importOriginal());
+});
+
 vi.mock("@/lib/auth", () => ({
   auth: () => {
     throw new Error("the anonymous scope must not consult the session");
@@ -94,17 +105,29 @@ const { prisma } = await import("@/lib/prisma");
 const { PUBLIC_MEDIA_SCOPE } = await import("@/lib/public-media");
 const { publishabilityBlocker } = await import("@/lib/publishability");
 const { MEDIA_GATE_SELECT } = await import("@/lib/resale-rights");
+const { isConfiguredUser } = await import("@/lib/publish-gates");
+const { FIXTURE_CONFIGURED_HANDLE, FORMER_CONFIGURED_HANDLE } = await import(
+  "@/lib/test-support/fixture-configured-user"
+);
 
 const OWNER = "owner-scope-3ae";
 const ADMIN = "admin-scope-3ae";
 const DEMOTED = "demoted-scope-3ae";
 /**
- * A CONFIGURED uploader (ugcportal-ho7j): `User.configuredHandle` set, the
+ * A CONFIGURED uploader (ugcportal-ho7j): a `User.configuredHandle`, the
  * state src/lib/configured-user-link.ts leaves the people in
  * src/config/users.ts in. The handle is a fixture value, not one of the
- * real ones — the rule reads "not null", not a name.
+ * real ones: since ugcportal-lskg the rule reads "in the list the checked
+ * array derives today", so the fixture person (with one identity, so the
+ * check keeps them) is appended to the array by the `vi.mock` above.
  */
 const CONFIGURED_OWNER = "configured-owner-scope-ho7j";
+/**
+ * A person REMOVED from the array after signing in (ugcportal-lskg): the
+ * column still carries their handle — nothing clears it — but no person in
+ * the checked CONFIGURED_USERS derives it, so they are not configured.
+ */
+const FORMER_OWNER = "former-owner-scope-lskg";
 
 type AttestationShape = {
   attestedByUserId?: string;
@@ -131,6 +154,11 @@ type Case = {
   clearance?: ClearanceShape;
   /** The uploader is a configured user (ugcportal-ho7j). Default: not. */
   configured?: boolean;
+  /**
+   * The uploader's row carries a handle the checked array no longer derives
+   * (ugcportal-lskg). Takes precedence over `configured`.
+   */
+  former?: boolean;
 };
 
 /**
@@ -304,11 +332,35 @@ const CASES: Case[] = [
     attestation: { showsIdentifiablePeople: true },
     configured: true,
   },
+  // ugcportal-lskg: an uploader removed from the array, row left as it was.
+  {
+    id: "former-undeclared",
+    what: "a removed person's upload: no declaration, stale handle on the row",
+    attestation: null,
+    former: true,
+  },
+  {
+    id: "former-undeclared-listing-no-people",
+    what: "a removed person's undeclared upload, triaged: nobody shown",
+    attestation: null,
+    former: true,
+    depictsPeople: false,
+  },
+  {
+    id: "former-declared",
+    what: "a removed person who did answer the questions, cleanly",
+    attestation: {},
+    former: true,
+  },
 ];
 
 async function seed(testCase: Case): Promise<void> {
   const { id } = testCase;
-  const owner = testCase.configured ? CONFIGURED_OWNER : OWNER;
+  const owner = testCase.former
+    ? FORMER_OWNER
+    : testCase.configured
+      ? CONFIGURED_OWNER
+      : OWNER;
 
   // Every row satisfies the COLUMN half of the scope, so the only thing
   // that can decide its visibility below is the rights half.
@@ -391,7 +443,6 @@ async function predicateBlocker(id: string): Promise<string | null> {
     where: { id },
     select: {
       userId: true,
-      user: { select: { configuredHandle: true } },
       attestation: { select: MEDIA_GATE_SELECT.attestation.select },
       listing: {
         select: {
@@ -401,12 +452,14 @@ async function predicateBlocker(id: string): Promise<string | null> {
       },
     },
   });
-  // `uploaderConfigured` from the uploader's own `User` row, the way the
-  // routes decide it (`isConfiguredUser`, src/lib/publish-gates.ts).
-  const { user, ...upload } = row;
+  // `uploaderConfigured` from the uploader's own `User` row, BY the
+  // function the routes decide it with (`isConfiguredUser`,
+  // src/lib/publish-gates.ts) rather than a restatement of it: a copy here
+  // read "not null" and would have kept agreeing with a scope that never
+  // learned the checked array (ugcportal-lskg).
   return publishabilityBlocker({
-    ...upload,
-    uploaderConfigured: user.configuredHandle !== null,
+    ...row,
+    uploaderConfigured: await isConfiguredUser(prisma, row.userId),
   });
 }
 
@@ -426,6 +479,12 @@ beforeAll(async () => {
         email: "configured-owner-scope-ho7j@example.com",
         role: "USER",
         configuredHandle: "fixture-handle",
+      },
+      {
+        id: FORMER_OWNER,
+        email: "former-owner-scope-lskg@example.com",
+        role: "USER",
+        configuredHandle: FORMER_CONFIGURED_HANDLE,
       },
     ],
   });
@@ -530,5 +589,84 @@ describe("the configured-uploader exemption, in the scope itself (ugcportal-ho7j
     expect(visibleIds.has("configured-undeclared-people-cleared")).toBe(true);
     expect(visibleIds.has("configured-undeclared-listing-no-people")).toBe(true);
     expect(visibleIds.has("configured-undeclared-listing-untriaged")).toBe(true);
+  });
+});
+
+/**
+ * ugcportal-lskg K1, at the scope, as EXPECTED OUTCOMES — the same reason
+ * the ho7j block above states them: the predicate and the scope wrong in
+ * the same direction would still agree.
+ */
+describe("a person removed from CONFIGURED_USERS, in the scope itself (ugcportal-lskg K1)", () => {
+  it("the premise: the fixture handle is in today's checked list and the stale one is not", async () => {
+    const { CURRENT_CONFIGURED_HANDLES } = await import("@/lib/sign-in-policy");
+    expect(CURRENT_CONFIGURED_HANDLES).toContain(FIXTURE_CONFIGURED_HANDLE);
+    expect(CURRENT_CONFIGURED_HANDLES).not.toContain(FORMER_CONFIGURED_HANDLE);
+    const row = await prisma.user.findUniqueOrThrow({ where: { id: FORMER_OWNER } });
+    expect(row.configuredHandle).toBe(FORMER_CONFIGURED_HANDLE);
+  });
+
+  it("stale handle, declaration missing: out of scope (it was in scope before lskg)", () => {
+    expect(visibleIds.has("former-undeclared")).toBe(false);
+    expect(visibleIds.has("former-undeclared-listing-no-people")).toBe(false);
+  });
+
+  it("stale handle, clean declaration: in scope, judged like anybody's", () => {
+    expect(visibleIds.has("former-declared")).toBe(true);
+  });
+});
+
+/**
+ * What Prisma does with `in: []` on SQLite, measured rather than assumed
+ * (ugcportal-lskg): an array with nobody in it must leave the configured
+ * arm matching NO row, never every row. Checked twice — the bare filter,
+ * and the module's own scope rebuilt with CONFIGURED_USERS empty.
+ */
+describe("an empty handle list matches nothing (ugcportal-lskg)", () => {
+  it("`configuredHandle: { in: [] }` matches no user, even ones with a handle", async () => {
+    // Non-vacuous: rows with a handle exist to be matched.
+    expect(
+      await prisma.user.count({ where: { configuredHandle: { not: null } } }),
+    ).toBeGreaterThan(0);
+    expect(
+      await prisma.user.count({ where: { configuredHandle: { in: [] } } }),
+    ).toBe(0);
+  });
+
+  it("the scope built from an empty array serves no undeclared configured upload", async () => {
+    vi.resetModules();
+    vi.doMock("@/config/users", () => ({ CONFIGURED_USERS: [] }));
+    try {
+      const fresh = await import("@/lib/publishability");
+      // The rebuilt list really is empty, so this is the `in: []` case.
+      expect(
+        (await import("@/lib/sign-in-policy")).CURRENT_CONFIGURED_HANDLES,
+      ).toEqual([]);
+      const undeclaredConfigured = [
+        "configured-undeclared",
+        "configured-undeclared-listing-no-people",
+        "configured-undeclared-listing-untriaged",
+        "configured-undeclared-people-cleared",
+      ];
+      // The same rows ARE in scope under the module-load list (the ho7j
+      // block above), so a zero here is the empty list doing it.
+      for (const id of undeclaredConfigured) {
+        expect(visibleIds.has(id)).toBe(true);
+        expect(
+          await prisma.media.count({
+            where: { id, ...fresh.PUBLIC_MEDIA_RIGHTS_SCOPE },
+          }),
+        ).toBe(0);
+      }
+      // A declared row is untouched by the empty list.
+      expect(
+        await prisma.media.count({
+          where: { id: "configured-declared", ...fresh.PUBLIC_MEDIA_RIGHTS_SCOPE },
+        }),
+      ).toBe(1);
+    } finally {
+      vi.doUnmock("@/config/users");
+      vi.resetModules();
+    }
   });
 });

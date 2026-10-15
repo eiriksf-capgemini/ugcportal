@@ -15,6 +15,7 @@ import {
   type PublishabilityListing,
 } from "@/lib/publishability";
 import type { GateAttestation } from "@/lib/resale-rights";
+import { CURRENT_CONFIGURED_HANDLES } from "@/lib/sign-in-policy";
 
 /**
  * THE PUBLISH GATES, IN ONE PLACE (ugcportal-ho7j).
@@ -86,7 +87,7 @@ export type PublishGateSources = {
   listing: () => Promise<PublishGateListing | null>;
   attestation: () => Promise<GateAttestation | null>;
   /**
-   * `User.configuredHandle !== null` for the uploader. Consulted only when
+   * `isConfiguredUser` for the uploader. Consulted only when
    * the attestation is missing, the one case where the answer changes
    * anything (`publishabilityBlocker`, src/lib/publishability.ts).
    */
@@ -454,8 +455,17 @@ export function publishGateSources(
 }
 
 /**
- * Is this user one of the CONFIGURED people — `User.configuredHandle` not
- * null (src/config/users.ts, linked by src/lib/configured-user-link.ts)?
+ * Is this user one of the CONFIGURED people — `User.configuredHandle` set
+ * AND one of the handles the CHECKED `CONFIGURED_USERS` derives TODAY
+ * (`CURRENT_CONFIGURED_HANDLES`, src/lib/sign-in-policy.ts;
+ * src/config/users.ts, linked by src/lib/configured-user-link.ts)?
+ *
+ * Not "the column is set" (ugcportal-lskg): sign-in writes the column and
+ * nothing clears it, so a person removed from the array, or dropped by its
+ * boot check (`reviewConfiguredUsers`), keeps a non-null handle. Asking the
+ * checked array is what makes either enough to take publish-on-upload back.
+ * The Prisma arm `CONFIGURED_UPLOADER_UNDECLARED` (src/lib/publishability.ts)
+ * asks the same list.
  *
  * Read from the `User` row by id, never from the session: the session
  * payload does not carry the column (src/lib/auth.session-payload.test.ts),
@@ -471,5 +481,6 @@ export async function isConfiguredUser(
     where: { id: userId },
     select: { configuredHandle: true },
   });
-  return (user?.configuredHandle ?? null) !== null;
+  const handle = user?.configuredHandle ?? null;
+  return handle !== null && CURRENT_CONFIGURED_HANDLES.includes(handle);
 }

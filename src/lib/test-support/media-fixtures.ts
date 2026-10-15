@@ -47,7 +47,8 @@ export type SeedMediaOptions = {
    *
    * `false` is how a test asks for the pre-ugcportal-3ae row deliberately:
    * published, visible before, and refused now — provided the caller's
-   * user row has no `configuredHandle` (this module does not create users).
+   * user row is not configured (no `configuredHandle`, or one the checked
+   * array does not derive; this module does not create users).
    */
   attested?: boolean;
   /**
@@ -130,9 +131,10 @@ export async function seedMedia(
     imports or calls `seedMedia`. The other seeders in this tree (that
     file's `row()`, for one) build the row themselves rather than going
     through here. All seven of the real importers need a declaration now
-    that the public scope requires one for any uploader without a
-    `configuredHandle` (a configured uploader's row is public without one
-    since ugcportal-ho7j); seven copies of these eleven columns
+    that the public scope requires one for any uploader who is not
+    configured — a `configuredHandle` that is null, or one the checked array
+    no longer derives (ugcportal-lskg); a configured uploader's row is public
+    without one since ugcportal-ho7j. Seven copies of these eleven columns
     is precisely the sibling-omission shape this file's own header says it
     exists to prevent.
   */

@@ -22,6 +22,20 @@ import {
   PUBLISH_BLOCKER_MESSAGES,
 } from "@/lib/publishability";
 import type { GateAttestation } from "@/lib/resale-rights";
+import { CURRENT_CONFIGURED_HANDLES } from "@/lib/sign-in-policy";
+import {
+  FIXTURE_CONFIGURED_HANDLE,
+  FORMER_CONFIGURED_HANDLE,
+} from "@/lib/test-support/fixture-configured-user";
+
+// "fixture-handle" below is configured only while the checked array derives
+// it (ugcportal-lskg): append the fixture person to the real CONFIGURED_USERS.
+vi.mock("@/config/users", async (importOriginal) => {
+  const { withFixtureConfiguredUser } = await import(
+    "@/lib/test-support/fixture-configured-user"
+  );
+  return withFixtureConfiguredUser(await importOriginal());
+});
 
 /**
  * ugcportal-ho7j K4, at the shared function: each refusal, in the order the
@@ -422,6 +436,8 @@ describe("publishGateSources: what it reads, through which client", () => {
     for (const [handle, expected] of [
       ["fixture-handle", true],
       [null, false],
+      // ugcportal-lskg: a handle the checked array no longer derives.
+      [FORMER_CONFIGURED_HANDLE, false],
     ] as const) {
       const client = fakeClient(handle);
       const read = publishGateSources(client as unknown as PublishGateClient, {
@@ -455,5 +471,31 @@ describe("publishGateSources: what it reads, through which client", () => {
         "nobody",
       ),
     ).toBe(false);
+  });
+
+  /*
+   * ugcportal-lskg K1/K3 at the predicate: a non-null handle is configured
+   * only while it is in today's checked list (`CURRENT_CONFIGURED_HANDLES`). Each premise measured first, so a
+   * mock that silently stopped appending the fixture person (or a list that
+   * grew "former-person") fails here rather than passing for the wrong
+   * reason.
+   */
+  it("isConfiguredUser follows the checked CONFIGURED_USERS list, not the column alone", async () => {
+    expect(CURRENT_CONFIGURED_HANDLES).toContain(FIXTURE_CONFIGURED_HANDLE);
+    expect(CURRENT_CONFIGURED_HANDLES).not.toContain(FORMER_CONFIGURED_HANDLE);
+    const ask = (configuredHandle: string | null) =>
+      isConfiguredUser(
+        {
+          user: { findUnique: vi.fn(async () => ({ configuredHandle })) },
+        } as unknown as Parameters<typeof isConfiguredUser>[0],
+        UPLOADER,
+      );
+    expect(await ask(FIXTURE_CONFIGURED_HANDLE)).toBe(true);
+    // Every person the checked array keeps is still configured (K3).
+    for (const handle of CURRENT_CONFIGURED_HANDLES) {
+      expect(await ask(handle)).toBe(true);
+    }
+    expect(await ask(FORMER_CONFIGURED_HANDLE)).toBe(false);
+    expect(await ask(null)).toBe(false);
   });
 });

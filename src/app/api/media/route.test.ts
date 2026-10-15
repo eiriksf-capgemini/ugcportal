@@ -3356,10 +3356,11 @@ describe("POST /api/media — the uploader's rights attestation (ugcportal-15r)"
 });
 
 /**
- * ugcportal-ho7j, against the mocked client: a CONFIGURED uploader
- * (`User.configuredHandle` not null) is not asked the rights questions, and
- * their upload is published in the create transaction if the shared publish
- * gates pass. The same behaviour against a real database, including the
+ * ugcportal-ho7j, against the mocked client: a CONFIGURED uploader (a
+ * `User.configuredHandle` in `CURRENT_CONFIGURED_HANDLES`, the checked
+ * array's handles, ugcportal-lskg — "eirik" below) is not asked the rights
+ * questions, and their upload is published in the create transaction if the
+ * shared publish gates pass. The same behaviour against a real database, including the
  * public feed, is src/app/api/media/route.auto-publish.test.ts.
  */
 describe("POST /api/media — a configured uploader (ugcportal-ho7j)", () => {

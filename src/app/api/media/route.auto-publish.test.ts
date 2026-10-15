@@ -33,6 +33,17 @@ const { prisma } = await import("@/lib/prisma");
 const authMock = vi.fn();
 vi.mock("@/lib/auth", () => ({ auth: authMock }));
 
+// The configured row below carries the fixture handle "fixture-handle", which
+// is configured only while the checked array derives it (ugcportal-lskg):
+// append the fixture person to the real CONFIGURED_USERS rather than seed a
+// real name.
+vi.mock("@/config/users", async (importOriginal) => {
+  const { withFixtureConfiguredUser } = await import(
+    "@/lib/test-support/fixture-configured-user"
+  );
+  return withFixtureConfiguredUser(await importOriginal());
+});
+
 vi.mock("@/lib/s3", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/s3")>();
   return {
@@ -47,12 +58,25 @@ const { GET: publicGET } = await import("@/app/api/public/media/route");
 const { evaluateSellability, MEDIA_GATE_SELECT } = await import(
   "@/lib/resale-rights"
 );
+const { FORMER_CONFIGURED_HANDLE } = await import(
+  "@/lib/test-support/fixture-configured-user"
+);
 
-/** A configured person: `configuredHandle` set, as configured-user-link leaves them. */
+/**
+ * A configured person: a `configuredHandle` the checked array derives (the
+ * fixture person the `@/config/users` mock appends), as configured-user-link
+ * leaves them.
+ */
 const CONFIGURED = "configured-ho7j";
 /** Somebody allowed to sign in who is not one of the configured people. */
 const ORDINARY = "ordinary-ho7j";
 const ADMIN = "admin-ho7j";
+/**
+ * Somebody REMOVED from the array after signing in (ugcportal-lskg): their
+ * row still carries a handle — nothing clears the column — but no person in
+ * the checked CONFIGURED_USERS derives it any more.
+ */
+const FORMER = "former-lskg";
 
 const ALT_TEXT = "A fox crossing a snowy field at dawn";
 
@@ -134,6 +158,12 @@ beforeEach(async () => {
       },
       { id: ORDINARY, email: "ordinary-ho7j@example.com", role: "USER" },
       { id: ADMIN, email: "admin-ho7j@example.com", role: "ADMIN" },
+      {
+        id: FORMER,
+        email: "former-lskg@example.com",
+        role: "USER",
+        configuredHandle: FORMER_CONFIGURED_HANDLE,
+      },
     ],
   });
 });
@@ -285,7 +315,7 @@ describe("an upload by anybody else is never published automatically (ugcportal-
   });
 
   it("an ADMIN who is not configured is not auto-published either", async () => {
-    // Auto-publish is decided by `configuredHandle`, not by role.
+    // Auto-publish is decided by the configured handle, not by role.
     authMock.mockResolvedValue({ user: { id: ADMIN, role: "ADMIN" } });
 
     const body = await (
@@ -293,6 +323,50 @@ describe("an upload by anybody else is never published automatically (ugcportal-
     ).json();
 
     expect(body.publishedAt).toBeNull();
+    expect(await publicPreviewIds()).toEqual([]);
+  });
+});
+
+describe("a person removed from CONFIGURED_USERS is not configured, whatever their row says (ugcportal-lskg K1)", { timeout: 15_000 }, () => {
+  it("the stale handle really is on the row, and really is not in the checked list", async () => {
+    // Both halves of the premise measured, so the two cases below cannot
+    // pass because the seed silently lost the handle (that row would be an
+    // ORDINARY uploader, and pass for the wrong reason).
+    const { CURRENT_CONFIGURED_HANDLES } = await import("@/lib/sign-in-policy");
+    const row = await prisma.user.findUniqueOrThrow({ where: { id: FORMER } });
+    expect(row.configuredHandle).toBe(FORMER_CONFIGURED_HANDLE);
+    expect(CURRENT_CONFIGURED_HANDLES).not.toContain(FORMER_CONFIGURED_HANDLE);
+  });
+
+  it("without attestation fields: 400, and no Media row — exactly the non-configured answer", async () => {
+    signedInAs(FORMER);
+
+    const response = await upload(image());
+
+    expect(response.status).toBe(400);
+    expect(await prisma.media.count()).toBe(0);
+  });
+
+  it("with a complete attestation: 201, publishedAt null, no publishRefusal key, not on the public feed", async () => {
+    signedInAs(FORMER);
+
+    const response = await upload(image(), {
+      attestationParts: attestation(MediaAuthorship.AUTHOR),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(201);
+    expect(body.publishedAt).toBeNull();
+    // The configured path always carries `publishRefusal` (null or a
+    // blocker); the ordinary path never does. Its absence is what says
+    // which branch the route took.
+    expect(body).not.toHaveProperty("publishRefusal");
+    const row = await prisma.media.findUniqueOrThrow({
+      where: { id: body.id },
+      include: { attestation: true },
+    });
+    expect(row.publishedAt).toBeNull();
+    expect(row.attestation?.authorship).toBe(MediaAuthorship.AUTHOR);
     expect(await publicPreviewIds()).toEqual([]);
   });
 });

@@ -801,6 +801,50 @@ let cachedReview: {
   value: ConfiguredUsersReview;
 } | null = null;
 
+/**
+ * The handles of the people the CHECKED array configures TODAY — what
+ * "configured" means wherever publish-on-upload follows from it
+ * (ugcportal-lskg).
+ *
+ * `User.configuredHandle` is written at sign-in from the array and no code
+ * path in src/ clears it (no non-test writer sets it to null), so a non-null
+ * column only says the person WAS configured once. Taking someone out of
+ * the array has to take back what the array grants without an operator
+ * editing the database, so both readers of that grant — `isConfiguredUser`
+ * in src/lib/publish-gates.ts (which the upload page and POST /api/media
+ * both call) and the Prisma scope arm `CONFIGURED_UPLOADER_UNDECLARED` in
+ * src/lib/publishability.ts — ask "is the row's handle in THIS list", not
+ * "is it set". (src/lib/configured-user-link.ts still finds a person's row
+ * by the column; that is linking, not a grant.)
+ *
+ * FROM `reviewConfiguredUsers().sound`, NOT THE RAW ARRAY. Sign-in through
+ * the array (`findConfiguredUser`, `permittedIdentities`) and linking read
+ * the reviewed list, which drops a person whole for no identities, a handle
+ * that loses a letter, or a handle collision. A grant read off the raw array would keep such a person
+ * configured while the boot log says they were removed — the state
+ * docs/access-control.md says cannot exist.
+ *
+ * COMPUTED ONCE, AT MODULE LOAD, and that is correct rather than merely
+ * cheap: `reviewConfiguredUsers` is a function of the array alone (it reads
+ * no environment, clock or I/O), and `CONFIGURED_USERS` is committed
+ * TypeScript (src/config/users.ts), edited by changing that file and
+ * deploying — a new process that loads this module afresh. Nothing at
+ * runtime mutates the array (its `readonly` is compile-time only — see the
+ * same note in `permittedIdentities` below). Declared HERE, after
+ * `cachedReview`, because calling `reviewConfiguredUsers` before that `let`
+ * is initialised would throw. Frozen so no caller can push a handle into the
+ * shared list.
+ *
+ * A name that yields no handle (`configuredUserHandle` returns `null`) is
+ * left out; the review already drops such a person, so the filter only
+ * keeps the type honest.
+ */
+export const CURRENT_CONFIGURED_HANDLES: readonly string[] = Object.freeze(
+  reviewConfiguredUsers()
+    .sound.map(configuredUserHandle)
+    .filter((handle): handle is string => handle !== null),
+);
+
 /** Everything wrong with the array, as lines an operator can act on. */
 export function configuredUserProblems(
   users: readonly ConfiguredUser[] = CONFIGURED_USERS,

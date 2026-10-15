@@ -113,8 +113,24 @@ Deliberately **not** implemented, because each would silently be the decision:
 Being admitted by any of the three sources below lets somebody **sign in and
 upload**. For `ALLOWED_SIGNIN_EMAILS` that is all it does: it puts nothing on
 the public gallery. Since `ugcportal-ho7j`, being a configured person in
-`src/config/users.ts` (a `User` row with `configuredHandle` set) also means
-**uploads publish on upload, with no rights questions asked**. The upload is
+`src/config/users.ts` also means **uploads publish on upload, with no rights
+questions asked**. That grant follows the array, not the row
+(`ugcportal-lskg`): a `User` row counts as configured only while its
+`configuredHandle` is one the **checked** array derives today — the people
+`reviewConfiguredUsers().sound` keeps, the same list sign-in and linking use,
+so a person the boot check drops (no identities, a handle that loses a
+letter, a handle collision) is not configured either
+(`CURRENT_CONFIGURED_HANDLES` in `src/lib/sign-in-policy.ts`, asked by
+`isConfiguredUser` in `src/lib/publish-gates.ts` and by the public scope in
+`src/lib/publishability.ts`). Sign-in writes the column and nothing clears it,
+so a person removed from the array, or dropped by its boot check, keeps their
+handle on the row — but from the deploy that removes or drops them, their
+uploads are asked the rights questions like anybody's and their undeclared
+uploads leave the public site. Clearing
+the stale handle by hand (`UPDATE "User" SET "configuredHandle" = NULL WHERE
+"configuredHandle" = 'old-handle';`) is no longer needed for that; it remains
+advisable for linking hygiene only, so a later person who happens to derive
+the same handle is not adopted onto the old row. The upload is
 published only if the same material gates the manual publish route runs all
 pass (`publishGateRefusal`, `src/lib/publish-gates.ts`), and it stays
 unsellable without an attestation (see
@@ -169,7 +185,7 @@ every condition on the material — and a 403 with
 
 | Source | Effect |
 | --- | --- |
-| [`src/config/users.ts`](../src/config/users.ts) | The people this instance is for, each with the identities that belong to them. **Every identity listed here may sign in, and all of one person's identities share one user.** Since `ugcportal-ho7j` their uploads also publish on upload, without the rights questions (see "Signing in is not publishing" above). The usual place to add somebody (`ugcportal-t33p`). |
+| [`src/config/users.ts`](../src/config/users.ts) | The people this instance is for, each with the identities that belong to them. **Every identity listed here may sign in, and all of one person's identities share one user.** Since `ugcportal-ho7j` their uploads also publish on upload, without the rights questions, for as long as the boot check below keeps them (see "Signing in is not publishing" above). The usual place to add somebody (`ugcportal-t33p`). |
 | `ALLOWED_SIGNIN_EMAILS` | Comma-separated exact addresses permitted to sign in, each optionally bound to one provider with a `google:` or `facebook:` prefix. For somebody who is not (yet) a person in the array — a colleague who only needs to upload. |
 | `ADMIN_BOOTSTRAP_EMAILS` | First-admin bootstrap (`ugcportal-lu7`). Also grants sign-in — see below. |
 
@@ -221,9 +237,15 @@ The pair it matches on comes from the AsyncLocalStorage slot that
 mechanism that records which identity minted a session (`ugcportal-mzr`). So
 there is no path on which linking happens for an identity the gate refused,
 and nothing the gate itself calls writes a row. An identity that is not in
-the array goes through the unwrapped adapter, unchanged: no handle, one user
-per identity, and @auth/core's own `OAuthAccountNotLinked` protection exactly
-where it was.
+the array goes through the unwrapped adapter, unchanged, and @auth/core's own
+`OAuthAccountNotLinked` protection is exactly where it was. For an identity
+that has never signed in, that means a new user with no handle, one per
+identity (or that refusal, if its address already belongs to another row).
+An identity that already has an `Account` row is different: @auth/core
+resolves it with `getUserByAccount`, which is deliberately not wrapped (see
+the header of `src/lib/configured-user-link.ts`), so it lands on the user
+that row already points at — for a person taken out of the array, or dropped by the boot check
+below, after signing in through it, that is their old row, handle and all.
 
 The lookup is on the **exact** (provider, normalised address) pair. Never the
 domain, never the provider alone, never the address alone. Two people who
@@ -385,15 +407,38 @@ boot log says one thing and the gate does another. The full list:
 | Two people whose names slug to the same handle | **both** are dropped — the handle is UNIQUE |
 
 **Being dropped costs the access as well as the linking**, unless something
-else admits the address. The array is a source of permission, so an identity
-removed from it is no longer permitted *by it*:
+else admits the address — and, for a person dropped whole, publish-on-upload
+too (`ugcportal-lskg`: their row's handle is no longer in
+`CURRENT_CONFIGURED_HANDLES`, so their uploads are asked the rights questions
+and their undeclared ones leave the public site). The array is a source of
+permission, so an identity removed from it is no longer permitted *by it*:
 
 * with **no** `ALLOWED_SIGNIN_EMAILS` entry for the address, the sign-in is
   refused at the gate — `no-configuration` if the array was the only source
   configured at all, `not-permitted` otherwise;
-* with an entry for it, the sign-in is permitted and gets an **ordinary,
-  handle-less user**, exactly as any other allowlisted address does. It is
-  not linked to anybody, which is the point.
+* with an entry for it, the sign-in is permitted, and where it lands depends
+  on whether that identity ever signed in through the array:
+  * **never** — it gets an **ordinary, handle-less user**, exactly as any
+    other allowlisted address does, linked to nobody;
+  * **it had**, and the person was removed from the array or dropped whole —
+    its `Account` row still points at the person's old user, and
+    `getUserByAccount` (not wrapped) resolves the sign-in to that row, with
+    the **stale handle still on it**. That row is no longer configured for
+    anything: `findConfiguredUser` does not match the identity, so nothing is
+    linked to it, and `isConfiguredUser` answers `false` because the handle
+    is not in `CURRENT_CONFIGURED_HANDLES`, so their uploads are asked the
+    rights questions and their undeclared ones stay off the public site. The
+    hand-run `UPDATE ... SET "configuredHandle" = NULL` (see "Signing in is
+    not publishing" above) clears the stale handle for linking hygiene; it is
+    not needed to take back publish-on-upload. Another of that person's
+    identities that was never linked, arriving at the same address as the
+    old row's `User.email`, meets the same `OAuthAccountNotLinked` refusal
+    the next paragraph describes;
+  * **it had**, but only that identity was dropped and the person is still
+    kept through their others — `getUserByAccount` (not wrapped) resolves it
+    to that person's row, which is still configured: its handle is still in
+    `CURRENT_CONFIGURED_HANDLES`, so `isConfiguredUser` answers `true`. Only
+    the identity's linking for new sign-ins is lost.
 
 There is one more way it can fail, and it is the case the drop exists to
 prevent: if two people were listed under one address and an entry now admits
