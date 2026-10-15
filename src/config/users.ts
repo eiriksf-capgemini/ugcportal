@@ -85,8 +85,4 @@ export const CONFIGURED_USERS: readonly ConfiguredUser[] = [
     name: "Gry",
     identities: ["facebook:gry@sander-fjeld.no"],
   },
-  {
-    name: "August",
-    identities: ["google:augustsanderfjeld@gmail.com"],
-  },
 ];

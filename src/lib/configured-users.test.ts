@@ -32,6 +32,7 @@ import {
 const EIRIK_GOOGLE = "eiriksanderfjeld@gmail.com";
 const EIRIK_FACEBOOK = "eirik@sander-fjeld.com";
 const GRY_FACEBOOK = "gry@sander-fjeld.no";
+/** Not in the array since ugcportal-m82q: the real-data counterexample. */
 const AUGUST_GOOGLE = "augustsanderfjeld@gmail.com";
 
 /** A fixture array, so a rule is stated against data this file owns. */
@@ -146,13 +147,12 @@ describe("the array's identities are permitted in addition to the env vars (K3)"
   });
 
   it("permits every identity in the REAL committed array, through its own provider", () => {
-    // Against src/config/users.ts itself, with no environment: the four
+    // Against src/config/users.ts itself, with no environment: the three
     // addresses this instance is actually configured for.
     for (const [email, provider] of [
       [EIRIK_GOOGLE, "google"],
       [EIRIK_FACEBOOK, "facebook"],
       [GRY_FACEBOOK, "facebook"],
-      [AUGUST_GOOGLE, "google"],
     ] as const) {
       expect(decideSignIn(attempt(email, provider), NO_ENV)).toEqual({
         permitted: true,
@@ -170,8 +170,17 @@ describe("the array's identities are permitted in addition to the env vars (K3)"
 
   it("names nobody outside the array in the real permitted set", () => {
     expect([...permittedIdentities(NO_ENV).emails].sort()).toEqual(
-      [EIRIK_FACEBOOK, EIRIK_GOOGLE, GRY_FACEBOOK, AUGUST_GOOGLE].sort(),
+      [EIRIK_FACEBOOK, EIRIK_GOOGLE, GRY_FACEBOOK].sort(),
     );
+  });
+
+  it("refuses an address that was removed from the real array (ugcportal-m82q)", () => {
+    // August's address is no longer a source of permission by itself; only an
+    // ALLOWED_SIGNIN_EMAILS entry could admit it, and NO_ENV has none.
+    expect(decideSignIn(attempt(AUGUST_GOOGLE, "google"), NO_ENV)).toEqual({
+      permitted: false,
+      reason: "not-permitted",
+    });
   });
 });
 
@@ -273,8 +282,9 @@ describe("findConfiguredUser matches an exact (provider, address) pair (K5)", ()
       .toBe("Eirik");
     expect(findConfiguredUser({ provider: "facebook", email: GRY_FACEBOOK })?.name)
       .toBe("Gry");
-    expect(findConfiguredUser({ provider: "google", email: AUGUST_GOOGLE })?.name)
-      .toBe("August");
+    // Removed from the array (ugcportal-m82q): matched to nobody.
+    expect(findConfiguredUser({ provider: "google", email: AUGUST_GOOGLE }))
+      .toBeNull();
   });
 });
 
@@ -507,10 +517,10 @@ describe("configuredUserHandle", () => {
     expect(configuredUserHandle({ name: " --- ", identities: [] })).toBeNull();
   });
 
-  it("gives the real array three distinct handles", () => {
+  it("gives the real array two distinct handles", () => {
     const handles = CONFIGURED_USERS.map(configuredUserHandle);
 
-    expect(handles).toEqual(["eirik", "gry", "august"]);
+    expect(handles).toEqual(["eirik", "gry"]);
     expect(new Set(handles).size).toBe(handles.length);
   });
 });
