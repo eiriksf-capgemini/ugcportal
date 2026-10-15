@@ -832,8 +832,9 @@ describe("the lapse predicate lives in PUBLIC_MEDIA_SCOPE itself, so a later rea
      * by nothing else.
      *
      * FOUR BECAME FIVE AT ugcportal-ho7j, deliberately: `user`, for the
-     * configured-uploader arm (`user: { is: { configuredHandle: { not: null
-     * } } }`, src/lib/publishability.ts). `user` is a relation on `Media`
+     * configured-uploader arm (`user: { is: { configuredHandle: { in: [...]
+     * } } }` since ugcportal-lskg, src/lib/publishability.ts). `user` is a
+     * relation on `Media`
      * like the other four, so clearing a person's `configuredHandle` takes
      * their undeclared uploads off every public surface on the next request
      * — re-evaluated, not snapshotted, which is the property asserted here.

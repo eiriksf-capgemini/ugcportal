@@ -85,8 +85,9 @@ export type UploadFormProps = {
   availableTags?: readonly SelectableTag[];
   /**
    * Whether the signed-in uploader is a CONFIGURED user
-   * (`User.configuredHandle` not null — src/config/users.ts), decided by the
-   * page on the server from the `User` row (ugcportal-ho7j).
+   * (`User.configuredHandle` one of the handles src/config/users.ts derives
+   * today — `isConfiguredUser`, ugcportal-lskg), decided by the page on the
+   * server from the `User` row (ugcportal-ho7j).
    *
    * When true, the rights questions are not rendered and do not gate adding
    * files, and no attestation parts are sent: POST /api/media accepts that

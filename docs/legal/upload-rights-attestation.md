@@ -185,10 +185,14 @@ both edges — see the delete-cascade runbook in `docs/access-control.md`).
 
 ## 5. Configured users are not asked (`ugcportal-ho7j`)
 
-A **configured user** is a `User` row whose `configuredHandle` is not null —
-one of the people listed in `CONFIGURED_USERS`
-([`src/config/users.ts`](../../src/config/users.ts)), linked to their row at
-sign-in by `src/lib/configured-user-link.ts`. Since `ugcportal-ho7j`, on
+A **configured user** is a person listed in `CONFIGURED_USERS`
+([`src/config/users.ts`](../../src/config/users.ts)) today, linked to their
+`User` row at sign-in by `src/lib/configured-user-link.ts`. The row counts
+only while its `configuredHandle` is one the array still derives
+(`ugcportal-lskg`): a person removed from the array keeps the handle on their
+row — nothing clears it — but is no longer configured, so everything below
+stops applying to them from the deploy that removes them. Since
+`ugcportal-ho7j`, on
 Eirik's instruction of 2026-10-15 ("there are no need for the yes or no
 question before i upload"):
 

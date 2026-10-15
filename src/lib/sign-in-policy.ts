@@ -453,6 +453,35 @@ export function configuredUserHandle(user: ConfiguredUser): string | null {
 }
 
 /**
+ * The handles of the people in `CONFIGURED_USERS` TODAY — what "configured"
+ * means everywhere a grant follows from it (ugcportal-lskg).
+ *
+ * `User.configuredHandle` is written at sign-in from the array and nothing
+ * ever clears it, so a non-null column only says the person WAS configured
+ * once. Removing someone from the array has to take back what the array
+ * grants without an operator editing the database, so every reader of
+ * configured-ness — `isConfiguredUser` in src/lib/publish-gates.ts (which the
+ * upload page and POST /api/media both call) and the Prisma scope arm
+ * `CONFIGURED_UPLOADER_UNDECLARED` in src/lib/publishability.ts — asks "is
+ * the row's handle in THIS list", not "is it set".
+ *
+ * COMPUTED ONCE, AT MODULE LOAD, and that is correct rather than merely
+ * cheap: `CONFIGURED_USERS` is committed TypeScript (src/config/users.ts),
+ * so it cannot change without a new build, and a new build is a new process
+ * that loads this module afresh. Frozen so no caller can push a handle into
+ * the shared list.
+ *
+ * A name that yields no handle (`configuredUserHandle` returns `null`) is
+ * left out: that person has no row to match, and a `null` here would never
+ * match the column anyway.
+ */
+export const CURRENT_CONFIGURED_HANDLES: readonly string[] = Object.freeze(
+  CONFIGURED_USERS.map(configuredUserHandle).filter(
+    (handle): handle is string => handle !== null,
+  ),
+);
+
+/**
  * Every letter or digit in this name that the handle would SILENTLY DROP
  * (PR #98 review, low 2).
  *

@@ -576,8 +576,9 @@ async function handleUpload(
   /*
    * EXCEPT FROM A CONFIGURED UPLOADER WHO SENT NONE (ugcportal-ho7j).
    *
-   * The configured people (`User.configuredHandle` not null — the names in
-   * src/config/users.ts) run this site, and the upload page does not ask them
+   * The configured people (`User.configuredHandle` one of the handles the
+   * names in src/config/users.ts derive today — `isConfiguredUser`,
+   * ugcportal-lskg) run this site, and the upload page does not ask them
    * the rights questions at all. Decided ONCE, here, from their `User` row by
    * `userId` — the session's id, above — and never from anything in the
    * request: a client cannot claim to be configured.

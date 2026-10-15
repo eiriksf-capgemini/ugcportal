@@ -113,8 +113,20 @@ Deliberately **not** implemented, because each would silently be the decision:
 Being admitted by any of the three sources below lets somebody **sign in and
 upload**. For `ALLOWED_SIGNIN_EMAILS` that is all it does: it puts nothing on
 the public gallery. Since `ugcportal-ho7j`, being a configured person in
-`src/config/users.ts` (a `User` row with `configuredHandle` set) also means
-**uploads publish on upload, with no rights questions asked**. The upload is
+`src/config/users.ts` also means **uploads publish on upload, with no rights
+questions asked**. That grant follows the array, not the row
+(`ugcportal-lskg`): a `User` row counts as configured only while its
+`configuredHandle` is one the array derives today (`CURRENT_CONFIGURED_HANDLES`
+in `src/lib/sign-in-policy.ts`, asked by `isConfiguredUser` in
+`src/lib/publish-gates.ts` and by the public scope in
+`src/lib/publishability.ts`). Sign-in writes the column and nothing clears it,
+so a person removed from the array keeps their handle on the row — but from
+the deploy that removes them, their uploads are asked the rights questions
+like anybody's and their undeclared uploads leave the public site. Clearing
+the stale handle by hand (`UPDATE "User" SET "configuredHandle" = NULL WHERE
+"configuredHandle" = 'old-handle';`) is no longer needed for that; it remains
+advisable for linking hygiene only, so a later person who happens to derive
+the same handle is not adopted onto the old row. The upload is
 published only if the same material gates the manual publish route runs all
 pass (`publishGateRefusal`, `src/lib/publish-gates.ts`), and it stays
 unsellable without an attestation (see
