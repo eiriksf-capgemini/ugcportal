@@ -85,7 +85,7 @@ B1, B3, B6, B7, B9 and the worktree removal on #211 were each self-reported by t
 
 ## 4. Recommendations
 
-Each is tracked by its own bead. `cut-release` step 7a does not reconcile this document: it lists `docs/process/release-cost-*.md` and matches beads on `metadata.retro_source`, which none of the beads below carries.
+Each is tracked by its own bead. `cut-release` step 7a does not reconcile this document: it lists `docs/process/release-cost-*.md` and matches beads on `metadata.retro_source`, which none of the 14 beads below carries for this document (`ugcportal-62b6`'s points at the v0.5.0-vs-v0.6.0 cost report; the other 13 have none).
 
 1. Close the hand-merge gap mechanically, and make the up-to-date rule cheap — one branch update, no re-review of a byte-identical diff: `ugcportal-li65`.
 2. A separate reviewer identity, so an `exact` chain exists; until then every late round on an `approx` chain costs A18/14's 130–200k per nit: `ugcportal-62b6`. Whether a review-thread sentence blocks: `ugcportal-n005`.
