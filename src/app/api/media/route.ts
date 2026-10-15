@@ -183,6 +183,29 @@ async function cleanupStoredKeys(storedKeys: readonly string[]): Promise<void> {
 const UPLOAD_FIELD_NAME = "file";
 
 /**
+ * The 201 body (ugcportal-ho7j).
+ *
+ * For anybody but a configured uploader it is the owner projection of the
+ * new row and nothing else — byte-for-byte what this route answered before
+ * auto-publish existed.
+ *
+ * For a configured uploader it is the same row, whose `publishedAt` says
+ * whether the upload went public, plus `publishRefusal`: null when it did,
+ * otherwise the body the first refusing publish gate answered with
+ * (`{ error, field }` or `{ error, blocker }` — the same body POST
+ * /api/media/[id]/publish would answer). The upload page renders that
+ * `error` beside the file, so "stored but not public" is never silent.
+ */
+function uploadResponseBody<Row extends object>(
+  row: Row,
+  uploaderConfigured: boolean,
+  publishRefusal: PublishGateRefusal | null,
+): Row | (Row & { publishRefusal: PublishGateRefusal["body"] | null }) {
+  if (!uploaderConfigured) return row;
+  return { ...row, publishRefusal: publishRefusal?.body ?? null };
+}
+
+/**
  * Admission, then the upload.
  *
  * The order is the point of ugcportal-05b. Everything down to
@@ -226,29 +249,6 @@ const UPLOAD_FIELD_NAME = "file";
  * and the runtime tears the stream down with the response anyway. The unread
  * bytes cost nothing on this heap.
  */
-/**
- * The 201 body (ugcportal-ho7j).
- *
- * For anybody but a configured uploader it is the owner projection of the
- * new row and nothing else — byte-for-byte what this route answered before
- * auto-publish existed.
- *
- * For a configured uploader it is the same row, whose `publishedAt` says
- * whether the upload went public, plus `publishRefusal`: null when it did,
- * otherwise the body the first refusing publish gate answered with
- * (`{ error, field }` or `{ error, blocker }` — the same body POST
- * /api/media/[id]/publish would answer). The upload page renders that
- * `error` beside the file, so "stored but not public" is never silent.
- */
-function uploadResponseBody<Row extends object>(
-  row: Row,
-  uploaderConfigured: boolean,
-  publishRefusal: PublishGateRefusal | null,
-): Row | (Row & { publishRefusal: PublishGateRefusal["body"] | null }) {
-  if (!uploaderConfigured) return row;
-  return { ...row, publishRefusal: publishRefusal?.body ?? null };
-}
-
 export async function POST(request: Request) {
   const session = await auth();
   const userId = session?.user?.id;
@@ -545,7 +545,8 @@ async function handleUpload(
    * docs/legal/manual-upload-rights-review.md §3.1).
    *
    * REQUIRED, unlike alt text and the caption immediately above, and that
-   * asymmetry is the whole bead. Alt text is enforced at publish because a
+   * asymmetry is the whole bead. (One exception since ugcportal-ho7j: a
+   * configured uploader who sends no parts at all — see the next paragraph.) Alt text is enforced at publish because a
    * row with none is merely unpublishable; an upload with no attestation is a
    * file nobody ever asked the only person who could know anything about. The
    * gate refuses it (`attestation_missing`), so accepting the bytes and

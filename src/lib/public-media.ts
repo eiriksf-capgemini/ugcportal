@@ -58,8 +58,9 @@ export const PUBLIC_MEDIA_COLUMN_SCOPE: MediaAnonymousColumnScope = {
 /**
  * WHAT IS PUBLIC, in one object: the three column filters above, and the
  * rights predicates (`PUBLIC_MEDIA_RIGHTS_SCOPE`, src/lib/publishability.ts
- * — a valid uploader attestation, and a cleared PEOPLE layer wherever an
- * identifiable person is shown).
+ * — a valid uploader attestation, or none at all from a configured uploader
+ * (ugcportal-ho7j), and a cleared PEOPLE layer wherever an identifiable
+ * person is shown).
  *
  * THE RIGHTS PREDICATES ARE HERE, IN THE SCOPE, AND NOT AT THE QUERIES
  * THAT USE IT (ugcportal-3ae K3). That placement is the criterion, not an
@@ -88,10 +89,18 @@ export const PUBLIC_MEDIA_COLUMN_SCOPE: MediaAnonymousColumnScope = {
  *
  * A NOTE ON WHAT THIS COSTS, because it is large and deliberate: every row
  * published before ugcportal-3ae landed has no attestation — nothing
- * backfills one, by design (K4) — so every one of them leaves the public
- * surfaces on the next request. That is fail-closed working, not a
- * regression. Their owners re-publish through the current upload flow,
+ * backfills one, by design (K4) — so, unless its uploader is a configured
+ * user, it is off the public surfaces. That is fail-closed working, not a
+ * regression; those owners re-publish through the current upload flow,
  * which asks the rights questions.
+ *
+ * SINCE ugcportal-ho7j THE CONFIGURED USERS' SUCH ROWS ARE BACK. The scope
+ * is evaluated on every read, so an already-published, attestation-less row
+ * whose uploader has `configuredHandle` set is served again on every surface
+ * above, the sitemap included, with its people question decided by the
+ * listing alone. That was decided on purpose (the operators' own uploads).
+ * The owner can withdraw any one of them with DELETE
+ * /api/media/[id]/publish.
  */
 export const PUBLIC_MEDIA_SCOPE: MediaAnonymousScope = {
   ...PUBLIC_MEDIA_COLUMN_SCOPE,

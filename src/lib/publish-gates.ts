@@ -330,12 +330,15 @@ export async function publishGateRefusal(
   // NOT GATED ON `publishedAt === null`, matching the two refusals above
   // rather than the alt-text one. The alt-text check is transition-only
   // because an already-published row with blank alt text is a rolling-deploy
-  // artefact that is in breach of nothing. A published row with no
-  // attestation is the opposite: it is precisely the row K3 says must not be
-  // on a public surface, and `PUBLIC_MEDIA_SCOPE` has already stopped
-  // serving it. Answering 200 to "publish this" because it is already marked
-  // published would be this route reporting success for a row the site is
-  // refusing to show.
+  // artefact that is in breach of nothing. A published row whose
+  // declaration this gate refuses is the opposite: a row with a disclaiming,
+  // retired or someone-else's declaration — or, from a NON-configured
+  // uploader, no declaration at all — is precisely the row K3 says must not
+  // be on a public surface, and `PUBLIC_MEDIA_SCOPE` does not serve it.
+  // Answering 200 to "publish this" because it is already marked published
+  // would be this route reporting success for a row the site is refusing to
+  // show. (A configured uploader's row with no declaration is not refused
+  // here and is served by the scope — ugcportal-ho7j; the two agree.)
   //
   // THE ATTESTATION IS READ HERE AND NOT THROUGH `requireOwnedMedia`, the
   // same trade the two reads above make: PATCH, DELETE and tags have no use

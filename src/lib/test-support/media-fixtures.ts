@@ -38,13 +38,16 @@ export type SeedMediaOptions = {
   /**
    * Write the uploader's rights attestation alongside the row
    * (ugcportal-3ae). DEFAULTS TO TRUE, because from that bead on a row with
-   * no attestation is not on any anonymous surface at all
-   * (`PUBLIC_MEDIA_SCOPE`), so a fixture without one is not "an ordinary
-   * published photograph" — it is the fail-closed case, and every test here
-   * that is about something else would be exercising this instead.
+   * no attestation is not on any anonymous surface (`PUBLIC_MEDIA_SCOPE`)
+   * unless its uploader is a configured user (ugcportal-ho7j), so for the
+   * ordinary uploader a fixture without one is not
+   * "an ordinary published photograph" — it is the fail-closed case, and
+   * every test here that is about something else would be exercising this
+   * instead.
    *
    * `false` is how a test asks for the pre-ugcportal-3ae row deliberately:
-   * published, visible before, and refused now.
+   * published, visible before, and refused now — provided the caller's
+   * user row has no `configuredHandle` (this module does not create users).
    */
   attested?: boolean;
   /**

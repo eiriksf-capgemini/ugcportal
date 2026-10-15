@@ -26,8 +26,10 @@ import {
  * selling, and the two gates answer different questions about the same row.
  * Selling needs the uploader's standing resale-rights review, a complete
  * admin triage of every registered layer, and a signature on each one;
- * publishing needs the uploader to have said whose work this is and, where a
- * person is in the frame, an admin to have cleared that one layer. An item
+ * publishing needs the uploader to have said whose work this is (unless the
+ * uploader is a configured user who was not asked — ugcportal-ho7j; a
+ * declaration that IS present is judged in full whoever made it) and, where
+ * a person is in the frame, an admin to have cleared that one layer. An item
  * can be perfectly publishable and unsellable, which is the ordinary case
  * for everything on this site today. Folding them together would mean
  * showing nothing until an admin had priced it.
@@ -205,8 +207,10 @@ export type PublishabilityUpload = {
   userId: string | null;
   /**
    * `null` means NOBODY ASKED THE UPLOADER ANYTHING — every upload made
-   * before ugcportal-15r, and anything a future second write path creates
-   * without one. It is never "the uploader said no".
+   * before ugcportal-15r, every upload by a configured user who was not
+   * asked (ugcportal-ho7j), and anything a future second write path creates
+   * without one. It is never "the uploader said no". It refuses a publish
+   * for everybody except a configured uploader (`uploaderConfigured`).
    */
   attestation: GateAttestation | null;
   listing: PublishabilityListing | null;
@@ -413,7 +417,12 @@ export function publishRightsRefusal(
  *     depend on it.
  */
 
-/** The attestation a public row must carry, as a Prisma relation filter. */
+/**
+ * The attestation a public row must carry when it carries one at all, as a
+ * Prisma relation filter. A row with NO attestation is public only through
+ * `CONFIGURED_UPLOADER_UNDECLARED` below (ugcportal-ho7j); a row WITH one is
+ * public only if it passes this, configured uploader or not.
+ */
 const PUBLISHABLE_ATTESTATION: {
   attestationVersion: { in: string[] };
   authorship: { not: MediaAuthorship };

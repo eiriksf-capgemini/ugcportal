@@ -222,6 +222,15 @@ question before i upload"):
   writer). The upload page does not offer configured users the questions, so
   for them the only way to give one is an upload that carries the parts.
   There is no way to attest a file that is already uploaded.
+- **Their uploads published before this change come back too.** The public
+  scope is evaluated on every read, so a configured user's row that is
+  already published and has no attestation (for example an upload made
+  before `ugcportal-15r`, which `ugcportal-3ae` took off the public site) is
+  served again on every public surface, the sitemap included. Its people
+  question is answered by the admin triage alone. This was decided on
+  purpose: these are the operators' own uploads. The owner can withdraw any
+  one of them with `DELETE /api/media/[id]/publish`, which asks only that
+  the caller owns the row, not that they are an operator.
 - **The version string above is not bumped.** No question in §2 changed:
   what changed is who is asked, not what is asked.
 
