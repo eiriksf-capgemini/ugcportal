@@ -540,13 +540,39 @@ describe("no reconciliation migration's copy of the array has drifted", () => {
     }
   });
 
-  it("names only people who are in the array today", () => {
-    // Not an equality: the array may grow past this migration. But a name
-    // here that nobody recognises means the migration adopted a handle the
-    // running code will never ask for.
+  /**
+   * People a migration adopted who have since been REMOVED from the array,
+   * each with the bead that removed them. A migration is history and is not
+   * edited when the array shrinks (docs/access-control.md, "Renaming a
+   * person"), so the guard below has to be told which names are gone on
+   * purpose; a name that is neither here nor in the array is still the
+   * drift it exists to catch.
+   *
+   * A removed person's existing row keeps its handle until an operator
+   * clears it -- see ugcportal-m82q's notes for the UPDATE.
+   */
+  const REMOVED_FROM_THE_ARRAY: ReadonlyMap<string, string> = new Map([
+    ["August", "ugcportal-m82q (2026-10-15)"],
+  ]);
+
+  it("names only people who are in the array today, or were removed on record", () => {
+    // Not an equality: the array may grow past this migration, and it may
+    // shrink. But a name here that nobody recognises -- neither configured
+    // today nor recorded as removed -- means the migration adopted a handle
+    // the running code will never ask for.
     const names = new Set(CONFIGURED_USERS.map((user) => user.name));
     for (const row of seeded) {
-      expect(names, from(row)).toContain(row.name);
+      expect(
+        names.has(row.name) || REMOVED_FROM_THE_ARRAY.has(row.name),
+        `${from(row)}: neither in CONFIGURED_USERS nor in REMOVED_FROM_THE_ARRAY`,
+      ).toBe(true);
+    }
+  });
+
+  it("records no removal for a person who is still in the array", () => {
+    const names = new Set(CONFIGURED_USERS.map((user) => user.name));
+    for (const name of REMOVED_FROM_THE_ARRAY.keys()) {
+      expect(names.has(name), `${name} is listed as removed but is configured`).toBe(false);
     }
   });
 });

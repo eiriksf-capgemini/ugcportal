@@ -45,6 +45,12 @@ const { withSignInIdentity } = await import("@/lib/live-session");
 const EIRIK_GOOGLE = "eiriksanderfjeld@gmail.com";
 const EIRIK_FACEBOOK = "eirik@sander-fjeld.com";
 const GRY_FACEBOOK = "gry@sander-fjeld.no";
+/**
+ * NOT in the array since ugcportal-m82q. Kept as the address that reaches the
+ * gate through ALLOWED_SIGNIN_EMAILS alone, so the two-person case below can
+ * show what a removed person becomes: an ordinary, handle-less user linked
+ * to nobody (docs/access-control.md, "Renaming a person").
+ */
 const AUGUST_GOOGLE = "augustsanderfjeld@gmail.com";
 
 type Identity = {
@@ -485,7 +491,7 @@ describe("a person's identities resolve to one user (K1)", () => {
 });
 
 describe("different people get different users (K2)", () => {
-  it("gives Gry and August their own users, linked to nobody else", async () => {
+  it("gives Gry her own user, and an allowlisted address outside the array a handle-less one", async () => {
     const eirik = await replayOAuthSignIn({
       provider: "google",
       email: EIRIK_GOOGLE,
@@ -501,24 +507,37 @@ describe("different people get different users (K2)", () => {
       email: GRY_FACEBOOK,
       subject: "facebook-subject-gry",
     });
-    const august = await replayOAuthSignIn({
-      provider: "google",
-      email: AUGUST_GOOGLE,
-      subject: "google-subject-august",
-    });
+    // August is admitted by the allowlist, not by the array (ugcportal-m82q).
+    process.env.ALLOWED_SIGNIN_EMAILS = `google:${AUGUST_GOOGLE}`;
+    let august: Awaited<ReturnType<typeof replayOAuthSignIn>>;
+    try {
+      august = await replayOAuthSignIn({
+        provider: "google",
+        email: AUGUST_GOOGLE,
+        subject: "google-subject-august",
+      });
+    } finally {
+      delete process.env.ALLOWED_SIGNIN_EMAILS;
+    }
 
     const ids = [eirik, gry, august].map(
       (outcome) => (outcome as { userId: string }).userId,
     );
 
     expect(new Set(ids).size).toBe(3);
-    const users = await prisma.user.findMany({ orderBy: { configuredHandle: "asc" } });
-    expect(users.map((user) => user.configuredHandle)).toEqual([
-      "august",
+    const configured = await prisma.user.findMany({
+      where: { configuredHandle: { not: null } },
+      orderBy: { configuredHandle: "asc" },
+    });
+    expect(configured.map((user) => user.configuredHandle)).toEqual([
       "eirik",
       "gry",
     ]);
-    expect(users.map((user) => user.name)).toEqual(["August", "Eirik", "Gry"]);
+    expect(configured.map((user) => user.name)).toEqual(["Eirik", "Gry"]);
+    const augustRow = await prisma.user.findUniqueOrThrow({
+      where: { id: ids[2] },
+    });
+    expect(augustRow.configuredHandle).toBeNull();
   });
 
   it("leaves no Account row crossing from one person to another", async () => {
@@ -537,11 +556,6 @@ describe("different people get different users (K2)", () => {
       email: GRY_FACEBOOK,
       subject: "facebook-subject-gry",
     });
-    await replayOAuthSignIn({
-      provider: "google",
-      email: AUGUST_GOOGLE,
-      subject: "google-subject-august",
-    });
 
     // Which identity each Account came from, by its provider subject, and
     // which person's handle its user carries. Checked against the array's
@@ -554,13 +568,12 @@ describe("different people get different users (K2)", () => {
       ]),
     );
 
-    expect(accounts).toHaveLength(4);
+    expect(accounts).toHaveLength(3);
     expect(byHandle).toEqual(
       new Map([
         ["google-subject-eirik", "eirik"],
         ["facebook-subject-eirik", "eirik"],
         ["facebook-subject-gry", "gry"],
-        ["google-subject-august", "august"],
       ]),
     );
   });
