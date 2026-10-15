@@ -135,35 +135,47 @@ passes follow.
 ## 3. Are the beads too big or too small? (K2)
 
 Three tests that do not look at cost, each over the 68 beads. The text
-sweeps run case-insensitively over `notes` and `close_reason` (132 non-empty
-fields, 472,561 bytes); the appendix script prints every matched sentence,
-and the counts below are what reading them yields, not the match count.
+sweeps are the three regexes in the appendix script's `sweeps` table (stems
+open, case-insensitive), run over `notes` and `close_reason` (132 non-empty
+fields, 472,561 bytes); the script prints every matched sentence, and the
+counts below are what reading them yields, with the exclusions stated.
 
 **Beads that needed splitting.** No cohort bead has a `.N` child anywhere in
 the 471-bead database (`qnq9.11` is itself a child, split *out of* `qnq9.3`
-before work started). `split|re-?scoped?|descoped?|moved to v0.8|its own
-bead` matched 15 beads. Five are products of, or parents in, a split made
-before pick-up (`vq3z`, `qfy9`, `yzo7` from `74w`; `qnq9.11`; `15r`, whose
-children were created before it started); two were re-scoped before pick-up
-by the `j5fl` premise audit (`hhjq`, `qnq9.11`); and **two** changed scope
-mid-work — `xh4j` widened (three tests "not currently in this bead's scope
-statement") and `yzo7` narrowed (per-item licence terms descoped to `74w.1`).
-The rest use the words in another sense.
+before work started). The `split_or_rescope` regex matched 18 beads. Six are
+products of, or parents in, a split made before pick-up (`vq3z`, `qfy9`,
+`yzo7` from `74w`; `qnq9.11` from `qnq9.3`; `15r`, and `vlnn` split out of it
+— created 2026-10-08 17:06, before `15r` started at 18:10); two were
+re-scoped before pick-up by the `j5fl` premise audit (`hhjq`, `qnq9.11`); and
+**two** changed scope mid-work — `xh4j` widened (three tests "not currently
+in this bead's scope statement") and `yzo7` narrowed (per-item licence terms
+descoped to `74w.1`). The other ten matches were excluded on reading: eight
+use the words in another sense (`zbcs`, `hwpc`, `kssp`, `nffp`, `7g2o`,
+`i7lr` — a split correction, concurrency group, call-site or test count;
+`pgpq`, `x8ab` — whether a finding deserves "its own bead") and two record a
+decision *not* to split (`44qs`; `l99p`'s adjacent finding, left unfiled).
 
 **Criteria the implementer could not verify.** Rule: the bead's own record
 says a K was not met, or could not be verified as written, when the PR was
-first put up — whether the implementer or round 1 said so. `not wired into
-CI|could not verify|cannot be verified|unverif|not met|unmet` over `notes`,
-`close_reason`, `acceptance_criteria` and `tokens_qa_note` matched exactly
-these: `uo15` K4 (screenshots the brief forbade), `wz8w` K1 and K3 (not met
-as written, found by round 1), `rj7y` K2 (not met for skew, found by round
-1), `i7lr` K4 (signed-in half unmet, judged non-blocking), `6uc2` K1
-(Chromium check passing by hand, not in CI, filed as `68rt`). **Five of 68.**
+first put up — whether the implementer or round 1 said so. The
+`unverifiable` regex, over `notes`, `close_reason`, `acceptance_criteria` and
+`tokens_qa_note`, matched 10 beads. Five meet the rule: `uo15` K4
+(screenshots the brief forbade), `wz8w` K1 and K3 (not met as written, found
+by round 1), `rj7y` K2 (not met for skew, found by round 1), `i7lr` K4
+(signed-in half could not be verified, judged non-blocking), `6uc2` K1
+(Chromium check passing by hand, not in CI, filed as `68rt`). The other five
+were excluded on reading: in `a3hj`, `ryd`, `0dh5` and `ry6w` "UNVERIFIABLE"
+is the `j5fl` premise audit's verdict on the bead's *premise* before work
+started, and `7g2o`'s "unverified list" is the implementer's own identifier
+list, not a criterion. **Five of 68.**
 
 **PRs that absorbed adjacent work.** 5 of 59 PRs carry more than one cohort
 bead (`#188`, `#201` — three parser faults in one script — `#211`, `#215`,
 `#223`) and one folded in a follow-up during review (`fb32`'s proxy-CA
-override). Against that, the scope freeze sent work *out*: 104
+override — the `absorbed` regex matched 11 beads; `fb32` is the one
+absorption, `ocbo`'s fold into `#215` is already among the five, and the
+other nine use the words for filing decisions, a merge commit or a
+description rewrite). Against that, the scope freeze sent work *out*: 104
 `discovered-from` children hang off 38 cohort beads (206 edges read), 63 of
 them from 34 parents created inside the parent's own window (child
 `created_at` between parent `started_at` and `closed_at`, inclusive, no
@@ -346,7 +358,8 @@ console.log(`PRs: ${Object.keys(prBeads).length}; carrying more than one cohort 
 const fields = ["notes", "close_reason"];
 const nonNull = cohort.flatMap((b) => fields.map((f) => b[f] || "")).filter(Boolean);
 console.log(`sweep reach: ${cohort.length} beads x ${fields.join("+")} = ${nonNull.length} non-empty fields, ${nonNull.reduce((a, s) => a + Buffer.byteLength(s), 0)} bytes`);
-const sweeps = { split_or_rescope: /\b(split|re-?scoped?|descoped?|moved to v0\.8|its own bead)\b/i, absorbed: /\b(folded? in(to)?|absorbed|fixed on (this|the same) PR)\b/i, unverifiable: /\b(not wired into CI|could not (be )?verif|cannot be verified|unverif|not met|unmet)\b/i };
+// Stems are open (\w*) so "splitting", "re-scoped", "verify", "unverified", "unverifiable" all match; only the leading edge is anchored.
+const sweeps = { split_or_rescope: /\b(split\w*|re-?scop\w*|descop\w*|moved to v0\.8|its own bead)/i, absorbed: /\b(fold\w* in(to)?|absorb\w*|fixed on (this|the same) PR)/i, unverifiable: /\b(not wired into CI|could not (be )?verif\w*|cannot be verif\w*|unverif\w*|not met|unmet)/i };
 // The unverifiable-criteria sweep also reads acceptance_criteria and metadata.tokens_qa_note, where a K's own "Verified by" or the reviewer's note records the miss.
 const fieldsFor = (name) => (name === "unverifiable" ? [...fields, "acceptance_criteria", "tokens_qa_note"] : fields);
 const text = (b, f) => (f === "tokens_qa_note" ? b.metadata.tokens_qa_note : b[f]) || "";
