@@ -1,5 +1,111 @@
 # Changelog
 
+## v0.7.0 - 2026-10-15
+
+### 💰 Cost Summary
+
+| Type | Impl | QA | Total | Beads with data |
+|---|---:|---:|---:|:---:|
+| ✨ Features | 12,354,415 | 9,801,361 | 22,155,776 | 16/18 |
+| 🐛 Fixes | 9,326,747 | 10,781,735 | 20,108,482 | 23/26 |
+| 📝 Documentation | 1,723,567 | 2,679,167 | 4,402,734 | 9/9 |
+| ♻️ Refactoring | 314,616 | 1,252,262 | 1,566,878 | 3/5 |
+| 🧪 Tests | 501,040 | 1,006,669 | 1,507,709 | 1/2 |
+| 🏗️ Build & CI | 877,940 | 1,062,664 | 1,940,604 | 2/2 |
+| 🔧 Chores | 2,535,995 | 1,754,014 | 4,290,009 | 5/6 |
+| **Total** | **27,634,320** | **28,337,872** | **55,972,192** | **59/68** |
+
+*Cost figures come from bead metadata (`tokens_impl`/`tokens_qa`) as recorded as of this release. `tokens_impl` is a best-effort manual estimate that isn't consistently recorded, and a bead's `tokens_qa` can keep growing later from review on a follow-up fix without retroactively updating a past release — treat these totals as a lower bound, not the release's full or final cost.*
+
+### ✨ Features
+
+- **An item recorded as depicting alcohol is withheld from every public surface (option a, true-only)** (`ugcportal-qnq9.11`, scope: gallery) — [#243](https://github.com/eiriksf-capgemini/ugcportal/pull/243)
+- **A live dev dashboard: beads, PRs, agents and what remains in the release, on one page** (`ugcportal-vr9q`, scope: dashboard) — [#235](https://github.com/eiriksf-capgemini/ugcportal/pull/235)
+- **Agent definitions carry the rules that are identical in every brief, and nothing else** (`ugcportal-xxw7`, scope: process) — [#231](https://github.com/eiriksf-capgemini/ugcportal/pull/231)
+- **A bead fails a mechanical check before work starts on it** (`ugcportal-kt3k`, scope: process) — [#230](https://github.com/eiriksf-capgemini/ugcportal/pull/230)
+- **Terracotta is defined and used nowhere: put the accent on the primary CTA and the for-sale badge** (`ugcportal-dmne`, scope: design) — [#220](https://github.com/eiriksf-capgemini/ugcportal/pull/220)
+- **Time-scope a clearance to material the reviewer could examine** (`ugcportal-aqw`, scope: rights) — [#217](https://github.com/eiriksf-capgemini/ugcportal/pull/217)
+- **Theme phase 2: borders, form fields and cards move off the near-black scale onto paper** (`ugcportal-6uc2`, scope: design) — [#209](https://github.com/eiriksf-capgemini/ugcportal/pull/209)
+- **Nothing detects that a bead's gate became unreachable because every blocker was deferred** (`ugcportal-z4nh`, scope: process) — [#207](https://github.com/eiriksf-capgemini/ugcportal/pull/207)
+- **Publishing is restricted to operators only by accident: adding a sign-in email would silently grant it** (`ugcportal-9gt1`, scope: rights) — [#206](https://github.com/eiriksf-capgemini/ugcportal/pull/206)
+- **Decide what an uploader/admin rights disagreement means for sellability** (`ugcportal-9pic`, scope: rights)
+- **Curation pricing: set a price, with sellability re-evaluated at render** (`ugcportal-yzo7`, scope: curation) — [#203](https://github.com/eiriksf-capgemini/ugcportal/pull/203)
+- **Publishing an upload requires the uploader attestation and, where people are shown, a PEOPLE clearance** (`ugcportal-3ae`, scope: media) — [#200](https://github.com/eiriksf-capgemini/ugcportal/pull/200)
+- **Triage shows the uploader's attestation beside the admin flag, and warns where they disagree** (`ugcportal-vlnn`, scope: curation) — [#202](https://github.com/eiriksf-capgemini/ugcportal/pull/202)
+- **Curation clearances: per-layer rights clearances, where clearing one layer settles only that layer** (`ugcportal-qfy9`, scope: rights) — [#199](https://github.com/eiriksf-capgemini/ugcportal/pull/199)
+- **Per-upload rights attestation by the uploader, stored and read by the sellability gate** (`ugcportal-15r`, scope: rights) — [#197](https://github.com/eiriksf-capgemini/ugcportal/pull/197)
+- **Curation triage: admin screen that records the per-upload triage facts** (`ugcportal-vq3z`, scope: curation) — [#196](https://github.com/eiriksf-capgemini/ugcportal/pull/196)
+- **cut-release reconciles the previous release's retrospective recommendations into beads before shipping** (`ugcportal-p7x7`, scope: release-tooling) — [#189](https://github.com/eiriksf-capgemini/ugcportal/pull/189)
+- **Dev command that publishes every unpublished upload in the local database through the publish endpoint** (`ugcportal-x8sx`, scope: dev-tools) — [#186](https://github.com/eiriksf-capgemini/ugcportal/pull/186)
+
+### 🐛 Fixes
+
+- **docker compose up cannot pull the pinned MinIO images: quay.io/minio returns 401 and Docker Hub has none** (`ugcportal-s2qp`, scope: docker) — [#244](https://github.com/eiriksf-capgemini/ugcportal/pull/244)
+- **The bead validator passes a premise commit that is not on main, and five smaller round-3 findings merged with it** (`ugcportal-7sjc`, scope: process) — [#236](https://github.com/eiriksf-capgemini/ugcportal/pull/236)
+- **Header wordmark truncates to one letter on the signed-in 390px view with a long name plus Upload and Sign out** (`ugcportal-ry6w`, scope: design) — [#239](https://github.com/eiriksf-capgemini/ugcportal/pull/239)
+- **Item page figure wrapper hardcodes rounded-md (8px) beside a 10px advertising label; radius tokens outside gallery/containment.ts are not shared** (`ugcportal-7ajb`, scope: design) — [#240](https://github.com/eiriksf-capgemini/ugcportal/pull/240)
+- **petrol-theme held-back check fails on Next's not-found page: axe region violation at 320px for /admin/settings/rights as a visitor** (`ugcportal-0dh5`, scope: design)
+- **p3v's checkout sellability criterion was written, rewritten and verified -- and is not in the bead** (`ugcportal-zbcs`, scope: rights) — [#234](https://github.com/eiriksf-capgemini/ugcportal/pull/234)
+- **pr-review-merge's CI gate reads `gh pr checks`, which a title/body edit makes report `skipping` for a check that passed** (`ugcportal-h0ef`, scope: process) — [#232](https://github.com/eiriksf-capgemini/ugcportal/pull/232)
+- **The production runner image ships the whole repo: 436 src files, 255 test/spec files, docs and compose files under /app** (`ugcportal-6jcq`, scope: docker) — [#224](https://github.com/eiriksf-capgemini/ugcportal/pull/224)
+- **A benefit or link recorded on an already-published item is never asked the § 9-2 alcohol question** (`ugcportal-pgpq`, scope: disclosure) — [#221](https://github.com/eiriksf-capgemini/ugcportal/pull/221)
+- **Disclosure withdrawal leaves commercial links attached and publish never re-checks the pair** (`ugcportal-jain`, scope: rights) — [#214](https://github.com/eiriksf-capgemini/ugcportal/pull/214)
+- **Hero collage reads as broken images: 160px in a 490px hero, filled with flat blue blocks** (`ugcportal-a3hj`, scope: design) — [#215](https://github.com/eiriksf-capgemini/ugcportal/pull/215)
+- **upload-form.tsx's text-ink-muted (alt-text/caption helper copy) is unreadable on the paper canvas (~1.9:1)** (`ugcportal-galb`, scope: design) — [#211](https://github.com/eiriksf-capgemini/ugcportal/pull/211)
+- **(BUG) triage-form.tsx's text-ink-muted is unreadable on the paper canvas (1.90:1) - the plain-canvas sweep was done file-by-file and missed it** (`ugcportal-7g2o`, scope: design) — [#211](https://github.com/eiriksf-capgemini/ugcportal/pull/211)
+- **A published row whose clearance later lapses stays public: PUBLIC_MEDIA_SCOPE never consults the gate** (`ugcportal-nffp`, scope: rights) — [#208](https://github.com/eiriksf-capgemini/ugcportal/pull/208)
+- **vitest collects duplicate/broken test files from .next/standalone after a local build** (`ugcportal-l99p`, scope: testing) — [#205](https://github.com/eiriksf-capgemini/ugcportal/pull/205)
+- **classifySeverity's same-line flag exclusion zeroes a real count when an unrelated --word (e.g. a CSS custom property) appears later in the same long prose line** (`ugcportal-x9c7`, scope: process) — [#201](https://github.com/eiriksf-capgemini/ugcportal/pull/201)
+- **release-cost-report: severity parser reads a bare number as a medium count (PR #121 shows r1:121 on a zero-finding approval)** (`ugcportal-zo8n`, scope: process) — [#201](https://github.com/eiriksf-capgemini/ugcportal/pull/201)
+- **release-cost-report: outcome heuristic labels 66 of 77 v0.6.0 PRs 'human (sensitive path)' because 'no sensitive paths touched' matches** (`ugcportal-577s`, scope: process) — [#201](https://github.com/eiriksf-capgemini/ugcportal/pull/201)
+- **When an item is reclassified as depicting alcohol after a commercial link exists, the write must refuse or detach the link** (`ugcportal-6uxv`, scope: disclosure) — [#198](https://github.com/eiriksf-capgemini/ugcportal/pull/198)
+- **Header exposes two navigation landmarks, the second containing only Upload** (`ugcportal-i7lr`, scope: a11y) — [#194](https://github.com/eiriksf-capgemini/ugcportal/pull/194)
+- **One petrol scale: @theme and :root currently resolve the same name to two different colours** (`ugcportal-uo15`, scope: design-system) — [#193](https://github.com/eiriksf-capgemini/ugcportal/pull/193)
+- **npm run build and npm run start do not check migrations, so a production-shaped local run still boots against a stale schema** (`ugcportal-i40s`, scope: db) — [#195](https://github.com/eiriksf-capgemini/ugcportal/pull/195)
+- **GET /api/auth/session returns the raw Session row, sessionToken included, to the browser** (`ugcportal-5gii`, scope: auth) — [#192](https://github.com/eiriksf-capgemini/ugcportal/pull/192)
+- **[bug] Non-breaking security upgrades: Next 16.4.0 closes seven advisories including the one genuine critical, RCE in next/og** (`ugcportal-fuv2`, scope: deps) — [#191](https://github.com/eiriksf-capgemini/ugcportal/pull/191)
+- **Forced-colors disclosure comment (ugcportal-oavb) is duplicated at two call sites instead of once at the base-class root cause** (`ugcportal-n9rc`, scope: design) — [#170](https://github.com/eiriksf-capgemini/ugcportal/pull/170)
+- **release-cost-v0.5.0-vs-v0.6.0.md: tokens_impl_passes coverage is 61 of 85, not 59 (missing 24, not 26)** (`ugcportal-2w2m`, scope: process) — [#188](https://github.com/eiriksf-capgemini/ugcportal/pull/188)
+
+### 📝 Documentation
+
+- **Add the size="sm" allowlist guard to pre-review step 2's table** (`ugcportal-szq0`, scope: process) — [#245](https://github.com/eiriksf-capgemini/ugcportal/pull/245)
+- **Decide the mechanism that keeps commercial and personal wine content apart, before qnq9.11 is implemented** (`ugcportal-6yrd`, scope: gallery)
+- **Re-record LEGAL_SIGN_OFF: /privacy and /licence are both in draft after two merged prose changes** (`ugcportal-xh4j`, scope: legal) — [#223](https://github.com/eiriksf-capgemini/ugcportal/pull/223)
+- **Family 1's sweep is scoped to the diff, but a diff can falsify text arbitrarily far from itself** (`ugcportal-78ka`, scope: process) — [#213](https://github.com/eiriksf-capgemini/ugcportal/pull/213)
+- **curation-triage-write.ts asserts the adapter-libsql deferred premise its own docstring retracts** (`ugcportal-x8ab`, scope: curation) — [#216](https://github.com/eiriksf-capgemini/ugcportal/pull/216)
+- **Write down the ugcportal development process end to end, from prompt to retrospective** (`ugcportal-ag06`, scope: process) — [#210](https://github.com/eiriksf-capgemini/ugcportal/pull/210), [#212](https://github.com/eiriksf-capgemini/ugcportal/pull/212)
+- **Privacy page: describe the uploader's rights attestation and re-record the legal sign-off** (`ugcportal-fsdf`, scope: legal) — [#204](https://github.com/eiriksf-capgemini/ugcportal/pull/204)
+- **Three-release view v0.4.0 to v0.6.0: one document with every measure side by side and the trend per measure** (`ugcportal-k06e`, scope: process) — [#188](https://github.com/eiriksf-capgemini/ugcportal/pull/188)
+- **v0.6.0 process retrospective: rounds per PR, cost per bead, human-merge share, against the v0.5.0 baseline** (`ugcportal-7dtn`, scope: process) — [#187](https://github.com/eiriksf-capgemini/ugcportal/pull/187)
+
+### ♻️ Refactoring
+
+- **header-sm stays a dedicated cva size key: four call sites pinned byte-for-byte, cn() override rejected** (`ugcportal-hhjq`, scope: design) — [#237](https://github.com/eiriksf-capgemini/ugcportal/pull/237)
+- **header-sm/sm naming gives no guardrail against a future public-page control picking plain size="sm" and missing K2's shared radius** (`ugcportal-gdn3`, scope: design) — [#242](https://github.com/eiriksf-capgemini/ugcportal/pull/242)
+- **empty-state.tsx's adoption of the outline variant silently changes border colour (border-input to border-primary) and adds hover:underline, not mentioned in that call site's own comment** (`ugcportal-pvjn`, scope: design) — [#238](https://github.com/eiriksf-capgemini/ugcportal/pull/238)
+- **hero.tsx's buttonVariants call silently drops the old hand-rolled className's w-fit, undisclosed unlike every other changed token at that call site** (`ugcportal-ocbo`, scope: design) — [#215](https://github.com/eiriksf-capgemini/ugcportal/pull/215)
+- **Run review finder angles as tool calls inside one reviewer instead of sibling forks** (`ugcportal-ytai`, scope: process) — [#155](https://github.com/eiriksf-capgemini/ugcportal/pull/155)
+
+### 🧪 Tests
+
+- **Tailwind scans bare utility strings inside comments and docs; add one repo-wide guard for unprefixed dangerous-shaped utilities instead of per-file special cases** (`ugcportal-rj7y`, scope: design) — [#241](https://github.com/eiriksf-capgemini/ugcportal/pull/241)
+- **Restore the suspended legal positive-path and env-precedence tests once a sign-off lands** (`ugcportal-44qs`, scope: legal) — [#223](https://github.com/eiriksf-capgemini/ugcportal/pull/223)
+
+### 🏗️ Build & CI
+
+- **Run the real production image from docker compose, pinned, for manual QA** (`ugcportal-fb32`, scope: docker) — [#222](https://github.com/eiriksf-capgemini/ugcportal/pull/222)
+- **A PR stacked on another PR runs no CI, and the auto-retarget that lands it skips the quality job** (`ugcportal-hwpc`, scope: ci) — [#228](https://github.com/eiriksf-capgemini/ugcportal/pull/228)
+
+### 🔧 Chores
+
+- **The process instruments fail open: a check that matches nothing reports success** (`ugcportal-kssp`, scope: process) — [#229](https://github.com/eiriksf-capgemini/ugcportal/pull/229)
+- **No automated guard catches a Tailwind class built via string interpolation — the exact bug a live screenshot caught in ugcportal-a3hj** (`ugcportal-wz8w`, scope: lint) — [#218](https://github.com/eiriksf-capgemini/ugcportal/pull/218)
+- **The rights and disclosure system has no review owner: nine models and six routes shipped after both review beads were written** (`ugcportal-l9qx`, scope: security) — [#219](https://github.com/eiriksf-capgemini/ugcportal/pull/219)
+- **Counsel questions from the manual-upload rights review (minors, Art. 9, transfers, RMI, AI, § 24, retention, self-clearance)** (`ugcportal-ryd`, scope: legal)
+- **Re-verify the premise of every bead in the v0.7.0 line-up against current main before any of it is picked up** (`ugcportal-j5fl`, scope: process) — [#190](https://github.com/eiriksf-capgemini/ugcportal/pull/190)
+- **MinIO dev compose: host ports configurable so a Zscaler-occupied 9000 does not block local storage** (`ugcportal-20bb`, scope: storage) — [#185](https://github.com/eiriksf-capgemini/ugcportal/pull/185)
+
 ## v0.6.0 - 2026-10-07
 
 ### 💰 Cost Summary
