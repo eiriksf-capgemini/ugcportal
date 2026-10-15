@@ -331,14 +331,18 @@ export async function publishGateRefusal(
   // rather than the alt-text one. The alt-text check is transition-only
   // because an already-published row with blank alt text is a rolling-deploy
   // artefact that is in breach of nothing. A published row whose
-  // declaration this gate refuses is the opposite: a row with a disclaiming,
-  // retired or someone-else's declaration — or, from a NON-configured
-  // uploader, no declaration at all — is precisely the row K3 says must not
-  // be on a public surface, and `PUBLIC_MEDIA_SCOPE` does not serve it.
-  // Answering 200 to "publish this" because it is already marked published
-  // would be this route reporting success for a row the site is refusing to
-  // show. (A configured uploader's row with no declaration is not refused
-  // here and is served by the scope — ugcportal-ho7j; the two agree.)
+  // declaration this gate refuses is the opposite: it is precisely the row K3
+  // says must not be on a public surface. For a disclaiming or retired
+  // declaration — or, from a NON-configured uploader, no declaration at all —
+  // `PUBLIC_MEDIA_SCOPE` does not serve it either, and answering 200 to
+  // "publish this" because it is already marked published would be this
+  // route reporting success for a row the site is refusing to show. A
+  // declaration made by someone other than the uploader is refused here but
+  // still SERVED by the scope: it is one of the two states a Prisma `where`
+  // cannot judge (ugcportal-0epl), asserted in both directions in
+  // src/lib/publishability.scope-agreement.test.ts. (A configured
+  // uploader's row with no declaration is not refused here and is served by
+  // the scope — ugcportal-ho7j; the two agree.)
   //
   // THE ATTESTATION IS READ HERE AND NOT THROUGH `requireOwnedMedia`, the
   // same trade the two reads above make: PATCH, DELETE and tags have no use
