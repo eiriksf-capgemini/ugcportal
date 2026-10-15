@@ -237,9 +237,15 @@ The pair it matches on comes from the AsyncLocalStorage slot that
 mechanism that records which identity minted a session (`ugcportal-mzr`). So
 there is no path on which linking happens for an identity the gate refused,
 and nothing the gate itself calls writes a row. An identity that is not in
-the array goes through the unwrapped adapter, unchanged: no handle, one user
-per identity, and @auth/core's own `OAuthAccountNotLinked` protection exactly
-where it was.
+the array goes through the unwrapped adapter, unchanged, and @auth/core's own
+`OAuthAccountNotLinked` protection is exactly where it was. For an identity
+that has never signed in, that means a new user with no handle, one per
+identity (or that refusal, if its address already belongs to another row).
+An identity that already has an `Account` row is different: @auth/core
+resolves it with `getUserByAccount`, which is deliberately not wrapped (see
+the header of `src/lib/configured-user-link.ts`), so it lands on the user
+that row already points at — for a person taken out of the array, or dropped by the boot check
+below, after signing in through it, that is their old row, handle and all.
 
 The lookup is on the **exact** (provider, normalised address) pair. Never the
 domain, never the provider alone, never the address alone. Two people who
@@ -410,9 +416,23 @@ permission, so an identity removed from it is no longer permitted *by it*:
 * with **no** `ALLOWED_SIGNIN_EMAILS` entry for the address, the sign-in is
   refused at the gate — `no-configuration` if the array was the only source
   configured at all, `not-permitted` otherwise;
-* with an entry for it, the sign-in is permitted and gets an **ordinary,
-  handle-less user**, exactly as any other allowlisted address does. It is
-  not linked to anybody, which is the point.
+* with an entry for it, the sign-in is permitted, and where it lands depends
+  on whether that identity ever signed in through the array:
+  * **never** — it gets an **ordinary, handle-less user**, exactly as any
+    other allowlisted address does, linked to nobody;
+  * **it had** — its `Account` row still points at the person's old user, and
+    `getUserByAccount` (not wrapped) resolves the sign-in to that row, with
+    the **stale handle still on it**. That row is no longer configured for
+    anything: `findConfiguredUser` does not match the identity, so nothing is
+    linked to it, and `isConfiguredUser` answers `false` because the handle
+    is not in `CURRENT_CONFIGURED_HANDLES`, so their uploads are asked the
+    rights questions and their undeclared ones stay off the public site. The
+    hand-run `UPDATE ... SET "configuredHandle" = NULL` (see "Signing in is
+    not publishing" above) clears the stale handle for linking hygiene; it is
+    not needed to take back publish-on-upload. Another of that person's
+    identities that was never linked, arriving at the same address as the
+    old row's `User.email`, meets the same `OAuthAccountNotLinked` refusal
+    the next paragraph describes.
 
 There is one more way it can fail, and it is the case the drop exists to
 prevent: if two people were listed under one address and an entry now admits
