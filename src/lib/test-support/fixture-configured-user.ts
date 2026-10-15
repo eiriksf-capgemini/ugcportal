@@ -26,9 +26,9 @@ export const FIXTURE_CONFIGURED_NAME = "Fixture Handle";
 export const FIXTURE_CONFIGURED_HANDLE = "fixture-handle";
 
 /**
- * The fixture person's one identity. It has to exist: since PR #251 round 1
- * the list is built from `reviewConfiguredUsers().sound`, which drops a
- * person with no identities. On a provider the policy accepts, at an
+ * The fixture person's one identity. It has to exist: the list is built
+ * from `reviewConfiguredUsers().sound`, which drops a person with no
+ * identities. On a provider the policy accepts, at an
  * `example.com` address no real entry in src/config/users.ts uses
  * (src/lib/sign-in-policy.configured-handles.test.ts asserts it collides
  * with nothing there).

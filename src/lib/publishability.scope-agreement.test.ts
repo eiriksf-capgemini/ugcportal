@@ -113,7 +113,7 @@ const OWNER = "owner-scope-3ae";
 const ADMIN = "admin-scope-3ae";
 const DEMOTED = "demoted-scope-3ae";
 /**
- * A CONFIGURED uploader (ugcportal-ho7j): `User.configuredHandle` set, the
+ * A CONFIGURED uploader (ugcportal-ho7j): a `User.configuredHandle`, the
  * state src/lib/configured-user-link.ts leaves the people in
  * src/config/users.ts in. The handle is a fixture value, not one of the
  * real ones: since ugcportal-lskg the rule reads "in the list the checked

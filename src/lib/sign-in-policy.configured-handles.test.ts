@@ -19,7 +19,7 @@ import {
  * grant asks (`isConfiguredUser` in src/lib/publish-gates.ts, the Prisma arm
  * in src/lib/publishability.ts). It is the CHECKED array's handles —
  * `reviewConfiguredUsers().sound`, the list sign-in and linking use — not
- * the raw array's (PR #251 round 1, M1).
+ * the raw array's.
  *
  * The first cases read the REAL array, with no mock of `@/config/users`
  * (unlike src/lib/sign-in-policy.test.ts); the cases that need a different

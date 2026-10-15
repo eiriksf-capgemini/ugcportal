@@ -817,10 +817,9 @@ let cachedReview: {
  * "is it set". (src/lib/configured-user-link.ts still finds a person's row
  * by the column; that is linking, not a grant.)
  *
- * FROM `reviewConfiguredUsers().sound`, NOT THE RAW ARRAY (PR #251 round 1,
- * M1). Sign-in through the array (`findConfiguredUser`,
- * `permittedIdentities`) and linking read the reviewed list, which drops a
- * person whole for no identities, a handle that loses a letter, or a handle
+ * FROM `reviewConfiguredUsers().sound`, NOT THE RAW ARRAY. Sign-in through
+ * the array (`findConfiguredUser`, `permittedIdentities`) and linking read
+ * the reviewed list, which drops a person whole for no identities, a handle that loses a letter, or a handle
  * collision. A grant read off the raw array would keep such a person
  * configured while the boot log says they were removed — the state
  * docs/access-control.md says cannot exist.
