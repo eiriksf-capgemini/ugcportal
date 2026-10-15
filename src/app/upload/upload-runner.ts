@@ -92,8 +92,9 @@ export async function uploadItem(
    * The rights attestation chosen for this file (ugcportal-15r). LAST and
    * optional for the reason `tags` gives: every existing caller and test
    * keeps working unchanged. `undefined` makes a request POST /api/media
-   * answers 400, which is the honest outcome for a caller that did not
-   * collect one.
+   * answers 400 — the honest outcome for a caller that did not collect one —
+   * unless the uploader is a configured user, who is not asked
+   * (ugcportal-ho7j).
    */
   attestation?: AttestationSubmission,
 ): Promise<void> {
@@ -163,7 +164,8 @@ export type QueueEntry = {
    * more at stake: a retry that re-read the form would re-send a WARRANTY the
    * uploader did not give about this file. It is `AttestationSubmission |
    * undefined` rather than required so `enqueueFiles`' existing callers and
-   * tests keep compiling; `UploadForm` never queues a file without one.
+   * tests keep compiling. `UploadForm` queues a file without one only for a
+   * configured uploader, who is not asked (ugcportal-ho7j).
    */
   attestation?: AttestationSubmission;
 };

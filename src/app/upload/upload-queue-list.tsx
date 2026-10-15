@@ -370,7 +370,7 @@ function Thumbnail({ item }: { item: QueueItem }) {
           UNPUBLISHED preview only to its own owner, identified by session —
           and an upload on this page is unpublished unless its uploader is a
           configured user whose upload passed every publish gate
-          (ugcportal-ho7j) — so a cookieless fetch 404s on most rows here.
+          (ugcportal-ho7j) — so a cookieless fetch 404s on every unpublished row.
           There is nothing to optimise anyway: the bytes are an
           already-resized, already-encoded webp thumbnail.
 

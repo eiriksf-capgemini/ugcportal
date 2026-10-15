@@ -147,8 +147,7 @@ export async function publishGateRefusal(
   // in the table was written after this check existed.
   //
   // READ-THEN-CHECK, not folded into the `updateMany` where-clause the way
-  // `publishedAt: null` is in the manual route's write (review round 1,
-  // finding 8). That one is
+  // `publishedAt: null` is in the manual route's write. That one is
   // folded in because something CAN race it — a concurrent publish or
   // unpublish — and the predicate is how two racing writes agree on a
   // winner. Nothing today can race THIS check: `altText` is set once, at
@@ -162,7 +161,7 @@ export async function publishGateRefusal(
   // a defence and is not exercised by anything.
   //
   // GATED ON `publishedAt === null` — i.e. only on an actual TRANSITION,
-  // never on an already-published row (review round 4 finding 4). Without
+  // never on an already-published row. Without
   // this, an idempotent re-POST on a row that is ALREADY published but
   // happens to have a null `altText` — which this bead's backfill migration
   // closes for every row that existed when it ran, but cannot close for a

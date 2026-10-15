@@ -872,8 +872,9 @@ async function handleUpload(
        * unpublished, and the 201 says why in `publishRefusal` — the same
        * body the manual route would have answered with — so the upload page
        * can show it. In practice that is a VIDEO (no watermarked still yet,
-       * ugcportal-pmb): an IMAGE whose watermark fails is refused with a 422
-       * before anything is stored, as it always was.
+       * ugcportal-pmb): an IMAGE whose watermark cannot be made is refused
+       * (422, 503 or a thrown 500, per the branches above) before anything
+       * is stored, as it always was.
        */
       if (!uploaderConfigured) {
         return { created, publishRefusal: null };
