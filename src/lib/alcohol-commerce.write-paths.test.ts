@@ -97,7 +97,9 @@ const ALLOWED: Record<string, string> = {
   "app/api/media/[id]/commercial-links/route.ts":
     "attaches a commercial link; calls the gate",
   "lib/benefit-source.ts": "mints the row, called from inside the gated branch",
-  "app/api/media/[id]/publish/route.ts": "reads the pointer to refuse on it",
+  // The publish gates' read, moved out of POST /api/media/[id]/publish into
+  // the module both that route and POST /api/media call (ugcportal-ho7j).
+  "lib/publish-gates.ts": "reads the pointer to refuse on it",
 };
 
 /** Every non-test file under `root` whose comment-stripped source names a
@@ -173,7 +175,7 @@ describe("ugcportal-qnq9.3 K4: every benefit-source write path is gated", () => 
     const writers = [
       "app/api/media/[id]/disclosure/route.ts",
       "app/api/media/[id]/commercial-links/route.ts",
-      "app/api/media/[id]/publish/route.ts",
+      "lib/publish-gates.ts",
     ];
     for (const file of writers) {
       const code = stripComments(

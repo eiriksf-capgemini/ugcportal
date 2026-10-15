@@ -3,7 +3,7 @@
 **Attestation version:** `2026-10-08.1`
 
 The questions every uploader answers about every file, at the moment they
-upload it. Filed from `docs/legal/manual-upload-rights-review.md` §3.1 and
+upload it, except the configured users, who are not asked (§5). Filed from `docs/legal/manual-upload-rights-review.md` §3.1 and
 built as `ugcportal-15r`.
 
 ## 0. Why this document exists
@@ -151,7 +151,7 @@ person attesting has the legal **capacity** to grant anything is
 
 | Blocker | When |
 | --- | --- |
-| `attestation_missing` | no attestation at all — every upload made before this existed, and anything a future second write path creates without one |
+| `attestation_missing` | no attestation at all — every upload made before this existed, every upload by a configured user who was not asked (§5), and anything a future second write path creates without one |
 | `attestation_incomplete` | a row with an answer missing or of the wrong shape (not reachable through the upload form; a data fault) |
 | `attestation_not_by_uploader` | the declaration names somebody other than the file's own owner |
 | `attestation_version_retired` | a version no longer in `ACCEPTED_ATTESTATION_VERSIONS` |
@@ -181,3 +181,56 @@ rights on a person's behalf. No code path offers to re-attest an old upload.
 
 The row is deleted with the file and with the account (`onDelete: Cascade` on
 both edges — see the delete-cascade runbook in `docs/access-control.md`).
+
+## 5. Configured users are not asked (`ugcportal-ho7j`)
+
+A **configured user** is a `User` row whose `configuredHandle` is not null —
+one of the people listed in `CONFIGURED_USERS`
+([`src/config/users.ts`](../../src/config/users.ts)), linked to their row at
+sign-in by `src/lib/configured-user-link.ts`. Since `ugcportal-ho7j`, on
+Eirik's instruction of 2026-10-15 ("there are no need for the yes or no
+question before i upload"):
+
+- **They are not asked at upload.** The upload page does not render the
+  questions in §2 for them, and `POST /api/media` accepts an upload from them
+  that carries no attestation parts. Configured-ness is read from their `User`
+  row by the session's user id (`isConfiguredUser`,
+  `src/lib/publish-gates.ts`), never from the request.
+- **Their uploads publish without a `MediaAttestation` row.** The publish gate
+  (`publishabilityBlocker` and `PUBLIC_MEDIA_RIGHTS_SCOPE`,
+  `src/lib/publishability.ts`) does not treat a *missing* attestation as a
+  refusal when the uploader is configured. Every other publish condition
+  still applies: alt text, the advertising label, commercial links, alcohol,
+  and a `PEOPLE` clearance when the admin triage says a person is shown
+  (with no attestation, the listing alone answers that question). The
+  watermarked preview is required too. The upload is published in the same
+  transaction that creates it, and only if every one of those passes.
+- **An answer they DO give still counts in full.** A configured user who sends
+  the attestation parts anyway (an API client can) has them parsed, stored
+  and judged exactly as anybody else's: authorship `NEITHER`, a retired
+  version, or a declaration by somebody other than the uploader keeps the
+  upload private.
+- **Sale still requires an attestation.** `evaluateSellability`
+  (`src/lib/resale-rights.ts`) is unchanged: a configured user's upload with
+  no attestation is refused sale as `attestation_missing`, exactly like
+  anybody else's (§3). `docs/legal/manual-upload-rights-review.md` §4 item 7
+  requires that attestation to be made by the uploader (`Media.userId`), "not
+  by an admin on their behalf", and `attestation_not_by_uploader` enforces
+  that. At this commit the only place an attestation is written is
+  `POST /api/media`, with the uploader's own session
+  (`src/lib/attestation-write-paths.test.ts` asserts there is no second
+  writer). The upload page does not offer configured users the questions, so
+  for them the only way to give one is an upload that carries the parts.
+  There is no way to attest a file that is already uploaded.
+- **The version string above is not bumped.** No question in §2 changed:
+  what changed is who is asked, not what is asked.
+
+This departs from one recommendation in
+`docs/legal/manual-upload-rights-review.md`. Its §4 recommends that the
+publish path require item 7, the uploader attestation. That document's own
+status header marks every decision in it as a *recommended* decision until
+the `ugcportal-zec` process owner ratifies it. The departure here is the
+operator's decision for the configured people, who run the site. Everybody
+else who can sign in (`ALLOWED_SIGNIN_EMAILS`) is still asked, and their
+uploads are still never published at upload.
+

@@ -324,7 +324,10 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   },
   "src/app/admin/settings/users/page.tsx": { "text-muted-foreground": 4 },
   "src/app/admin/settings/instagram/page.tsx": { "text-muted-foreground": 3 },
-  "src/app/upload/page.tsx": { "text-muted-foreground": 1 },
+  // text-muted-foreground: 1 -> 2 (ugcportal-ho7j): the configured
+  // uploader's "your uploads go public" paragraph, beside the intro
+  // paragraph on the same plain page canvas.
+  "src/app/upload/page.tsx": { "text-muted-foreground": 2 },
   // text-ink used to be 2 here (low finding 5): the alt-text and caption
   // labels, on the upload form's own plain canvas (ugcportal-gwr). The two
   // inputs that used to make this 4 already took their class from the
@@ -357,7 +360,10 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   },
   // text-ink: 1 (low finding 5) - the queued file's name, on the upload
   // page's own plain canvas (ugcportal-n3c).
-  "src/app/upload/upload-queue-list.tsx": { "text-ink": 1 },
+  //
+  // text-ink: 1 -> 2 (ugcportal-ho7j): the "Published. View its public
+  // page" line, in the same queue row as the file's name.
+  "src/app/upload/upload-queue-list.tsx": { "text-ink": 2 },
   // text-ink: 1 as of ugcportal-6uc2 (phase 2), was 2 (ugcportal-qnq9.16,
   // item 4 of the lows deferred from PR #93's round-6 review): the count
   // used to be TEXT_INPUT_CLASS's one usage (on the input's own

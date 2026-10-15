@@ -70,6 +70,10 @@ const commercialLinkCreateMock = vi.fn();
 const commercialLinkUpsertMock = vi.fn();
 const commercialLinkDeleteMock = vi.fn();
 const commercialLinkDeleteManyMock = vi.fn();
+// The uploader's `configuredHandle` (ugcportal-ho7j), read by the shared
+// publish gates only when the declaration is missing. Read-only: no write
+// method on `user` is exposed to this route at all.
+const userFindUniqueMock = vi.fn();
 const executeRawMock = vi.fn();
 const queryRawMock = vi.fn();
 const transactionMock = vi.fn();
@@ -173,6 +177,7 @@ vi.mock("@/lib/prisma", () => ({
       delete: commercialLinkDeleteMock,
       deleteMany: commercialLinkDeleteManyMock,
     },
+    user: { findUnique: userFindUniqueMock },
     $executeRaw: executeRawMock,
     $queryRaw: queryRawMock,
     $transaction: transactionMock,
@@ -425,6 +430,9 @@ beforeEach(() => {
   // A complete, in-force declaration by the owner (ugcportal-3ae). See
   // VALID_ATTESTATION for why this is the default rather than null.
   attestationFindUniqueMock.mockResolvedValue(VALID_ATTESTATION);
+  // Not a configured user (ugcportal-ho7j): every case in this file is about
+  // an ordinary owner's row.
+  userFindUniqueMock.mockResolvedValue({ configuredHandle: null });
 });
 
 describe("ownership gate on publish/unpublish (K2)", () => {

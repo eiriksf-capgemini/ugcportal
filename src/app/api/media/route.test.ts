@@ -42,6 +42,18 @@ const tagUpsertMock = vi.fn();
 const attestationCreateMock = vi.fn();
 const mediaFindManyMock = vi.fn();
 const mediaFindFirstMock = vi.fn();
+// Whether the uploader is a CONFIGURED user (ugcportal-ho7j), read once per
+// upload from their `User` row. Defaults to "not configured" below, so every
+// case written before that bead keeps testing the ordinary uploader.
+const userFindUniqueMock = vi.fn();
+// What the shared publish gates read back through the transaction when they
+// run for a configured uploader (src/lib/publish-gates.ts), and the write
+// that publishes. Never reached for anybody else.
+const txMediaUpdateMock = vi.fn();
+const txDisclosureFindUniqueMock = vi.fn();
+const txCommercialLinkCountMock = vi.fn();
+const txListingFindUniqueMock = vi.fn();
+const txAttestationFindUniqueMock = vi.fn();
 
 vi.mock("@/lib/auth", () => ({
   auth: authMock,
@@ -52,9 +64,15 @@ vi.mock("@/lib/auth", () => ({
   Separate from the top-level client on purpose — see the tripwire below.
 */
 const txClient = {
-  media: { create: mediaCreateMock },
+  media: { create: mediaCreateMock, update: txMediaUpdateMock },
   tag: { upsert: tagUpsertMock },
-  mediaAttestation: { create: attestationCreateMock },
+  mediaAttestation: {
+    create: attestationCreateMock,
+    findUnique: txAttestationFindUniqueMock,
+  },
+  mediaAdvertisingDisclosure: { findUnique: txDisclosureFindUniqueMock },
+  commercialLink: { count: txCommercialLinkCountMock },
+  mediaListing: { findUnique: txListingFindUniqueMock },
 };
 
 /**
@@ -98,6 +116,7 @@ vi.mock("@/lib/prisma", () => ({
       upsert: tagUpsertMock,
     },
     mediaAttestation: { create: attestationCreateOutsideTransaction },
+    user: { findUnique: userFindUniqueMock },
     $transaction: async (run: (tx: typeof txClient) => unknown) =>
       run(txClient),
   },
@@ -394,6 +413,18 @@ beforeEach(() => {
   tagUpsertMock.mockImplementation(async ({ create }) => create);
   mediaFindManyMock.mockReset();
   mediaFindFirstMock.mockReset();
+  userFindUniqueMock.mockReset();
+  userFindUniqueMock.mockResolvedValue({ configuredHandle: null });
+  txMediaUpdateMock.mockReset();
+  txMediaUpdateMock.mockResolvedValue({ id: "media-1" });
+  txDisclosureFindUniqueMock.mockReset();
+  txDisclosureFindUniqueMock.mockResolvedValue(null);
+  txCommercialLinkCountMock.mockReset();
+  txCommercialLinkCountMock.mockResolvedValue(0);
+  txListingFindUniqueMock.mockReset();
+  txListingFindUniqueMock.mockResolvedValue(null);
+  txAttestationFindUniqueMock.mockReset();
+  txAttestationFindUniqueMock.mockResolvedValue(null);
   // Drops any leftover one-shot mockRejectedValueOnce from a prior test (the
   // two ugcportal-u7g tests below queue one each) — a future change that made
   // POST return before reaching this call for their fixture would otherwise
@@ -3317,5 +3348,197 @@ describe("POST /api/media — the uploader's rights attestation (ugcportal-15r)"
     const response = await POST(buildRequest(imageFile(), [], { attestation: [] }));
 
     expect(response.status).toBe(401);
+  });
+});
+
+/**
+ * ugcportal-ho7j, against the mocked client: a CONFIGURED uploader
+ * (`User.configuredHandle` not null) is not asked the rights questions, and
+ * their upload is published in the create transaction if the shared publish
+ * gates pass. The same behaviour against a real database, including the
+ * public feed, is src/app/api/media/route.auto-publish.test.ts.
+ */
+describe("POST /api/media — a configured uploader (ugcportal-ho7j)", () => {
+  function imageFile() {
+    return new File([REAL_PNG], "photo.png", { type: "image/png" });
+  }
+
+  const ALT_TEXT = "A fox crossing a snowy field at dawn";
+
+  beforeEach(() => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    s3SendMock.mockResolvedValue({});
+    // The row as `media.create` returns it through MEDIA_OWNER_SELECT: alt
+    // text and both preview columns from what the route actually wrote.
+    mediaCreateMock.mockImplementation(async ({ data }) =>
+      selectedRow({
+        kind: data.kind,
+        altText: data.altText,
+        previewKey: data.previewKey,
+        previewId: data.previewId,
+      }),
+    );
+    userFindUniqueMock.mockResolvedValue({ configuredHandle: "eirik" });
+  });
+
+  it("decides configured-ness from the session user's own User row", async () => {
+    await POST(buildRequest(imageFile(), [], { altText: ALT_TEXT, attestation: [] }));
+
+    expect(userFindUniqueMock).toHaveBeenCalledTimes(1);
+    expect(userFindUniqueMock).toHaveBeenCalledWith({
+      where: { id: "user-1" },
+      select: { configuredHandle: true },
+    });
+  });
+
+  it("accepts an upload with no attestation parts, writes no attestation, and publishes it", async () => {
+    const response = await POST(
+      buildRequest(imageFile(), [], { altText: ALT_TEXT, attestation: [] }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(201);
+    expect(attestationCreateMock).not.toHaveBeenCalled();
+    // Published in the transaction, and the body says so. Fails if
+    // `publishedAt` is left null.
+    expect(txMediaUpdateMock).toHaveBeenCalledTimes(1);
+    const update = txMediaUpdateMock.mock.calls[0][0];
+    expect(update.where).toEqual({ id: "media-1" });
+    expect(Object.keys(update.data)).toEqual(["publishedAt"]);
+    expect(update.data.publishedAt).toBeInstanceOf(Date);
+    expect(body.publishedAt).toBe(update.data.publishedAt.toISOString());
+    expect(body.previewId).toEqual(expect.any(String));
+    expect(body.publishRefusal).toBeNull();
+    expect(body).not.toHaveProperty("key");
+  });
+
+  it("publishes through the transaction client, never the global one", async () => {
+    // The global client has no `media.update` at all in this file's mock, so
+    // a publish written outside the transaction would throw here.
+    const response = await POST(
+      buildRequest(imageFile(), [], { altText: ALT_TEXT, attestation: [] }),
+    );
+    expect(response.status).toBe(201);
+    expect(txMediaUpdateMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a VIDEO unpublished, and says why in the 201 (no watermarked preview)", async () => {
+    const response = await POST(
+      buildRequest(
+        new File([MP4_HEADER], "clip.mp4", { type: "video/mp4" }),
+        [],
+        { altText: ALT_TEXT, attestation: [] },
+      ),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(201);
+    expect(txMediaUpdateMock).not.toHaveBeenCalled();
+    expect(body.publishedAt).toBeNull();
+    expect(body.publishRefusal).toEqual({
+      error: "This item has no watermarked preview yet, so it cannot be published.",
+    });
+  });
+
+  it("keeps an upload with no alt text unpublished, with the alt-text refusal", async () => {
+    const response = await POST(buildRequest(imageFile(), [], { attestation: [] }));
+    const body = await response.json();
+
+    expect(response.status).toBe(201);
+    expect(txMediaUpdateMock).not.toHaveBeenCalled();
+    expect(body.publishRefusal).toEqual({
+      error: "Add alt text before publishing this item.",
+      field: "altText",
+    });
+  });
+
+  it("holds a configured uploader who DOES answer to the answers: a disclaimer keeps it private (K7)", async () => {
+    attestationCreateMock.mockImplementation(async ({ data }) => data);
+    // What the transaction reads back is what it just wrote (the extra
+    // `mediaId` key is ignored by the gate).
+    txAttestationFindUniqueMock.mockImplementation(
+      async () => attestationCreateMock.mock.calls[0][0].data,
+    );
+
+    const response = await POST(
+      buildRequest(imageFile(), [], {
+        altText: ALT_TEXT,
+        attestation: attestationFormParts({
+          version: CURRENT_ATTESTATION_VERSION,
+          answers: {
+            authorship: "NEITHER",
+            ...Object.fromEntries(
+              ATTESTATION_QUESTIONS.map(({ field }) => [field, field === "uploaderIsAdult"]),
+            ),
+          } as Parameters<typeof attestationFormParts>[0]["answers"],
+        }),
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(201);
+    expect(attestationCreateMock).toHaveBeenCalledTimes(1);
+    expect(attestationCreateMock.mock.calls[0][0].data.authorship).toBe("NEITHER");
+    expect(txMediaUpdateMock).not.toHaveBeenCalled();
+    expect(body.publishedAt).toBeNull();
+    expect(body.publishRefusal).toMatchObject({
+      blocker: "attestation_rights_disclaimed",
+    });
+  });
+
+  it("still refuses an INCOMPLETE attestation from a configured uploader", async () => {
+    const name = attestationFieldName("showsMinors");
+    const response = await POST(
+      buildRequest(imageFile(), [], {
+        altText: ALT_TEXT,
+        attestation: attestationParts().filter(([part]) => part !== name),
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(mediaCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("treats a user row with no configuredHandle as NOT configured (K6)", async () => {
+    userFindUniqueMock.mockResolvedValue({ configuredHandle: null });
+
+    const refused = await POST(
+      buildRequest(imageFile(), [], { altText: ALT_TEXT, attestation: [] }),
+    );
+    expect(refused.status).toBe(400);
+    expect(mediaCreateMock).not.toHaveBeenCalled();
+
+    const accepted = await POST(buildRequest(imageFile(), [], { altText: ALT_TEXT }));
+    const body = await accepted.json();
+    expect(accepted.status).toBe(201);
+    expect(txMediaUpdateMock).not.toHaveBeenCalled();
+    expect(body.publishedAt).toBeNull();
+    // Byte-for-byte the pre-ho7j body for an ordinary uploader: no new key.
+    expect(body).not.toHaveProperty("publishRefusal");
+  });
+
+  it("treats a missing user row as NOT configured (fail closed)", async () => {
+    userFindUniqueMock.mockResolvedValue(null);
+
+    const response = await POST(
+      buildRequest(imageFile(), [], { altText: ALT_TEXT, attestation: [] }),
+    );
+    expect(response.status).toBe(400);
+    expect(mediaCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores a client that claims to be configured", async () => {
+    userFindUniqueMock.mockResolvedValue({ configuredHandle: null });
+
+    const request = buildRequest(imageFile(), [], { altText: ALT_TEXT, attestation: [] });
+    const form = await request.formData();
+    form.append("configuredHandle", "eirik");
+    form.append("uploaderConfigured", "true");
+    const response = await POST(
+      new Request("http://localhost/api/media", { method: "POST", body: form }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(mediaCreateMock).not.toHaveBeenCalled();
   });
 });

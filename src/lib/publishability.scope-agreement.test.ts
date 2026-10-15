@@ -97,6 +97,13 @@ const { MEDIA_GATE_SELECT } = await import("@/lib/resale-rights");
 const OWNER = "owner-scope-3ae";
 const ADMIN = "admin-scope-3ae";
 const DEMOTED = "demoted-scope-3ae";
+/**
+ * A CONFIGURED uploader (ugcportal-ho7j): `User.configuredHandle` set, the
+ * state src/lib/configured-user-link.ts leaves the people in
+ * src/config/users.ts in. The handle is a fixture value, not one of the
+ * real ones — the rule reads "not null", not a name.
+ */
+const CONFIGURED_OWNER = "configured-owner-scope-ho7j";
 
 type AttestationShape = {
   attestedByUserId?: string;
@@ -121,6 +128,8 @@ type Case = {
   /** `undefined` writes no MediaListing at all: every upload's real state. */
   depictsPeople?: boolean | null;
   clearance?: ClearanceShape;
+  /** The uploader is a configured user (ugcportal-ho7j). Default: not. */
+  configured?: boolean;
 };
 
 /**
@@ -234,20 +243,81 @@ const CASES: Case[] = [
     attestation: { showsIdentifiablePeople: false },
     depictsPeople: null,
   },
+  // ugcportal-ho7j: the same states, for an uploader who is CONFIGURED.
+  {
+    id: "configured-undeclared",
+    what: "a configured user's upload: no declaration, never triaged",
+    attestation: null,
+    configured: true,
+  },
+  {
+    id: "configured-undeclared-listing-no-people",
+    what: "a configured user's undeclared upload, triaged: nobody shown",
+    attestation: null,
+    configured: true,
+    depictsPeople: false,
+  },
+  {
+    id: "configured-undeclared-listing-untriaged",
+    what: "a configured user's undeclared upload, people question unanswered",
+    attestation: null,
+    configured: true,
+    depictsPeople: null,
+  },
+  {
+    id: "configured-undeclared-admin-says-people",
+    what: "a configured user's undeclared upload the admin says shows a person",
+    attestation: null,
+    configured: true,
+    depictsPeople: true,
+  },
+  {
+    id: "configured-undeclared-people-cleared",
+    what: "the same, with the PEOPLE layer cleared by a current admin",
+    attestation: null,
+    configured: true,
+    depictsPeople: true,
+    clearance: {},
+  },
+  {
+    id: "configured-declared",
+    what: "a configured user who did answer the questions, cleanly",
+    attestation: {},
+    configured: true,
+  },
+  {
+    id: "configured-rights-disclaimed",
+    what: "a configured user who declared they neither made it nor hold a licence",
+    attestation: { authorship: MediaAuthorship.NEITHER },
+    configured: true,
+  },
+  {
+    id: "configured-retired-version",
+    what: "a configured user's declaration under a version no longer in force",
+    attestation: { attestationVersion: "1999-01-01.1" },
+    configured: true,
+  },
+  {
+    id: "configured-declared-people",
+    what: "a configured user who declared a person is shown, no clearance",
+    attestation: { showsIdentifiablePeople: true },
+    configured: true,
+  },
 ];
 
 async function seed(testCase: Case): Promise<void> {
   const { id } = testCase;
+  const owner = testCase.configured ? CONFIGURED_OWNER : OWNER;
 
   // Every row satisfies the COLUMN half of the scope, so the only thing
   // that can decide its visibility below is the rights half.
   await prisma.media.create({
     data: {
       id,
-      userId: OWNER,
+      userId: owner,
       kind: "IMAGE",
-      key: `media/${OWNER}/${id}.jpg`,
-      previewKey: `previews/${OWNER}/${id}.webp`,
+      key: `media/${owner}/${id}.jpg`,
+      previewKey: `previews/${owner}/${id}.webp`,
       previewId: `pv-${id}`,
       mimeType: "image/jpeg",
       sizeBytes: 4096,
@@ -263,7 +333,7 @@ async function seed(testCase: Case): Promise<void> {
     await prisma.mediaAttestation.create({
       data: {
         mediaId: id,
-        attestedByUserId: a.attestedByUserId ?? OWNER,
+        attestedByUserId: a.attestedByUserId ?? owner,
         attestationVersion: a.attestationVersion ?? CURRENT_ATTESTATION_VERSION,
         authorship: a.authorship ?? MediaAuthorship.AUTHOR,
         ownOriginalNotFromWeb: true,
@@ -320,6 +390,7 @@ async function predicateBlocker(id: string): Promise<string | null> {
     where: { id },
     select: {
       userId: true,
+      user: { select: { configuredHandle: true } },
       attestation: { select: MEDIA_GATE_SELECT.attestation.select },
       listing: {
         select: {
@@ -329,7 +400,13 @@ async function predicateBlocker(id: string): Promise<string | null> {
       },
     },
   });
-  return publishabilityBlocker(row);
+  // `uploaderConfigured` from the uploader's own `User` row, the way the
+  // routes decide it (`isConfiguredUser`, src/lib/publish-gates.ts).
+  const { user, ...upload } = row;
+  return publishabilityBlocker({
+    ...upload,
+    uploaderConfigured: user.configuredHandle !== null,
+  });
 }
 
 let visibleIds: Set<string>;
@@ -343,6 +420,12 @@ beforeAll(async () => {
       // Signed a clearance and was demoted afterwards. The gate re-reads the
       // role at evaluation time; so must the where-clause.
       { id: DEMOTED, email: "demoted-scope-3ae@example.com", role: "USER" },
+      {
+        id: CONFIGURED_OWNER,
+        email: "configured-owner-scope-ho7j@example.com",
+        role: "USER",
+        configuredHandle: "fixture-handle",
+      },
     ],
   });
 
@@ -413,4 +496,38 @@ describe("the two states a Prisma where cannot judge (ugcportal-0epl)", () => {
       expect(visibleIds.has(id)).toBe(true);
     });
   }
+});
+
+/**
+ * ugcportal-ho7j K5, at the scope, stated as EXPECTED OUTCOMES rather than
+ * only as agreement with the predicate — so that the predicate and the scope
+ * being wrong in the same direction cannot pass. The agreement cases above
+ * cover the same rows from the other side.
+ */
+describe("the configured-uploader exemption, in the scope itself (ugcportal-ho7j K5)", () => {
+  it("configured, declaration missing: in scope", () => {
+    expect(visibleIds.has("configured-undeclared")).toBe(true);
+  });
+
+  it("NOT configured, declaration missing: out of scope", () => {
+    expect(visibleIds.has("no-attestation")).toBe(false);
+  });
+
+  it("configured, declaration present but disclaiming or retired: out of scope", () => {
+    expect(visibleIds.has("configured-rights-disclaimed")).toBe(false);
+    expect(visibleIds.has("configured-retired-version")).toBe(false);
+    expect(visibleIds.has("configured-declared-people")).toBe(false);
+  });
+
+  it("configured or not, declaration present and clean: in scope", () => {
+    expect(visibleIds.has("configured-declared")).toBe(true);
+    expect(visibleIds.has("ok-plain")).toBe(true);
+  });
+
+  it("with no declaration, the listing alone decides the people question", () => {
+    expect(visibleIds.has("configured-undeclared-admin-says-people")).toBe(false);
+    expect(visibleIds.has("configured-undeclared-people-cleared")).toBe(true);
+    expect(visibleIds.has("configured-undeclared-listing-no-people")).toBe(true);
+    expect(visibleIds.has("configured-undeclared-listing-untriaged")).toBe(true);
+  });
 });

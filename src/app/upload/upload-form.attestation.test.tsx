@@ -132,9 +132,15 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function mount(): void {
+function mount({ uploaderConfigured }: { uploaderConfigured?: boolean } = {}): void {
   act(() => {
-    root.render(<UploadForm />);
+    root.render(
+      uploaderConfigured === undefined ? (
+        <UploadForm />
+      ) : (
+        <UploadForm uploaderConfigured={uploaderConfigured} />
+      ),
+    );
   });
 }
 
@@ -458,5 +464,116 @@ describe("K1: the answers reach the request", () => {
       FakeXhr.instances[1].sent!.get(attestationFieldName("showsMinors")),
       "the retry re-answered the question on the uploader's behalf",
     ).toBe("yes");
+  });
+});
+
+/**
+ * ugcportal-ho7j K1 and K3 at the form: a CONFIGURED uploader is asked no
+ * rights questions and is gated by alt text alone; anybody else gets the
+ * questions and the gate exactly as above. And the queue row says whether a
+ * configured uploader's upload went public, and if not, why.
+ */
+describe("a configured uploader (ugcportal-ho7j K1)", () => {
+  it("renders no attestation block, legend or radio", () => {
+    mount({ uploaderConfigured: true });
+
+    expect(container.querySelector("[data-upload-attestation]")).toBeNull();
+    expect(container.querySelector("[data-attestation-question]")).toBeNull();
+    expect(text()).not.toContain(ATTESTATION_AUTHORSHIP_QUESTION.question);
+    for (const { question } of ATTESTATION_QUESTIONS) {
+      expect(text()).not.toContain(question);
+    }
+  });
+
+  it("queues and sends a file once alt text is given, with no attestation parts", () => {
+    mount({ uploaderConfigured: true });
+    setAltText("A fox crossing a snowy field at dawn");
+
+    addFile(imageFile());
+
+    expect(FakeXhr.instances).toHaveLength(1);
+    const names = [...FakeXhr.instances[0].sent!.keys()];
+    expect(names[0]).toBe("file");
+    expect(names.filter((name) => name.startsWith("attestation."))).toEqual([]);
+    expect(text()).not.toContain("rights question");
+  });
+
+  it("is still gated by alt text, exactly as before", () => {
+    mount({ uploaderConfigured: true });
+
+    addFile(imageFile());
+
+    expect(FakeXhr.instances).toHaveLength(0);
+    expect(text()).toContain("Nothing queued yet");
+  });
+
+  it("with the prop false, renders the nine questions and gates on them as today", () => {
+    mount({ uploaderConfigured: false });
+
+    expect(container.querySelector("[data-upload-attestation]")).not.toBeNull();
+    for (const { field } of ATTESTATION_QUESTIONS) {
+      expect(
+        container.querySelector(`fieldset[data-attestation-question="${field}"] legend`),
+        field,
+      ).not.toBeNull();
+    }
+    setAltText("A fox crossing a snowy field at dawn");
+    addFile(imageFile());
+    expect(FakeXhr.instances).toHaveLength(0);
+    expect(text()).toContain("rights question");
+  });
+});
+
+describe("the queue row says whether the upload went public (ugcportal-ho7j K3)", () => {
+  const STORED = {
+    id: "media-1",
+    kind: "IMAGE",
+    previewId: "preview-abc",
+    originalName: "photo.png",
+    altText: "A fox crossing a snowy field at dawn",
+    caption: null,
+    tags: [],
+  };
+
+  async function uploadAndAnswer(body: unknown): Promise<void> {
+    mount({ uploaderConfigured: true });
+    setAltText("A fox crossing a snowy field at dawn");
+    addFile(imageFile());
+    await waitUntil(() => FakeXhr.instances.length > 0, "the request to start");
+    act(() => {
+      FakeXhr.instances[0].respond(201, body);
+    });
+    await waitUntil(() => text().includes("Clear"), "the row to settle");
+  }
+
+  it("renders 'Published' with a link to the public item page", async () => {
+    await uploadAndAnswer({
+      ...STORED,
+      publishedAt: "2026-10-15T10:00:00.000Z",
+      publishRefusal: null,
+    });
+
+    expect(text()).toContain("Published");
+    const link = container.querySelector<HTMLAnchorElement>('a[href="/media/preview-abc"]');
+    expect(link, "no link to the item page").not.toBeNull();
+    expect(link!.textContent).toContain("public page");
+  });
+
+  it("renders the refusal's reason, and no 'Published', when a gate refused", async () => {
+    await uploadAndAnswer({
+      ...STORED,
+      kind: "VIDEO",
+      previewId: null,
+      publishedAt: null,
+      publishRefusal: {
+        error: "This item has no watermarked preview yet, so it cannot be published.",
+      },
+    });
+
+    expect(text()).toContain(
+      "Stored, but not published: This item has no watermarked preview yet, so it cannot be published.",
+    );
+    expect(text()).not.toContain("Published");
+    expect(container.querySelector('a[href^="/media/"]')).toBeNull();
   });
 });

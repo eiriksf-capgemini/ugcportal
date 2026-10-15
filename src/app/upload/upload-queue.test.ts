@@ -125,6 +125,8 @@ describe("the queue reducer", () => {
       kind: "IMAGE" as const,
       previewId: "p1",
       originalName: "a",
+      publishedAt: null,
+      publishRefusal: null,
     };
     let state = uploadQueueReducer([queued()], {
       type: "succeeded",
@@ -153,7 +155,14 @@ describe("the queue reducer", () => {
     state = uploadQueueReducer(state, {
       type: "succeeded",
       id: "f1",
-      media: { id: "m1", kind: "IMAGE", previewId: "p1", originalName: "a" },
+      media: {
+        id: "m1",
+        kind: "IMAGE",
+        previewId: "p1",
+        originalName: "a",
+        publishedAt: null,
+        publishRefusal: null,
+      },
     });
 
     expect(state[0].status).toBe("failed");
@@ -175,7 +184,14 @@ describe("the queue reducer", () => {
     const succeeded = uploadQueueReducer(uploading, {
       type: "succeeded",
       id: "f1",
-      media: { id: "m1", kind: "IMAGE", previewId: "p1", originalName: "a" },
+      media: {
+        id: "m1",
+        kind: "IMAGE",
+        previewId: "p1",
+        originalName: "a",
+        publishedAt: null,
+        publishRefusal: null,
+      },
     });
     expect(succeeded[0].status).toBe("succeeded");
 
@@ -461,13 +477,43 @@ describe("toQueueMedia keeps the original out of the page (K3)", () => {
     publishedAt: null,
   };
 
-  it("keeps the four fields the success row renders", () => {
+  it("keeps the fields the success row renders", () => {
     expect(toQueueMedia(FULL_ROW)).toEqual({
       id: "media-1",
       kind: "IMAGE",
       previewId: "preview-1",
       originalName: "photo.png",
+      // ugcportal-ho7j: whether it went public, and if not, why. An
+      // ordinary uploader's 201 carries no refusal, so both are null.
+      publishedAt: null,
+      publishRefusal: null,
     });
+  });
+
+  it("keeps a configured uploader's publish outcome, and only the refusal's sentence (ugcportal-ho7j)", () => {
+    expect(
+      toQueueMedia({ ...FULL_ROW, publishedAt: "2026-10-15T10:00:00.000Z", publishRefusal: null }),
+    ).toMatchObject({ publishedAt: "2026-10-15T10:00:00.000Z", publishRefusal: null });
+
+    const refused = toQueueMedia({
+      ...FULL_ROW,
+      kind: "VIDEO",
+      previewId: null,
+      publishRefusal: {
+        error: "This item has no watermarked preview yet, so it cannot be published.",
+        blocker: "attestation_missing",
+        field: "altText",
+      },
+    });
+    expect(refused?.publishedAt).toBe(null);
+    expect(refused?.publishRefusal).toBe(
+      "This item has no watermarked preview yet, so it cannot be published.",
+    );
+    // A refusal body that is not the route's shape is no refusal at all.
+    expect(toQueueMedia({ ...FULL_ROW, publishRefusal: "nope" })?.publishRefusal).toBe(null);
+    expect(toQueueMedia({ ...FULL_ROW, publishRefusal: { error: 7 } })?.publishRefusal).toBe(
+      null,
+    );
   });
 
   it("carries neither the original's key nor the preview's storage path", () => {
@@ -477,6 +523,8 @@ describe("toQueueMedia keeps the original out of the page (K3)", () => {
       "kind",
       "originalName",
       "previewId",
+      "publishRefusal",
+      "publishedAt",
     ]);
     expect(JSON.stringify(media)).not.toContain("media/user-1");
     expect(JSON.stringify(media)).not.toContain("previews/");
@@ -491,6 +539,8 @@ describe("toQueueMedia keeps the original out of the page (K3)", () => {
         kind: "VIDEO",
         previewId: null,
         originalName: "photo.png",
+        publishedAt: null,
+        publishRefusal: null,
       },
     );
     expect(toQueueMedia({ ...FULL_ROW, previewId: "" })?.previewId).toBe(null);

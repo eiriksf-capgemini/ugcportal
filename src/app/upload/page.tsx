@@ -3,6 +3,8 @@ import { redirect } from "next/navigation";
 import { PAGE_CONTAINER_CLASS } from "@/components/site/page-shell";
 import { PageTitle } from "@/components/page-title";
 import { getSession } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
+import { isConfiguredUser } from "@/lib/publish-gates";
 import { UPLOAD_PATH, signInPath } from "@/lib/routes";
 import { listPickerTags } from "@/lib/tags";
 
@@ -79,6 +81,20 @@ export default async function UploadPage() {
     left.name.localeCompare(right.name),
   );
 
+  /*
+    Is this uploader one of the CONFIGURED people (ugcportal-ho7j)? Read from
+    their `User` row by the session's id — the same `isConfiguredUser` POST
+    /api/media decides with — and never from the session payload, which does
+    not carry `configuredHandle`. AFTER the auth gate, for the reason the tag
+    read above gives.
+
+    It decides what the form asks: a configured uploader is not shown the
+    rights questions, and their uploads publish on upload when the publish
+    gates pass. The route decides again for itself, so this is the
+    affordance and not the boundary.
+  */
+  const uploaderConfigured = await isConfiguredUser(prisma, session.user.id);
+
   return (
     /*
       max-w-3xl, narrower than the shell's max-w-6xl: this is a single column
@@ -104,9 +120,25 @@ export default async function UploadPage() {
         Add images and video to your library. Each image is watermarked as it
         arrives, and only that watermarked copy is ever displayed.
       </p>
+      {uploaderConfigured ? (
+        /*
+          What happens next, for the people this applies to (ugcportal-ho7j):
+          there is no separate publish step for them. Video stays private
+          until it has a watermarked still (ugcportal-pmb), and the queue
+          says so beside the file.
+        */
+        <p className="mt-2 max-w-prose text-sm text-muted-foreground">
+          Your uploads go public on the site as soon as they are stored,
+          unless the list below says why one could not be. Video stays private
+          for now, because there is no watermarked still to show for it yet.
+        </p>
+      ) : null}
 
       <div className="mt-8">
-        <UploadForm availableTags={availableTags} />
+        <UploadForm
+          availableTags={availableTags}
+          uploaderConfigured={uploaderConfigured}
+        />
       </div>
     </div>
   );

@@ -1,5 +1,12 @@
+import Link from "next/link";
+
 import { Button, buttonVariants } from "@/components/ui/button";
-import { UPLOAD_PATH, mediaPreviewPath, signInPath } from "@/lib/routes";
+import {
+  UPLOAD_PATH,
+  mediaItemPath,
+  mediaPreviewPath,
+  signInPath,
+} from "@/lib/routes";
 
 import { formatBytes, mayRetry, secondsUntilRetry } from "./outcomes";
 import {
@@ -121,6 +128,52 @@ function successNote(item: QueueItem): string {
   return "Stored, but no thumbnail was returned for this image.";
 }
 
+/**
+ * Did this upload go public (ugcportal-ho7j)? Both halves, because the item
+ * page is keyed on `previewId`: a published row with no public handle has
+ * no page to link to, and is not claimed as published here.
+ */
+function isPublished(
+  media: QueueMedia | null,
+): media is QueueMedia & { publishedAt: string; previewId: string } {
+  return media !== null && media.publishedAt !== null && media.previewId !== null;
+}
+
+/**
+ * Whether a configured uploader's upload went public, and if not, why
+ * (ugcportal-ho7j). Renders nothing for anybody else's upload: their 201
+ * carries no `publishRefusal`, and unpublished is simply what an upload is
+ * for them.
+ */
+function PublishOutcome({ media }: { media: QueueMedia | null }) {
+  if (isPublished(media)) {
+    return (
+      <p className="text-xs text-ink">
+        Published.{" "}
+        {/*
+          The public item page, through the one helper that names that
+          route (src/lib/routes.ts), so this link cannot spell the path a
+          second way.
+        */}
+        <Link
+          href={mediaItemPath(media.previewId)}
+          className="underline underline-offset-2"
+        >
+          View its public page
+        </Link>
+      </p>
+    );
+  }
+  if (media !== null && media.publishRefusal !== null) {
+    return (
+      <p className="text-xs text-ink-muted">
+        Stored, but not published: {media.publishRefusal}
+      </p>
+    );
+  }
+  return null;
+}
+
 function statusLabel(item: QueueItem): string {
   switch (item.status) {
     case "pending":
@@ -130,7 +183,9 @@ function statusLabel(item: QueueItem): string {
       return percent === null ? "Uploading" : `Uploading ${percent}%`;
     }
     case "succeeded":
-      return "Uploaded";
+      // "Published" only when the 201 said so (ugcportal-ho7j): a configured
+      // uploader's upload that passed every publish gate.
+      return isPublished(item.media) ? "Published" : "Uploaded";
     case "failed":
       return "Not uploaded";
   }
@@ -313,10 +368,11 @@ function Thumbnail({ item }: { item: QueueItem }) {
           omission. The optimizer fetches the source URL itself, server-side,
           without the visitor's cookies. The delivery route serves an
           UNPUBLISHED preview only to its own owner, identified by session —
-          and everything on this page was uploaded seconds ago and is therefore
-          unpublished — so a cookieless fetch 404s on every row here. There is
-          nothing to optimise anyway: the bytes are an already-resized,
-          already-encoded webp thumbnail.
+          and an upload on this page is unpublished unless its uploader is a
+          configured user whose upload passed every publish gate
+          (ugcportal-ho7j) — so a cookieless fetch 404s on most rows here.
+          There is nothing to optimise anyway: the bytes are an
+          already-resized, already-encoded webp thumbnail.
 
           alt="" because this image is decorative HERE: the filename sits
           immediately beside it and says everything the picture would.
@@ -420,6 +476,7 @@ export function UploadQueueList({
             {item.status === "succeeded" ? (
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 <p className="text-xs text-ink-muted">{successNote(item)}</p>
+                <PublishOutcome media={item.media} />
                 <Button
                   ref={(element) => onDismissButtonRef?.(item.id, element)}
                   type="button"
