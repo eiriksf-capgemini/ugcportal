@@ -454,26 +454,29 @@ export function configuredUserHandle(user: ConfiguredUser): string | null {
 
 /**
  * The handles of the people in `CONFIGURED_USERS` TODAY — what "configured"
- * means everywhere a grant follows from it (ugcportal-lskg).
+ * means wherever publish-on-upload follows from it (ugcportal-lskg).
  *
- * `User.configuredHandle` is written at sign-in from the array and nothing
- * ever clears it, so a non-null column only says the person WAS configured
- * once. Removing someone from the array has to take back what the array
- * grants without an operator editing the database, so every reader of
- * configured-ness — `isConfiguredUser` in src/lib/publish-gates.ts (which the
- * upload page and POST /api/media both call) and the Prisma scope arm
- * `CONFIGURED_UPLOADER_UNDECLARED` in src/lib/publishability.ts — asks "is
- * the row's handle in THIS list", not "is it set".
+ * `User.configuredHandle` is written at sign-in from the array and no code
+ * path in src/ clears it (no non-test writer sets it to null), so a non-null
+ * column only says the person WAS configured once. Removing someone from the
+ * array has to take back what the array grants without an operator editing
+ * the database, so both readers of that grant — `isConfiguredUser` in
+ * src/lib/publish-gates.ts (which the upload page and POST /api/media both
+ * call) and the Prisma scope arm `CONFIGURED_UPLOADER_UNDECLARED` in
+ * src/lib/publishability.ts — ask "is the row's handle in THIS list", not
+ * "is it set". (src/lib/configured-user-link.ts still finds a person's row
+ * by the column; that is linking, not a grant.)
  *
  * COMPUTED ONCE, AT MODULE LOAD, and that is correct rather than merely
  * cheap: `CONFIGURED_USERS` is committed TypeScript (src/config/users.ts),
- * so it cannot change without a new build, and a new build is a new process
- * that loads this module afresh. Frozen so no caller can push a handle into
+ * edited by changing that file and deploying, and a deploy is a new process
+ * that loads this module afresh. Nothing at runtime mutates the array (its
+ * `readonly` is compile-time only — see the same note in
+ * `permittedIdentities` below). Frozen so no caller can push a handle into
  * the shared list.
  *
  * A name that yields no handle (`configuredUserHandle` returns `null`) is
- * left out: that person has no row to match, and a `null` here would never
- * match the column anyway.
+ * left out: that person has no handle for a row to carry.
  */
 export const CURRENT_CONFIGURED_HANDLES: readonly string[] = Object.freeze(
   CONFIGURED_USERS.map(configuredUserHandle).filter(

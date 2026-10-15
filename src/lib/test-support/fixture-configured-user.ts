@@ -7,7 +7,7 @@ import type * as UsersModule from "@/config/users";
  * `configuredHandle` is one the array derives TODAY
  * (`CURRENT_CONFIGURED_HANDLES`, src/lib/sign-in-policy.ts) — a non-null
  * column alone no longer counts. The ho7j suites seed a row with the fixture
- * handle `"fixture-handle"`, never a real person's, so they mock
+ * handle `"fixture-handle"`, not a real person's, so they mock
  * `@/config/users` with this person appended to the real array:
  *
  *   vi.mock("@/config/users", async (importOriginal) => {

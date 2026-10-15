@@ -543,7 +543,7 @@ const NOBODY_IDENTIFIABLE_SHOWN = {
  * with no write to any `Media` row.
  *
  * `in` the handles the array derives TODAY, not `not: null`
- * (ugcportal-lskg): the column is written at sign-in and never cleared, so
+ * (ugcportal-lskg): the column is written at sign-in and nothing clears it, so
  * a person removed from `CONFIGURED_USERS` keeps a non-null handle. Asking
  * the same list `isConfiguredUser` (src/lib/publish-gates.ts) asks is what
  * takes their undeclared uploads off the public site once the deploy that
