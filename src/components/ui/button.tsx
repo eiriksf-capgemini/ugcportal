@@ -123,8 +123,9 @@ const buttonVariants = cva(
    * variant already applies, so it carries no new value for the contrast
    * gate's own alpha-coverage check (src/lib/design/usage.ts) to learn.
    *
-   * `motion-safe:` on `active:not-aria-[haspopup]: translate-y-px` (space
-   * inserted before the utility, here only - round-5 review: Tailwind's
+   * `motion-safe:` on `active:not-aria-[haspopup]: translate-y- px` (broken
+   * here only; the space after the hyphen is what stops extraction, since
+   * `translate-y-` alone is no candidate (ugcportal-rj7y) - round-5 review: Tailwind's
    * source scanner reads raw file bytes, not AST-aware JS, so the bare,
    * un-prefixed combination written UNBROKEN in a comment is itself a
    * valid candidate and got compiled into the real production stylesheet,
