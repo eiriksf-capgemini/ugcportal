@@ -302,12 +302,14 @@ const COVERAGE_UNIVERSAL_RE = /\b(?:catch(?:es)?|sees?|covers?|detects?|flags?|f
 //       guard sees it"); or an instrument subject + a narrowing verb + no
 //       other ("the scan sees no other shape").
 //   N4  never: either instrument subject + never + a narrowing verb ("the
-//       scan never sees ...") or a relative clause "that/which/who never"
-//       + a narrowing verb or mentions / names / references / spells
-//       ("blind to a reader that never mentions it"), and in both cases the
-//       window also has limitation evidence other than this match. The
+//       scan never sees ...") or a relative clause "that/which never" +
+//       mentions / names / references / spells ("blind to a reader that
+//       never mentions it"), and in both cases the window also has
+//       limitation evidence other than this match. The
 //       relative clause's own subject is the reader out of reach, so it is
-//       the evidence that has to name the instrument.
+//       the evidence that has to name the instrument. "who" and the
+//       narrowing verbs are left out of the relative form: "a visitor who
+//       never sees a draft row" is an access guarantee.
 //
 // Narrowing verbs are catch / detect / notice / recognise / see / cover /
 // inspect / look at, plus, after "only", check / scan / read / match / find.
@@ -351,12 +353,16 @@ const COVERAGE_UNIVERSAL_RE = /\b(?:catch(?:es)?|sees?|covers?|detects?|flags?|f
 // alone); an instrument named only outside the window (PR #200's table row
 // "nothing else catches it either", whose instrument is in the table's
 // header four lines up); and "covers X and no other", which is how a
-// clearance's guarantee is phrased in PR #199. And the reverse error it
-// still makes: a pronoun counts as an instrument whenever an instrument
+// clearance's guarantee is phrased in PR #199. And two reverse errors it
+// still makes. A pronoun counts as an instrument whenever an instrument
 // noun appears anywhere before it in the window, whether or not that noun
 // is what the pronoun means ("the test passed, and it cannot see the draft
-// row" is SCOPE-LIMITING). Each of these is pinned in
-// scripts/claims-audit.test.mjs.
+// row" is SCOPE-LIMITING). And INSTRUMENT_NOUN_RE also names runtime
+// components (guard, check, rule, filter, hook), so a guarantee about one
+// reads as an instrument's limit ("the tenant filter cannot see another
+// tenant's rows" is SCOPE-LIMITING); they stay in the list because the
+// limitation prose this rule exists for uses them ("this guard only covers
+// named imports"). Each of these is pinned in scripts/claims-audit.test.mjs.
 const DETECTION_VERB = String.raw`(?:catch(?:es)?|detects?|notices?|recogni[sz]es?)`;
 const AMBIGUOUS_VERB = String.raw`(?:sees?|covers?|inspects?|looks? at)`;
 const ONLY_EXTRA_VERB = String.raw`(?:checks?|scans?|reads?|match(?:es)?|finds?)`;
@@ -391,7 +397,7 @@ const N3_NOTHING_ELSE_RE = new RegExp(String.raw`\b(nothing else)\s+${NARROWING_
 const N3_NO_OTHER_SUBJECT_RE = new RegExp(String.raw`\b(no other)\s+(?:[\w-]+\s+){0,2}?${INSTRUMENT_NOUN_RE.source.slice(2, -2)}\s+${NARROWING_VERB}\b`, "gi");
 const N3_VERB_NO_OTHER_RE = new RegExp(String.raw`\b${NARROWING_VERB}\s+(no other)\b`, "gi");
 const N4_NEVER_VERB_RE = new RegExp(String.raw`\b(never)\s+${NARROWING_VERB}\b`, "gi");
-const N4_RELATIVE_RE = new RegExp(String.raw`\b(?:that|which|who)\s+(never)\s+(?:${MENTION_VERB}|${NARROWING_VERB})\b`, "gi");
+const N4_RELATIVE_RE = new RegExp(String.raw`\b(?:that|which)\s+(never)\s+${MENTION_VERB}\b`, "gi");
 const ABSOLUTE_GLOBAL_RE = new RegExp(ABSOLUTE_RE.source, "gi");
 
 /**

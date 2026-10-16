@@ -371,7 +371,19 @@ describe("scope-limiting recategorisation (ugcportal-fgcb K1)", () => {
     expect(classifyClaimLine("the scan does not see a namespace import, and nothing else catches it")).toEqual(["SCOPE-LIMITING"]);
   });
 
-  it("M1: 'that/which/who never' takes only a narrowing or mention verb", () => {
+  it("round 2 N1: the relative 'never' form takes neither 'who' nor a narrowing verb", () => {
+    // The reviewer's reproduction (issue comment 6213645250): a person-subject
+    // access guarantee beside an unrelated instrument limitation.
+    expect(classifyClaimLine("an anonymous visitor who never sees a draft row", { before: "the lint rule does not see server actions, so" })).toEqual(["ABSOLUTE"]);
+  });
+
+  it("KNOWN ERROR, pinned: a runtime component named in INSTRUMENT_NOUN_RE reads as an instrument", () => {
+    // Named in the comment above findScopeLimitingSpans (round 2 N2); pinned
+    // so a fix to it is visible here.
+    expect(classifyClaimLine("the tenant filter cannot see another tenant's rows")).toEqual(["SCOPE-LIMITING"]);
+  });
+
+  it("M1: 'that/which never' takes only a mention verb", () => {
     expect(classifyClaimLine("The expiry gate is the one check that never fails open:", { after: "a NaN date does not reach the sellable branch." })).toEqual(["ABSOLUTE"]);
     expect(classifyClaimLine("a gate which never lets an expired listing sell, since an expired row does not reach it")).toEqual(["ABSOLUTE"]);
     // The evidence here IS an instrument limitation, so only the verb
@@ -379,7 +391,7 @@ describe("scope-limiting recategorisation (ugcportal-fgcb K1)", () => {
     expect(classifyClaimLine("a session that never expires is rejected", { before: "the hook does not see the cookie" })).toEqual(["ABSOLUTE"]);
   });
 
-  it("M1: 'that/which/who never' needs limitation evidence besides itself", () => {
+  it("M1: 'that/which never' needs limitation evidence besides itself", () => {
     expect(classifyClaimLine("a reader that never mentions the constant is rejected")).toEqual(["ABSOLUTE"]);
     expect(classifyClaimLine("the scan is blind to a reader that never mentions the constant")).toEqual(["SCOPE-LIMITING"]);
   });
