@@ -128,12 +128,26 @@ describe("main", () => {
     expect(r.stderr).not.toContain("ghs_");
   });
 
+  it("a non-2xx response is a failure even if its body carries a token", async () => {
+    const r = await main({
+      fetch: stubFetch(403, okBody),
+      argv: [],
+      env: envOf(),
+    });
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toContain("403");
+  });
+
   it("2xx without a token still fails loudly", async () => {
     const r = await main({ fetch: stubFetch(200, {}), argv: [], env: envOf() });
     expect(r.code).toBe(1);
     expect(r.stdout).toBe("");
   });
 });
+
+const pemFiles = (files) =>
+  files.filter((f) => f.toLowerCase().endsWith(".pem"));
 
 describe("K4: no private key is ever tracked", () => {
   // git ls-files reads the whole index; 30s is the inherent-cost ceiling.
@@ -145,6 +159,13 @@ describe("K4: no private key is ever tracked", () => {
       .split("\n")
       .filter(Boolean);
     expect(files.length).toBeGreaterThan(100); // proves the listing was read
-    expect(files.filter((f) => f.toLowerCase().endsWith(".pem"))).toEqual([]);
+    expect(pemFiles(files)).toEqual([]);
+  });
+
+  it("the pem filter itself flags a tracked key, at any depth and case", () => {
+    expect(pemFiles(["a.txt", "hal9000.pem", "x/y/KEY.PEM"])).toEqual([
+      "hal9000.pem",
+      "x/y/KEY.PEM",
+    ]);
   });
 });

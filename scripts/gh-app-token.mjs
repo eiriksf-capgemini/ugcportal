@@ -13,7 +13,7 @@
 //   GH_APP_INSTALLATION_ID    installation id on eiriksf-capgemini
 //   GH_APP_PRIVATE_KEY_PATH   PEM file, default ./hal9000.pem (gitignored)
 //
-// Tokens expire after 1 hour. Re-run to get a fresh one.
+// GitHub sets the token's expiry (see the `# expires` line under --env). Re-run to get a fresh one.
 import { createSign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -50,7 +50,7 @@ export function buildEnvLines(token, expiresAt) {
   ];
 }
 
-// Returns { code, stdout, stderr }; never touches process state, so tests can
+// Returns { code, stdout, stderr }; does not write to process.stdout, process.stderr or call process.exit, so tests can
 // drive it with a stubbed fetch.
 export async function main({
   fetch: fetchFn = fetch,
