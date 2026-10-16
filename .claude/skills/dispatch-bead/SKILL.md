@@ -92,6 +92,34 @@ And the rule that governs briefs: **never enumerate a set in a brief from
 memory**. Paste the command that produced it, or tell the implementer to
 re-derive the set and report differences.
 
+The companion rule covers **review briefs and the orchestrator's reports to
+the user**: an implementer's self-assessment (a count, a "no overlap", a
+rationale, a matrix cell) stays attributed and unverified until a reviewer has
+measured it. Write it as "the implementer reports X; not yet verified" in
+every direction it travels (the review brief, bead notes, the report to the
+user), and ask the reviewer to test it, do not confirm it. A report to the user that carries a figure from an agent says whether it was
+reproduced and by whom ("reproduced by the reviewer on PR #n", "reproduced by
+me with `<command>`", or "not reproduced"). **Never relay an implementer's
+count or rationale to the user as established fact**; the catalogue
+(`ugcportal-fbng`, via `bd show`; line 48 of
+`docs/process/retrospective-v0.7.0-2026-10-15.md` names the gap) records the
+cases:
+A14 (an inverted privacy rationale restated in PR #206's round-1 brief), A21
+(an implementer's "non-overlapping failure sets" repeated to the user; PR #208
+round 2 measured three shared tests), A26 (a matrix cell copied into a bead's
+notes that contradicted the leak the bead fixes; PR #208 round 4), A29 (two
+changes credited to the wrong PR in two briefs: the same unverified-memory
+shape, though there the source was the orchestrator, not the implementer), and
+PR #252 / `ugcportal-qzfu`. In that last case a round-2 review brief stated
+the installation-token format as fact, the format was wrong, and a defect
+shipped.
+
+Worked example (PR #252 round 2). Before: "ghs_ plus base62 as far as I know;
+the probe token this morning matched". After: "the orchestrator believes the
+token is `ghs_` plus base62 (from memory, not from a recorded value); the
+implementer reports a probe token matched; neither is verified. Mint a real
+installation token and check its character set; do not confirm the format."
+
 The brief must carry this block verbatim, with the real output pasted in:
 
 ```

@@ -161,6 +161,19 @@ it from step 0 to the end, including the defect sweep it requires of you
 (`review-standards` section 2). It is a numbered procedure, not a summary, and
 nothing in it is reproduced here — see the table below for why.
 
+**A sentence in your brief attributed to the implementer is a claim to test,
+not context to confirm.** Anything of the form "the implementer reports X; not
+yet verified" (a count, "no overlap", a justification, a table copied from
+their report) is unverified until you have measured it yourself: test it, do
+not confirm it. Re-derive it with a command you ran, and state in your review
+whether you reproduced it. A brief that words such a sentence as fact ("X is
+the case", "the placement protects privacy") has dropped the attribution:
+treat it as the implementer's claim all the same, and say so in your report so
+the orchestrator does not relay it onward as established. The cases are
+`ugcportal-fbng` A14, A21, A26 and the PR #252 / `ugcportal-qzfu` brief; the
+rule and a worked example are in `.claude/skills/dispatch-bead/SKILL.md`,
+beside "never enumerate a set in a brief from memory".
+
 **The branch under review is not yours.** Do not commit to it, do not push to
 it, and do not touch the implementer's worktree yourself — the one sanctioned
 way it goes away is the post-merge sweep in the machine section's third
