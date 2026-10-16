@@ -238,7 +238,7 @@ else
 fi
 ```
 
-**Why the list is intersected with the PR's own files, and not taken from `compare` alone.** `compare/A...B` is GitHub's **three-dot** range: it diffs from `merge-base(A, B)`. `$prev_head` is an ancestor of the new head, so the raw list is everything new in the head — *including every commit `origin/main` contributed when the branch was brought up to date between rounds*, which is routine practice on this repo rather than an edge case. Unintersected on **this** PR at round 3 (`prev_head=0b93b75`, head `e84085d`) it returns **31** files — `src/lib/commercial-link.ts`, `src/components/home/hero.tsx`, `src/app/api/media/[id]/disclosure/route.ts` and 28 more — for a PR whose own diff is **two** `.md` files; the other 29 arrive through `f6e841c`, `Merge remote-tracking branch 'origin/main'`. Intersected, the same two inputs return exactly those **2**. It still fires on a round that really did push a behaviour change, and on a chain with a `main` merge in the range: on **#214** at round 2 (`prev_head=f800824`, head `11e9513`) the raw compare returns **15** files and the intersection returns **6** — `src/app/api/media/[id]/disclosure/route.ts`, `src/lib/alcohol-commerce.ts`, `src/lib/alcohol-commerce.test.ts`, `src/lib/commercial-link.ts`, `src/lib/commercial-link-label.guardrail.test.ts`, `src/lib/gallery-items.ts` — which is *precisely* the file list of `8398a92`, that round's own fix commit, four of them non-test source. At #214's round 3 it returns **1** of 2, `src/lib/curation-triage-write.ts`, again exactly what `dbfe29e` pushed, with `docs/process/development-process.md` dropped as the merge's. The intersection errs in one direction only: a base-branch commit that touches a file the PR *also* touches stays in the list, so the step fires more often than strictly needed, never less. That direction holds only while `$pr_files` is real, which is why the branch above guards it: with `pr_files` emptied by hand and the 31-file `$pushed` from this PR's round 3, the unguarded `awk` printed **nothing at all** — the one failure that would make the step fire *less*, and silently.
+**Why the list is intersected with the PR's own files, and not taken from `compare` alone.** `compare/A...B` is GitHub's **three-dot** range: it diffs from `merge-base(A, B)`. `$prev_head` is an ancestor of the new head, so the raw list is everything new in the head — *including every commit `origin/main` contributed when the branch was brought up to date between rounds*, which is routine practice on this repo rather than an edge case. The merge step's BEHIND recovery produces exactly this shape on purpose, and says when it is and is not a new round: see "BEHIND recovery" in step 5 (ugcportal-li65). Unintersected on **this** PR at round 3 (`prev_head=0b93b75`, head `e84085d`) it returns **31** files — `src/lib/commercial-link.ts`, `src/components/home/hero.tsx`, `src/app/api/media/[id]/disclosure/route.ts` and 28 more — for a PR whose own diff is **two** `.md` files; the other 29 arrive through `f6e841c`, `Merge remote-tracking branch 'origin/main'`. Intersected, the same two inputs return exactly those **2**. It still fires on a round that really did push a behaviour change, and on a chain with a `main` merge in the range: on **#214** at round 2 (`prev_head=f800824`, head `11e9513`) the raw compare returns **15** files and the intersection returns **6** — `src/app/api/media/[id]/disclosure/route.ts`, `src/lib/alcohol-commerce.ts`, `src/lib/alcohol-commerce.test.ts`, `src/lib/commercial-link.ts`, `src/lib/commercial-link-label.guardrail.test.ts`, `src/lib/gallery-items.ts` — which is *precisely* the file list of `8398a92`, that round's own fix commit, four of them non-test source. At #214's round 3 it returns **1** of 2, `src/lib/curation-triage-write.ts`, again exactly what `dbfe29e` pushed, with `docs/process/development-process.md` dropped as the merge's. The intersection errs in one direction only: a base-branch commit that touches a file the PR *also* touches stays in the list, so the step fires more often than strictly needed, never less. That direction holds only while `$pr_files` is real, which is why the branch above guards it: with `pr_files` emptied by hand and the 31-file `$pushed` from this PR's round 3, the unguarded `awk` printed **nothing at all** — the one failure that would make the step fire *less*, and silently.
 
 **The capture pattern is the part that was measured, because the obvious one is wrong for this repo.** An earlier draft used `capture("head (?<sha>[0-9a-f]{7,40})")` — a bare SHA after a lowercase `head `. Reviewers here also write it in backticks (``head `db1eccfdb…` ``), capitalised (``Head `f800824…` ``) and abbreviated to seven characters. Measured over every round-marker comment in the repo (369 of them across 216 PRs, fetched through the GraphQL `pullRequests.comments` connection and matched on the same first-line anchor step 4b uses):
 
@@ -855,7 +855,45 @@ fi
 
 **On a self-asserted chain — reviewer and PR author are the same account, e.g. a PR opened by the human login rather than by `app/hal9000-agent-bot` (step 4b's bullet above has the evidence) — do not attempt approval and do not treat its absence as a failure.** `gh pr review --approve` is refused outright (`Can not approve your own pull request`) on every such PR; it is a structural property of a same-account PR, the same fact that makes the chain `approx` in step 4b, not a sign anything went wrong this round. Retrying it, or escalating because it failed, accomplishes nothing — skip it and move on.
 
-**The merge does not depend on an approval record.** `main` carries no branch protection (`gh api repos/:owner/:repo/branches/main/protection` → `404 Branch not protected`), so `gh pr merge` does not require an approving review to succeed — proceed to merge whether the approval attempt above ran, succeeded, or was skipped:
+**The merge does not depend on an approval record, but it does depend on the branch being up to date (ugcportal-li65).** Two different GitHub mechanisms govern `main`, and they are separate APIs: classic branch protection and **rulesets**. The classic endpoint, `gh api repos/:owner/:repo/branches/main/protection`, returns `404 Branch not protected` — that is expected and is **not** evidence that `main` is ungoverned. The live check is the rulesets endpoint:
+
+```bash
+gh api repos/:owner/:repo/rulesets --jq '.[] | [.id,.name,.target,.enforcement] | @tsv'
+# measured 2026-10-16:  24754352	main	branch	active
+gh api repos/:owner/:repo/rulesets/24754352 --jq '[.rules[] | select(.type=="required_status_checks") | .parameters.strict_required_status_checks_policy], [.rules[] | select(.type=="pull_request") | .parameters.required_approving_review_count]'
+# measured 2026-10-16:  [true]  and  [0]
+```
+
+So `gh pr merge` does not require an approving review to succeed — ruleset `main` (id 24754352, active, on `~DEFAULT_BRANCH`) requires **0** approving reviews — so proceed to merge whether the approval attempt above ran, succeeded, or was skipped. But the same ruleset sets `strict_required_status_checks_policy: true`, so a PR whose base has moved on is refused. Read `mergeStateStatus` before merging:
+
+```bash
+gh pr view <n> --json mergeStateStatus,mergeable,headRefOid
+```
+
+- `CLEAN`: go on to the merge below.
+- `BEHIND` (the strict policy at work): run the recovery below. Do **not** treat it as mergeable and do not retry `gh pr merge` hoping it passes.
+- `CONFLICTING` / `DIRTY`, or any other value: not mergeable. Stop and report; nothing below applies.
+
+**BEHIND recovery (ugcportal-li65).** In order, no step skipped:
+
+```bash
+reviewed_sha=$(gh pr view <n> --json headRefOid -q .headRefOid)   # the head this run reviewed; write it down before updating
+gh pr update-branch <n>        # or: gh api -X PUT repos/:owner/:repo/pulls/<n>/update-branch
+```
+
+1. **If the update itself conflicts** (the call returns HTTP 422, or the PR then shows `mergeable: CONFLICTING`), **stop for a human.** Do not resolve conflicts in the review run, and do not merge.
+2. The update creates a **new head commit whose CI has not run**. Merging before it is green would merge a tree nobody tested. Re-read CI on the new head with step 3's per-run `statusCheckRollup` command, against the new `headRefOid` — every row `PASS` — and wait if any is `PENDING`. Do not skip, shortcut or reuse the old head's result.
+3. Re-confirm `gh pr view <n> --json mergeStateStatus -q .mergeStateStatus` prints `CLEAN`. (`BEHIND` again means main moved during the wait: repeat from the update.)
+4. **Verify the update changed nothing in the PR's own diff** — empty output required:
+
+```bash
+diff <(git diff origin/main...<reviewed-sha>) <(git diff origin/main...<new-sha>)
+```
+
+   (`git fetch origin main` and fetch the PR head first.) Empty means the update was zero-diff: **it does not start a new review round**, the verdict already reached stands, and you merge without posting a new round marker. Non-empty means main's changes interacted with the PR's diff — a real change, so this run is not the merging round: treat the new head as pushed code and review it as the next round.
+5. Only then `gh pr merge`, below.
+
+Why the update commit is not a round, and how it stays out of 4.2 and 4.4: it is exactly the "main merged between rounds" case [step 4.2](#42-after-a-behaviour-changing-fix-re-grep-the-whole-file) already handles — its trigger intersects the pushed files with the PR's own files, so the commits `origin/main` contributed drop out and a zero-diff update contributes no changed file. 4.4's trigger keys on sentences the round itself writes rather than on commits, so an update commit supplies none. The only new head a later round sees is the update commit; its `<headRefOid>` goes in the marker as usual. Worked case: PR #254 was refused `BEHIND` after `166c345` (`chore(release): v0.8.0`, #253) landed on `main`; `gh pr update-branch` produced `a2302de` over the reviewed `3e74045`, the three-dot diffs were identical, and it merged as `bf616bd`.
 
 ```bash
 gh repo view --json squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed   # pick an allowed method, prefer squash
