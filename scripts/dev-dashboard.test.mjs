@@ -1211,7 +1211,7 @@ describe("human-wait rules in Needs you (ugcportal-a2fl)", () => {
     expect(items(attention, "Merge needed")).toHaveLength(0);
     expect(attention.map(attentionText)).toContain("Source down: prs is unavailable: gh pr list: gh not found on PATH");
     expect(html).not.toContain("Nothing is waiting on you");
-    expect(html).toContain("PRs unavailable (gh down), not and 0 beads checked for human-wait labels");
+    expect(html).toContain("PRs unavailable (gh down); 0 beads checked for human-wait labels (beads from the in_progress, ready and blocked lists)");
     expect(html).not.toMatch(/\b0 PRs\b/);
   });
 
@@ -1220,6 +1220,21 @@ describe("human-wait rules in Needs you (ugcportal-a2fl)", () => {
     const a = buildAttention({ prefix: PREFIX, joined, currentItems: [], sources: allSourcesOk({ prs: down("gh refused") }), now: NOW, prs: [labelled(275, "fix/ugcportal-x-y")] });
     expect(items(a, "Merge needed")).toHaveLength(0);
     expect(items(a, "Source down").map((x) => x.text)).toEqual(["prs is unavailable: gh refused"]);
+  });
+
+  it.each([
+    ["all three bead lists down", { inProgress: down("bd refused"), ready: down("bd refused"), blocked: down("bd refused") }],
+    ["only ready down", { ready: down("bd refused") }],
+  ])("F1: with bd down (%s) the page says beads are unavailable, never 0 beads, and not that nothing is waiting", (_name, overrides) => {
+    const { html } = quietPage({ prs: ok([labelled(276, "fix/ugcportal-x-y")]), ...overrides });
+    expect(html).toContain("1 PR checked for human-wait labels; beads unavailable (bd down)");
+    expect(html).not.toMatch(/\b0 beads\b/);
+    expect(html).not.toContain("Nothing is waiting on you");
+  });
+
+  it("both gh and bd down: nothing is claimed as checked", () => {
+    const { html } = quietPage({ prs: down("x"), ready: down("x") });
+    expect(html).toContain("PRs unavailable (gh down); beads unavailable (bd down); nothing checked for human-wait labels");
   });
 
   it("K4: with exactly the three labelled PRs and four labelled beads the sentence is absent, the count is non-zero and the checked line prints the counts", () => {
@@ -1233,7 +1248,7 @@ describe("human-wait rules in Needs you (ugcportal-a2fl)", () => {
     expect(items(attention, "Waiting on you")).toHaveLength(4);
     expect(attention.length).toBeGreaterThanOrEqual(7);
     expect(counts(html).headings[0]).toBe(String(attention.length));
-    expect(html).toContain("3 PRs and 4 beads checked for human-wait labels");
+    expect(html).toContain("3 PRs and 4 beads checked for human-wait labels (beads from the in_progress, ready and blocked lists)");
     // Source summary does not hide the zero case either: nothing labelled, 0 shown, sentence shown.
     const quiet = quietPage({ prs: ok([]) });
     expect(quiet.html).toContain("Nothing is waiting on you");

@@ -271,7 +271,8 @@ export function humanWaitLabel(x, wanted) {
 /**
  * Open (not closed) beads from the in-progress, ready and blocked lists,
  * each once. These are the beads the dashboard can see; a bead outside all
- * three (deferred, say) is not checked, which the printed count makes visible.
+ * three (deferred, say) is not fetched and so not checked; the printed
+ * sentence names the lists it covers (humanWaitChecked).
  * @param {any[][]} lists
  */
 export function uniqueOpenBeads(...lists) {
@@ -287,9 +288,11 @@ export function uniqueOpenBeads(...lists) {
  * @param {{ prs: any[], beads: any[], prsUp: boolean, beadsUp: boolean }} a
  */
 export function humanWaitChecked({ prs, beads, prsUp, beadsUp }) {
-  const p = prsUp ? plural(prs.length, "PR") : "PRs unavailable (gh down), not";
-  const b = beadsUp ? plural(beads.length, "bead") : "beads unavailable (bd down), not";
-  return `${p} and ${b} checked for human-wait labels`;
+  const where = "beads from the in_progress, ready and blocked lists";
+  if (prsUp && beadsUp) return `${plural(prs.length, "PR")} and ${plural(beads.length, "bead")} checked for human-wait labels (${where})`;
+  if (prsUp) return `${plural(prs.length, "PR")} checked for human-wait labels; beads unavailable (bd down)`;
+  if (beadsUp) return `PRs unavailable (gh down); ${plural(beads.length, "bead")} checked for human-wait labels (${where})`;
+  return "PRs unavailable (gh down); beads unavailable (bd down); nothing checked for human-wait labels";
 }
 
 /**
