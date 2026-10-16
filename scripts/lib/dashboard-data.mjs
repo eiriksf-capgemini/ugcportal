@@ -283,7 +283,7 @@ export function uniqueOpenBeads(...lists) {
 /**
  * The sentence that makes a zero visible: how many PRs and beads the
  * human-wait rules actually looked at. A source that is down is named as
- * unavailable, never counted as 0.
+ * unavailable instead of counted as 0 (dev-dashboard.test.mjs, K3 test).
  * @param {{ prs: any[], beads: any[], prsUp: boolean, beadsUp: boolean }} a
  */
 export function humanWaitChecked({ prs, beads, prsUp, beadsUp }) {

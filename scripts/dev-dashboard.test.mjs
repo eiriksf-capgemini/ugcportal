@@ -1131,7 +1131,7 @@ describe("human-wait rules in Needs you (ugcportal-a2fl)", () => {
   });
   const queued = (id, labels, extra = {}) => ({ id, title: `Title of ${id}`, priority: 2, status: "open", updated_at: "2026-10-12T12:00:00Z", labels, metadata: {}, ...extra });
   const items = (a, label) => a.filter((x) => x.label === label);
-  /** A page with every list source empty except the ones given, so Needs you is only what the fixture puts there. */
+  /** A page with every list source empty except the ones given, so the fixture's own rows are most of what Needs you can say. */
   const quietPage = (overrides) =>
     page(
       {
