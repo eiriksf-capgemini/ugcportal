@@ -438,13 +438,13 @@ So this step is something the invoking orchestrator does after this run is over,
 
    This matters more here than anywhere else in this file, because nothing downstream ever cross-checks `tokens_qa` against another source. `cut-release`'s Cost Summary reads these fields and nothing else, so a write that silently did not land does not show up as an error — it shows up as a smaller, confident number in a release note.
 
-5. **Record the round's findings by family and severity (ugcportal-2jvh).** The **orchestrator** writes `findings_r<N>` from the reviewer's report, the same way and at the same time it writes `tokens_qa_r<N>` — the reviewer run cannot write its own metadata, so this key is never written by the run that produced the findings. The report must therefore list every finding with the family (step 4.1) and the severity the reviewer assigned it (step 6 asks for both). Value format, one string per round:
+5. **Record the round's findings by family and severity (ugcportal-2jvh).** The **orchestrator** writes `findings_r<N>` from the reviewer's report, the same way and at the same time it writes `tokens_qa_r<N>` — the reviewer run cannot write its own metadata, so the run that produced the findings does not write this key. The report must therefore list every finding with the family (step 4.1) and the severity the reviewer assigned it (step 6 asks for both). Value format, one string per round:
    ```
    findings_r<N>="f1:<n> f2:<n> f3:<n> f4:<n> med:<n> low:<n>"
    ```
    - `f1`-`f4`: how many findings the reviewer put under each of the four recurring families of step 4.1. A finding the reviewer names under two families counts in **both**, so `f1+f2+f3+f4` can exceed the number of findings; `med` and `low` count each finding once.
-   - `med`: findings of medium severity or above. `low`: findings the reviewer called low. A finding whose severity the reviewer did not state is counted under `low` only if the reviewer said low; otherwise append ` unstated:<n>` (the field is omitted when `n` is 0) rather than guessing.
-   - A clean round is `f1:0 f2:0 f3:0 f4:0 med:0 low:0`. A round that blocked on findings is never recorded as all zeros: `scripts/release-cost-report.mjs` reports that combination as inconsistent and keeps the prose figure instead.
+   - `med`: findings of medium severity or above. `low`: findings the reviewer called low. A finding whose severity the reviewer did not state is counted under `low` only if the reviewer said low; otherwise append ` unstated:<n>` (the field is omitted when `n` is 0) and do not guess a severity.
+   - A clean round is `f1:0 f2:0 f3:0 f4:0 med:0 low:0`. Do not record a round that blocked on findings as all zeros: when the verdict prose states findings and the key is all zeros, `scripts/release-cost-report.mjs` reports the round as inconsistent and keeps the prose figure (pinned by the guardrail test in `scripts/release-cost-report.test.mjs`).
    - Example: a round with two family-1 lows and one family-3 medium is `findings_r2="f1:2 f2:0 f3:1 f4:0 med:1 low:2"`.
    ```bash
    bd update <bead-id> --set-metadata findings_r<N>="f1:<n> f2:<n> f3:<n> f4:<n> med:<n> low:<n>"
