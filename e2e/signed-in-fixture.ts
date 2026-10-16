@@ -29,7 +29,9 @@ import { loadDevEnvFiles } from "../scripts/lib/env-files.mjs";
 loadDevEnvFiles({ cwd: process.cwd() });
 
 export const signedInTest = base.extend<{ signedIn: { userId: string } }>({
-  signedIn: async ({ context, baseURL }, use) => {
+  // The second argument is Playwright's `use`, named `provide` here only because
+  // eslint's React rules-of-hooks reads a function called `use` as a hook.
+  signedIn: async ({ context, baseURL }, provide) => {
     // Refuse before even opening a connection; seedSession checks again
     // before it writes, and that second check is the one the vitest guard
     // (scripts/lib/e2e-session-seeding.test.mjs) proves.
@@ -45,7 +47,7 @@ export const signedInTest = base.extend<{ signedIn: { userId: string } }>({
       const seeded = await seedSession({ db, env: process.env, baseURL });
       try {
         await context.addCookies([seeded.cookie]);
-        await use({ userId: seeded.userId });
+        await provide({ userId: seeded.userId });
       } finally {
         await seeded.cleanup();
       }

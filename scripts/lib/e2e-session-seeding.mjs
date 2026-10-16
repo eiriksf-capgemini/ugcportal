@@ -103,7 +103,7 @@ export function assertSessionSeedingPermitted({ env, baseURL }) {
  * `assertSessionSeedingPermitted` allows it.
  *
  * @param {{
- *   db: { execute: (stmt: { sql: string, args: unknown[] }) => Promise<unknown> },
+ *   db: { execute: (stmt: { sql: string, args: Array<string | number | null> }) => Promise<unknown> },
  *   env: Record<string, string | undefined>,
  *   baseURL: string | undefined,
  *   name?: string,
