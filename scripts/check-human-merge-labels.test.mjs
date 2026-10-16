@@ -10,10 +10,11 @@ import {
   LABEL,
   PR_LIST_LIMIT,
   VERDICT_MARKER,
-  classifyPrs,
+  classifyPrs as classifyRaw,
   exitCode,
   formatReport,
   isSensitivePath,
+  normaliseLogin,
   reviewedHead,
   run,
 } from "./check-human-merge-labels.mjs";
@@ -21,7 +22,10 @@ import {
 const HEAD = "a".repeat(40);
 const OTHER_HEAD = "b".repeat(40);
 const REVIEWER = { login: "eiriksf-capgemini" };
-const AUTHOR = { login: "hal9000-agent-bot" };
+// gh's real login shapes: the PR author of a bot PR is `app/<slug>`, the same bot's comment author is `<slug>`
+const AUTHOR = { login: "app/hal9000-agent-bot" };
+const BOT = { login: "hal9000-agent-bot" };
+const classifyPrs = (prs, reviewer = REVIEWER.login) => classifyRaw(prs, reviewer);
 const measured = (sha) => `<!-- ugcportal-measured: deltas=0 absences=0 at=${sha} baseline=n/a -->`;
 const ROUND = "<!-- ugcportal-review-round: 1 -->";
 const clean = { author: REVIEWER, body: `${ROUND}\n${measured(HEAD)}\n${VERDICT_MARKER}\nReviewed clean; a human must merge` };
@@ -115,9 +119,9 @@ describe("round marker forms", () => {
   });
 });
 
-describe("round comment author (R3-5)", () => {
-  it("a round comment written by the PR author is not a round comment: a labelled PR with only that comment is C", () => {
-    const selfStamped = { author: AUTHOR, body: clean.body };
+describe("round comment author (R3-5, M-R4-1)", () => {
+  it("a round comment written by the bot that opened the PR is not a round comment: a labelled PR with only that comment is C", () => {
+    const selfStamped = { author: BOT, body: clean.body };
     const r = classifyPrs([pr(30, label, [selfStamped])]);
     expect(r.roundReviewed).toBe(0);
     expect(r.staleLabel).toEqual([30]);
@@ -125,22 +129,70 @@ describe("round comment author (R3-5)", () => {
   });
 
   it("an unlabelled PR whose only verdict is self-stamped is not listed as A", () => {
-    const r = classifyPrs([pr(31, [], [{ author: AUTHOR, body: clean.body }])]);
+    const r = classifyPrs([pr(31, [], [{ author: BOT, body: clean.body }])]);
     expect(r.unlabelledClean).toEqual([]);
   });
 
   it("a round comment with no readable author is not a round comment (fail closed)", () => {
     const r = classifyPrs([pr(32, label, [{ body: clean.body }])]);
     expect(r.staleLabel).toEqual([32]);
+    // a PR with no author at all is still read: the PR author is not an input
     const noPrAuthor = { ...pr(33, label, [clean]), author: undefined };
-    expect(classifyPrs([noPrAuthor]).staleLabel).toEqual([33]);
+    expect(classifyPrs([noPrAuthor]).staleLabel).toEqual([]);
   });
 
   it("the latest round comment by a reviewer wins over a later self-stamped one", () => {
-    const r = classifyPrs([pr(34, label, [clean, { author: AUTHOR, body: blocked.body }])]);
+    const r = classifyPrs([pr(34, label, [clean, { author: BOT, body: blocked.body }])]);
     expect(r.staleLabel).toEqual([]);
     expect(r.roundReviewed).toBe(1);
     expect(r.clean).toBe(1);
+  });
+});
+
+describe("reviewer identity, not PR author (M-R4-1)", () => {
+  const humanPr = (number, labels, comments, files = sens) => ({ ...pr(number, labels, comments, files), author: { login: REVIEWER.login } });
+
+  it("a human-authored PR with a clean labelled round reads clean, not C", () => {
+    const r = classifyPrs([humanPr(50, label, [clean])]);
+    expect(r.roundReviewed).toBe(1);
+    expect(r.clean).toBe(1);
+    expect(r.staleLabel).toEqual([]);
+    expect(r.unlabelledClean).toEqual([]);
+    expect(r.staleHead).toEqual([]);
+  });
+
+  it("a human-authored sensitive PR whose reviewer skipped the step-2 paragraph reads B", () => {
+    const r = classifyPrs([humanPr(51, [], [blocked])]);
+    expect(r.roundReviewed).toBe(1);
+    expect(r.sensitiveNoLabelNoVerdict).toEqual([51]);
+  });
+
+  it("a human-authored PR with a verdict and no label is A", () => {
+    expect(classifyPrs([humanPr(52, [], [clean])]).unlabelledClean).toEqual([52]);
+  });
+
+  it("a bot-authored PR whose only round comment was written by the bot itself is not counted", () => {
+    const r = classifyPrs([pr(53, [], [{ author: BOT, body: clean.body }], sens)]);
+    expect(r.roundReviewed).toBe(0);
+    expect(r.unlabelledClean).toEqual([]);
+    expect(r.sensitiveNoLabelNoVerdict).toEqual([]);
+  });
+
+  it("the reviewer login is the injected one, not a constant", () => {
+    const other = { author: { login: "someone-else" }, body: clean.body };
+    expect(classifyPrs([pr(54, [], [other])], "someone-else").unlabelledClean).toEqual([54]);
+    expect(classifyPrs([pr(55, [], [other])], REVIEWER.login).roundReviewed).toBe(0);
+    expect(classifyPrs([pr(56, [], [clean])], "someone-else").roundReviewed).toBe(0);
+  });
+
+  it("an app/ prefix and letter case do not stop a login matching", () => {
+    expect(normaliseLogin("app/dependabot")).toBe("dependabot");
+    expect(classifyPrs([pr(57, [], [{ author: BOT, body: clean.body }])], "app/hal9000-agent-bot").unlabelledClean).toEqual([57]);
+    expect(classifyPrs([pr(58, [], [clean])], "EiriksF-Capgemini").unlabelledClean).toEqual([58]);
+  });
+
+  it("no reviewer login reads nothing as round-reviewed (fail closed)", () => {
+    expect(classifyRaw([pr(59, [], [clean])], undefined).roundReviewed).toBe(0);
   });
 });
 
@@ -231,7 +283,7 @@ describe("exitCode / run", () => {
   const io = (prs) => {
     const logs = [];
     const warns = [];
-    return { logs, warns, args: { listPrs: () => prs, log: (s) => logs.push(s), warn: (s) => warns.push(s) } };
+    return { logs, warns, args: { listPrs: () => prs, reviewer: () => REVIEWER.login, log: (s) => logs.push(s), warn: (s) => warns.push(s) } };
   };
 
   it("exits 0 when nothing is listed, and still prints the counts", () => {
@@ -245,6 +297,13 @@ describe("exitCode / run", () => {
     expect(run(io([pr(1, [], [clean])]).args)).toBe(1);
     expect(run(io([pr(2, [], [blocked], sens)]).args)).toBe(1);
     expect(run(io([pr(3, label, [blocked])]).args)).toBe(1);
+  });
+
+  it("exits 2 when the reviewer login cannot be resolved", () => {
+    const t = io([pr(1, [], [clean])]);
+    expect(run({ ...t.args, reviewer: () => "" })).toBe(2);
+    expect(run({ ...t.args, reviewer: () => { throw new Error("auth"); } })).toBe(2);
+    expect(t.warns.join("\n")).toContain("no reviewer login");
   });
 
   it("exits 2 and warns when the PR list hits its limit, even with nothing listed", () => {

@@ -11,10 +11,15 @@
  * `<!-- ugcportal-review-round: N -->` (or `N approx`); its LATEST such
  * comment is the PR's current verdict. A line is matched only when it is
  * exactly the marker, so a comment that quotes a marker inside prose is not
- * a verdict (L1). A round comment counts only when its author differs from
- * the PR's author (the same rule as step 4b's counter: the PR author cannot
- * stamp its own review), and both logins are known; a comment with no
- * readable author is not a round comment (R3-5).
+ * a verdict (L1). A round comment counts only when it was written by the
+ * reviewing account (`gh api user`, compared with any `app/` prefix removed
+ * and case-insensitively, since gh reports a bot as `app/<slug>` on a PR but
+ * `<slug>` on its comments). That is step 4b's reviewer-identity rule, not a
+ * rule about the PR's author: a PR the reviewer opened itself (a human-authored
+ * PR, step 4b's `approx` chain) still has its round comments counted, and a
+ * comment by the bot that opened the PR is not a review. A comment with no
+ * readable author, or no readable reviewer login, is not a round comment
+ * (fail closed).
  *
  * Reach: only ISSUE comments are read (`gh pr list --json comments`), not
  * review bodies. That matches where the skill writes the markers: step 5
@@ -46,7 +51,8 @@
  *      the next round removes or re-applies the label.
  *
  * Usage:  node scripts/check-human-merge-labels.mjs
- * Exit:   0 nothing listed; 1 any of A/B/C/D listed; 2 the data was truncated
+ * Exit:   0 nothing listed; 1 any of A/B/C/D listed; 2 the reviewer login could
+ *         not be resolved, or the data was truncated
  *         (PR list at its limit, or a PR whose comments or files hit gh's
  *         100-item window), so a zero could not be trusted.
  *
@@ -109,16 +115,22 @@ function sameHead(head, reviewed) {
   return typeof head === "string" && head.length > 0 && reviewed !== null && head.startsWith(reviewed);
 }
 
+/** gh reports a bot as `app/<slug>` on a PR and `<slug>` on its comments. @param {unknown} login */
+export function normaliseLogin(login) {
+  return typeof login === "string" ? login.replace(/^app\//i, "").toLowerCase() : "";
+}
+
 /**
  * @param {Array<{body?:string, author?:{login?:string}}>} comments chronological
- * @param {string|undefined} prAuthor
- * @returns {{body:string}|null} latest comment, by someone other than the PR author, whose first line is a round marker
+ * @param {string|undefined} reviewer the reviewing account's login (`gh api user`)
+ * @returns {{body:string}|null} latest comment, written by the reviewer, whose first line is a round marker
  */
-function latestRoundComment(comments, prAuthor) {
+function latestRoundComment(comments, reviewer) {
   let latest = null;
+  const me = normaliseLogin(reviewer);
   for (const c of comments) {
-    const who = c.author?.login;
-    if (typeof who !== "string" || typeof prAuthor !== "string" || who === prAuthor) continue;
+    const who = normaliseLogin(c.author?.login);
+    if (me === "" || who === "" || who !== me) continue;
     if (typeof c.body === "string" && ROUND_MARKER_RE.test(lines(c.body)[0])) latest = c;
   }
   return latest;
@@ -129,7 +141,7 @@ function latestRoundComment(comments, prAuthor) {
  *
  * @param {Array<{number:number, author?:{login?:string}, headRefOid?:string, labels?:Array<{name:string}>, comments?:Array<{body?:string, author?:{login?:string}}>, files?:Array<{path:string}>}>} prs
  */
-export function classifyPrs(prs) {
+export function classifyPrs(prs, reviewer) {
   let roundReviewed = 0;
   let clean = 0;
   let sensitiveReviewed = 0;
@@ -143,7 +155,7 @@ export function classifyPrs(prs) {
     const comments = pr.comments ?? [];
     if (comments.length >= COMMENT_WINDOW) truncatedComments.push(pr.number);
     if ((pr.files ?? []).length >= FILE_WINDOW) truncatedFiles.push(pr.number);
-    const latest = latestRoundComment(comments, pr.author?.login);
+    const latest = latestRoundComment(comments, reviewer);
     const hasLabel = (pr.labels ?? []).some((l) => l.name === LABEL);
     if (!latest) {
       if (hasLabel) staleLabel.push(pr.number);
@@ -202,6 +214,10 @@ export function exitCode(r, listTruncated) {
   return listed > 0 ? 1 : 0;
 }
 
+function currentLogin() {
+  return execFileSync("gh", ["api", "user", "--jq", ".login"], { encoding: "utf8" }).trim();
+}
+
 function listOpenPrs() {
   const out = execFileSync(
     "gh",
@@ -212,14 +228,24 @@ function listOpenPrs() {
 }
 
 /**
- * @param {{listPrs?:()=>any[], log?:(s:string)=>void, warn?:(s:string)=>void}} [io]
+ * @param {{listPrs?:()=>any[], reviewer?:()=>string, log?:(s:string)=>void, warn?:(s:string)=>void}} [io]
  * @returns {number} the exit code
  */
-export function run({ listPrs = listOpenPrs, log = console.log, warn = console.warn } = {}) {
+export function run({ listPrs = listOpenPrs, reviewer = currentLogin, log = console.log, warn = console.warn } = {}) {
+  let me = "";
+  try {
+    me = reviewer();
+  } catch (e) {
+    warn(`cannot resolve reviewer identity (gh api user): ${e instanceof Error ? e.message : e}`);
+  }
+  if (normaliseLogin(me) === "") {
+    warn("no reviewer login, so no comment can be read as a round comment: a zero would mean nothing");
+    return 2;
+  }
   const prs = listPrs();
   const listTruncated = prs.length >= PR_LIST_LIMIT;
   if (listTruncated) warn(`warning: ${prs.length} open PRs hit the --limit ${PR_LIST_LIMIT}; the list may be truncated`);
-  const report = classifyPrs(prs);
+  const report = classifyPrs(prs, me);
   log(formatReport(report));
   return exitCode(report, listTruncated);
 }
