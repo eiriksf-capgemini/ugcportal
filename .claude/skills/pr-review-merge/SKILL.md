@@ -966,6 +966,8 @@ cat > "$scratch/meta.json" <<'BD_EOF'
 {"cc_type":"fix","cc_scope":"<fill: scope of the PR>","severity":"low","model":"sonnet","model_effort":"medium","model_why":"<fill: one line, no double quote or backslash: why this tier fits the fix>"}
 BD_EOF
 
+grep -l '<fill' "$scratch"/* && { echo "unfilled placeholder" >&2; exit 1; }
+
 bd create "$(cat "$scratch/title.txt")" --type=bug --priority=3 --labels=<fill: release label the orchestrator names> \
   --body-file "$scratch/desc.md" \
   --acceptance="$(cat "$scratch/acc.md")" \
@@ -974,14 +976,14 @@ bd create "$(cat "$scratch/title.txt")" --type=bug --priority=3 --labels=<fill: 
   --metadata @"$scratch/meta.json"
 ```
 
-Every placeholder above is written `<fill: ...>` on purpose: the dispatch gate's `no-placeholder` check recognises `<fill...>`, `TODO` and `TBD` but not a bare `<the fix>`, so a placeholder left in by a copy-paste miss fails the gate instead of filing a bead whose criteria read `<the fix>`. Do not shorten it back.
+Every placeholder above is written `<fill: ...>` on purpose: the dispatch gate's `no-placeholder` check recognises `<fill...>`, `TODO` and `TBD` but not a bare `<the fix>`, so a placeholder left in the description or acceptance by a copy-paste miss fails the gate instead of filing a bead whose criteria read `<the fix>`. The gate reads only those two fields, so the `grep -l '<fill'` line before `bd create` covers every file under `$scratch`, the title, notes and `model_why` in the metadata included, and stops the block with exit 1 before a bead exists. Do not shorten the placeholder back.
 
-The title goes through a file rather than `bd create "$(cat <<'BD_EOF' ... BD_EOF )"`, and the metadata through `@file` rather than a single-quoted `--metadata='{...}'`. On macOS `/bin/bash` 3.2.57 the inline `$(cat <<'BD_EOF' ... )` form is parsed before the heredoc is read, so an unbalanced `)` in the finding ends the `$(` early and any backtick or `$(...)` after it executes (reproduced with a title containing `)` and `$(touch ...)`). A single-quoted JSON string ends at the first apostrophe, so `it's` in `model_why` ends the quote and a following `$(...)` runs. A quoted heredoc written to a file is read verbatim by both bash and zsh, and `"$(cat "$scratch/title.txt")"` does not re-scan its output.
+The title goes through a file rather than `bd create "$(cat <<'BD_EOF' ... BD_EOF )"`, and the metadata through `@file` rather than a single-quoted `--metadata='{...}'`. On macOS `/bin/bash` 3.2.57 the inline `$(cat <<'BD_EOF' ... )` form is parsed before the heredoc is read, so an unbalanced `)` in the finding ends the `$(` early and any backtick or `$(...)` after it executes (reproduced with a title containing `)` and `$(touch ...)`). A single-quoted JSON string ends at the first apostrophe, so `it's` in `model_why` ends the quote and a following `$(...)` runs. A quoted heredoc written to a file is read verbatim by both bash and zsh, and `"$(cat "$scratch/title.txt")"` does not re-scan its output. The five step-5 comment templates above still use the inline form; ugcportal-73bz moves them to the file form.
 
 
 The premise is the reviewer's, and it has to be verified rather than copied from the finding: re-run the check that showed the defect against the PR head (the defect may live only on the branch) and name `origin/main`'s current HEAD (`git rev-parse origin/main`), because the dispatch gate's `premise-fresh` check fails a premise that names any other commit. If the check no longer shows the defect, there is nothing to defer: say so in the round comment instead of filing.
 
-`<scope of the PR>` is the PR title's scope. `<release label the orchestrator names>` is the label the orchestrator's brief gives (for defects in v0.8.1 deliverables, `v0.8.1`); the new bead carries it so that release's sweep picks it up. If the brief names none, drop `--labels`.
+`<fill: scope of the PR>` is the PR title's scope. `<fill: release label the orchestrator names>` is the label the orchestrator's brief gives (for defects in v0.8.1 deliverables, `v0.8.1`); the new bead carries it so that release's sweep picks it up. If the brief names none, drop `--labels`.
 
 If any of that text could itself contain a line reading exactly `BD_EOF`, change the delimiter rather than trimming the text. This is the same rule, for the same reason, as `cut-release` step 7a.
 
