@@ -4,7 +4,7 @@
 // Usage: node scripts/check-compose-images.mjs [compose-file] [--local-image <name>]...
 //
 // `${VAR:-default}` and `${VAR-default}` are expanded to the default before
-// classification (the operator environment is never read). For every service
+// classification (the default text in the compose file; process.env is not consulted). For every service
 // it then classifies the image as
 //   registry              -> resolved with an anonymous token and a manifest HEAD
 //   local (build)         -> the service has a `build:` key; no registry has it
