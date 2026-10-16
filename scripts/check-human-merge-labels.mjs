@@ -7,7 +7,7 @@
  *
  * Usage:  node scripts/check-human-merge-labels.mjs     (exit 1 if any unlabelled)
  *
- * It always prints its match counts first (PRs examined, PRs with a verdict
+ * It prints its match counts first (PRs examined, PRs with a verdict
  * comment, unlabelled among those), per review-standards section 6: a bare
  * "no PRs" from a filter that matched nothing reads as clean.
  */
