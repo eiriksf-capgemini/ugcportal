@@ -175,8 +175,12 @@ eval "$(GH_APP_PRIVATE_KEY_PATH=/Users/eiriksf/code/ugcportal/hal9000.pem node s
 
 The `--env` exports set `GH_TOKEN`/`GITHUB_TOKEN` and the
 `GIT_AUTHOR_*`/`GIT_COMMITTER_*` of the bot, so commits made in that shell are
-authored and committed by the bot. Make the commits in a shell that has run the
-eval. The repo remote is SSH and does not carry the token, so push over HTTPS.
+authored and committed by the bot. **Shell state does not persist between Bash
+calls**, so the `eval` must START every Bash call that commits, pushes or runs
+`gh pr create`: in a call without it `GH_TOKEN` is empty, git falls back to the
+human identity, and `gh pr create` silently opens a human-authored PR (an
+`approx` chain, with no error). One call is the eval plus the commit, another the
+eval plus the push, another the eval plus `gh pr create`. The repo remote is SSH and does not carry the token, so push over HTTPS.
 Push with the pre-push suite skipped, since CI re-verifies every push and is
 authoritative; the worker cap above still governs everything you run locally
 (`bd memories agent-pushes-skip-the-pre-push-suite`):
@@ -187,9 +191,12 @@ UGCPORTAL_PREPUSH=skip git -c credential.helper= \
   push https://github.com/eiriksf-capgemini/ugcportal.git HEAD:refs/heads/<branch>
 ```
 
-Then `gh pr create` in the same shell, with `GH_TOKEN` still set, so the PR
-author is the bot (`gh pr view <n> --json author -q .author.login` reads
-`app/hal9000-agent-bot`). Three things to know: the token lasts one hour, so
+Then `gh pr create`, in a call that starts with the same `eval`, so the PR
+author is the bot. Right after it, assert the author, again after the same
+`eval` or with no token set (either works):
+`gh pr view <n> --json author -q .author.login` must print
+`app/hal9000-agent-bot`; anything else is a failed step, so fix it before
+reporting the PR. Three things to know: the token lasts one hour, so
 re-run the `eval` before a later push; `gh api user` fails under it
 (`Resource not accessible by integration`), which is expected, so do not use
 it to check who you are; and never use this token to review, approve or merge,

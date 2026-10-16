@@ -86,13 +86,16 @@ Mandatory setup, because each item below has burned a session:
 - **capped vitest workers** (`VITEST_MAX_FORKS=2 VITEST_MAX_THREADS=2`) when
   several agents run;
 - **the bot identity for the PR**: before any `git push` or `gh pr create` the
-  implementer runs `eval "$(GH_APP_PRIVATE_KEY_PATH=/Users/eiriksf/code/ugcportal/hal9000.pem
+  implementer runs (at the start of every Bash call that commits, pushes or
+  runs `gh pr create`, since shell state does not persist between calls and an
+  empty `GH_TOKEN` silently opens a human-authored PR) `eval "$(GH_APP_PRIVATE_KEY_PATH=/Users/eiriksf/code/ugcportal/hal9000.pem
   node scripts/gh-app-token.mjs --env)"` (it sets `GH_TOKEN` and the git
   author/committer to `hal9000-agent-bot[bot]`), pushes over HTTPS with the
   token (the SSH remote does not carry it; exact command in
   `.claude/agents/worker-implementer.md`), and opens the PR with `GH_TOKEN`
   set, so the PR author reads `app/hal9000-agent-bot` and differs from the
-  reviewer's login (`ugcportal-62b6`). The token lasts one hour (re-run the
+  reviewer's login (`ugcportal-62b6`); it then asserts that with `gh pr view
+  <n> --json author -q .author.login`, and anything else is a failed step. The token lasts one hour (re-run the
   eval before a later push) and `gh api user` fails under it, which is
   expected. The reviewer is not briefed to use the bot;
 - **a named model** on the spawn (`harness-cost-controls`); the bead's
