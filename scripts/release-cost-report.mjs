@@ -70,8 +70,8 @@
  * `--tool` mode, unedited) once per control with the command pattern
  * docs/process/cost-performance-claims-v0.7.0-2026-10-16.md Appendix A used.
  * Examined/matched come straight from scanTool's reach fields, not recomputed.
- * A control whose pattern matched no call prints "0 of N files matched", never
- * a bare 0 (review-standards section 6). Windowing: agent-pass-cost has an
+ * A control whose pattern matched no call prints "0 of N files matched", not
+ * a bare 0 (review-standards section 6; asserted by the "guardrail" test). Windowing: agent-pass-cost has an
  * upper bound only, so `--before <iso>` ends the window and there is NO lower
  * bound; the table says so. Orchestrator share = ITE of calls the parent
  * sessions ran / ITE of all matching calls.
@@ -81,7 +81,7 @@
  * CONTROLS list; several controls comma-separated; optional `caught_by_note`
  * free text). The table counts, per control, the beads carrying it among all
  * beads read (not only the release's); a value outside the list is listed
- * under the table, never dropped. Record one with
+ * under the table, not dropped (asserted by the K2 test). Record one with
  *   bd update <id> --set-metadata caught_by=<control>
  *   node scripts/bd-verify-metadata.mjs <id> caught_by=<control>
  * Controls with no command pattern (premise-audit: agents, not commands) show
