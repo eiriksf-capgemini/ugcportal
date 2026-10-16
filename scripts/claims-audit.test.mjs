@@ -351,7 +351,7 @@ describe("scope-limiting recategorisation (ugcportal-fgcb K1)", () => {
     expect(classifyClaimLine("the test asserts it cannot see the draft")).toEqual(["SCOPE-LIMITING"]);
   });
 
-  it("KNOWN ERROR, pinned: a pronoun counts as an instrument whenever an instrument noun appears before it", () => {
+  it("KNOWN ERROR, pinned: an 'it' or 'this' counts as an instrument whenever an instrument noun appears before it", () => {
     // Named in the comment above findScopeLimitingSpans; pinned so a fix to
     // it is visible here.
     expect(classifyClaimLine("the test passed, and it cannot see the draft row")).toEqual(["SCOPE-LIMITING"]);
@@ -375,6 +375,15 @@ describe("scope-limiting recategorisation (ugcportal-fgcb K1)", () => {
     // The reviewer's reproduction (issue comment 6213645250): a person-subject
     // access guarantee beside an unrelated instrument limitation.
     expect(classifyClaimLine("an anonymous visitor who never sees a draft row", { before: "the lint rule does not see server actions, so" })).toEqual(["ABSOLUTE"]);
+  });
+
+  it("round 3 R3-1: a relative 'that'/'which' subject counts only when the word right before it is an instrument noun", () => {
+    // The reviewer's reproductions (issue comment 6213867739), plus the one
+    // the round-2 fix pass reported.
+    expect(classifyClaimLine("an anonymous visitor that cannot see a draft row", { before: "the lint rule runs on every file" })).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine("The guard rejects a request that cannot see the admin token")).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine("a reader that never sees the constant", { before: "the lint rule does not see server actions, so" })).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine("a scanner that cannot see server actions")).toEqual(["SCOPE-LIMITING"]);
   });
 
   it("KNOWN ERROR, pinned: a runtime component named in INSTRUMENT_NOUN_RE reads as an instrument", () => {

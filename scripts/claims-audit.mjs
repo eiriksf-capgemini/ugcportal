@@ -320,12 +320,15 @@ const COVERAGE_UNIVERSAL_RE = /\b(?:catch(?:es)?|sees?|covers?|detects?|flags?|f
 // other"), skipping at most one adverb such as "also" or "deliberately",
 // must be an instrument noun (guard, check, scan, test, regex, script ...
 // INSTRUMENT_NOUN_RE), a test matcher (toEqual, expect), or one of the
-// pronouns it / which / that / this. A pronoun counts only when an
+// pronouns it / which / that / this. A relative "that" or "which" counts
+// only when the word directly before it is an instrument noun ("a scanner
+// that cannot see server actions"; "an anonymous visitor that cannot see a
+// draft row" stays ABSOLUTE). An "it" or "this" counts only when an
 // instrument noun appears in the window BEFORE it ("The public projection
 // strips previewKey, so it cannot see the draft row (see the test)" stays
-// ABSOLUTE), and an "it" or "this" directly after "that" does not count at
-// all: in "the test asserts that it cannot see the draft" it is what the
-// test asserts about, not the test.
+// ABSOLUTE), and not at all directly after "that": in "the test asserts
+// that it cannot see the draft" it is what the test asserts about, not the
+// test.
 //
 // Limitation evidence has to be phrased as a limitation of an instrument,
 // so that a guarantee phrased negatively ("a NaN date does not reach the
@@ -354,9 +357,9 @@ const COVERAGE_UNIVERSAL_RE = /\b(?:catch(?:es)?|sees?|covers?|detects?|flags?|f
 // "nothing else catches it either", whose instrument is in the table's
 // header four lines up); and "covers X and no other", which is how a
 // clearance's guarantee is phrased in PR #199. And two reverse errors it
-// still makes. A pronoun counts as an instrument whenever an instrument
-// noun appears anywhere before it in the window, whether or not that noun
-// is what the pronoun means ("the test passed, and it cannot see the draft
+// still makes. An "it" or "this" counts as an instrument whenever an
+// instrument noun appears anywhere before it in the window, whether or not
+// that noun is what the pronoun means ("the test passed, and it cannot see the draft
 // row" is SCOPE-LIMITING). And INSTRUMENT_NOUN_RE also names runtime
 // components (guard, check, rule, filter, hook), so a guarantee about one
 // reads as an instrument's limit ("the tenant filter cannot see another
@@ -416,6 +419,9 @@ function hasInstrumentSubject(window, index, { skipCopula = false } = {}) {
   // "the test asserts that it cannot see the draft": an "it"/"this" opening a
   // "that" clause is what the clause is about, not the instrument before it.
   const previous = words.at(-1);
+  // A relative "that"/"which" refers to the word right before it ("a scanner
+  // that cannot see"), not to any instrument earlier in the window.
+  if (/^(?:that|which)$/i.test(subject[0])) return previous !== undefined && INSTRUMENT_SUBJECT_RE.test(previous[0]);
   if (/^(?:it|this)$/i.test(subject[0]) && previous !== undefined && /^that$/i.test(previous[0])) return false;
   // The antecedent must come before the pronoun, not anywhere in the window.
   return INSTRUMENT_NOUN_RE.test(window.slice(0, subject.index));
