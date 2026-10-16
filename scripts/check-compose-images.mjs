@@ -8,12 +8,16 @@
 // it then classifies the image as
 //   registry              -> resolved with an anonymous token and a manifest HEAD
 //   local (build)         -> the service has a `build:` key; no registry has it
-//   local (allowlist)     -> the image name (last path segment, no tag/digest) is on the
-//                            local-image allowlist: ugcportal and ugcportal-migrate are
+//   local (allowlist)     -> a bare reference (no registry host, no namespace: name[:tag|@digest])
+//                            whose name is on the local-image allowlist; quay.io/o/ugcportal:1
+//                            is a registry reference and is resolved: ugcportal and ugcportal-migrate are
 //                            built locally yet carry no `build:` key. `--local-image <name>`
 //                            (repeatable) adds names to it. The allowlist is printed in the
 //                            reach line so a silent exclusion is visible.
-//   unresolved-var        -> a ${VAR} with no default remains, so it names no registry image
+//   unresolved-var        -> a "$" remains after expansion, so it names no registry image. Only
+//                            the braced forms ${VAR:-d} and ${VAR-d} are expanded; an unbraced
+//                            $VAR or a nested/other form stays unresolved-var.
+//   no-image              -> the service has neither an image nor a build key
 // Exclusions are printed by name. Exit is non-zero on any non-200 or when
 // the set of registry images checked is empty (a gate that checked nothing
 // must not read as a pass).
@@ -80,8 +84,12 @@ export function classify(svc, localImages = DEFAULT_LOCAL_IMAGES) {
   if (svc.build) return { ...svc, kind: "local (build)" };
   if (!svc.image) return { ...svc, kind: "no-image" };
   const expanded = expandDefaults(svc.image);
-  if (expanded.includes("${")) return { ...svc, kind: "unresolved-var" };
-  if (localImages.includes(imageName(expanded))) return { ...svc, kind: "local (allowlist)", image: expanded };
+  // Only the braced default forms are expanded above; any "$" left (a bare ${VAR},
+  // an unbraced $VAR, a nested or other form) names no registry image.
+  if (expanded.includes("$")) return { ...svc, kind: "unresolved-var" };
+  // Allowlist applies to a bare reference only: no registry host, no namespace.
+  const bare = !expanded.split("@")[0].includes("/");
+  if (bare && localImages.includes(imageName(expanded))) return { ...svc, kind: "local (allowlist)", image: expanded };
   return { ...svc, kind: "registry", image: expanded };
 }
 
@@ -193,19 +201,30 @@ function invokedDirectly() {
   }
 }
 
-if (invokedDirectly()) {
-  const args = process.argv.slice(2);
+// Returns { localImages, positional }; throws Error(usage message) on a --local-image
+// with no name or whose next argument is itself a flag.
+export function parseArgs(args) {
   const localImages = [];
   const positional = [];
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--local-image") {
-      if (!args[i + 1]) {
-        process.stderr.write("--local-image needs a name\n");
-        process.exit(2);
-      }
-      localImages.push(args[++i]);
+      const name = args[i + 1];
+      if (!name || name.startsWith("--")) throw new Error("--local-image needs a name");
+      localImages.push(name);
+      i++;
     } else positional.push(args[i]);
   }
-  const path = positional[0] ?? "docker-compose.yml";
-  process.exitCode = await run({ composeText: readFileSync(path, "utf8"), localImages });
+  return { localImages, positional };
+}
+
+if (invokedDirectly()) {
+  let parsed;
+  try {
+    parsed = parseArgs(process.argv.slice(2));
+  } catch (err) {
+    process.stderr.write(`${err.message}\nusage: node scripts/check-compose-images.mjs [compose-file] [--local-image <name>]...\n`);
+    process.exit(2);
+  }
+  const path = parsed.positional[0] ?? "docker-compose.yml";
+  process.exitCode = await run({ composeText: readFileSync(path, "utf8"), localImages: parsed.localImages });
 }

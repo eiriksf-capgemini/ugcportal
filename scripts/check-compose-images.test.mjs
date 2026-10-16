@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseRef, parseServices, run } from "./check-compose-images.mjs";
+import { parseArgs, parseRef, parseServices, run } from "./check-compose-images.mjs";
 
 const MIXED = `
 services:
@@ -122,6 +122,38 @@ describe("check-compose-images", () => {
     await exec(compose, fetchImpl);
     const heads = calls.filter((c) => c.method === "HEAD");
     expect(heads.map((c) => c.url)).toEqual(["https://registry-1.docker.io/v2/library/foo/manifests/1"]);
+  });
+
+  it("L1: parseArgs takes a value, repeats, and rejects a missing or flag-shaped name", () => {
+    expect(parseArgs(["--local-image", "foo"])).toEqual({ localImages: ["foo"], positional: [] });
+    expect(parseArgs(["c.yml", "--local-image", "a", "--local-image", "b"])).toEqual({
+      localImages: ["a", "b"],
+      positional: ["c.yml"],
+    });
+    expect(() => parseArgs(["--local-image"])).toThrow(/needs a name/);
+    expect(() => parseArgs(["--local-image", "--other"])).toThrow(/needs a name/);
+  });
+
+  it("L2: a namespaced or hosted reference to an allowlisted name is resolved, not excluded", async () => {
+    const compose =
+      "services:\n  a:\n    image: quay.io/o/ugcportal:1\n  b:\n    image: bitnami/ugcportal-migrate:2\n";
+    const { fetchImpl, calls } = stub(() => 200);
+    const { lines } = await exec(compose, fetchImpl);
+    expect(lines.filter((l) => l.startsWith("EXCLUDED"))).toEqual([]);
+    expect(calls.filter((c) => c.method === "HEAD").map((c) => c.url)).toEqual([
+      "https://quay.io/v2/o/ugcportal/manifests/1",
+      "https://registry-1.docker.io/v2/bitnami/ugcportal-migrate/manifests/2",
+    ]);
+  });
+
+  it("L3: an unbraced $VAR is unresolved-var, printed by name, never sent to a registry", async () => {
+    const compose = "services:\n  cache:\n    image: redis:7\n  r:\n    image: redis:$TAG\n  n:\n    image: nginx\n    build:\n      context: .\n  x:\n    command: y\n";
+    const { fetchImpl, calls } = stub(() => 200);
+    const { lines } = await exec(compose, fetchImpl);
+    expect(lines).toContain("EXCLUDED unresolved-var: service r (redis:$TAG)");
+    expect(lines).toContain("EXCLUDED no-image: service x (no image)");
+    expect(calls.filter((c) => c.url.includes("manifests/$"))).toHaveLength(0);
+    expect(calls.filter((c) => c.method === "HEAD")).toHaveLength(1);
   });
 
   it("fails non-zero when every image is excluded", async () => {
