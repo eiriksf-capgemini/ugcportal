@@ -234,14 +234,15 @@ brief.
 
 ## 5. Sending a fix round back: resume or fresh (ugcportal-8r06)
 
-A review round that blocks needs a fix. The implementer that built the PR can
-be resumed (`SendMessage`), or a fresh agent can be dispatched. Choose on two
+A review round that blocks needs a fix. The agent that made the most recent
+pass on the PR can be resumed (`SendMessage`), or a fresh agent can be dispatched. Choose on two
 figures, not on how many passes the implementer has already had:
 
-- **Carried context**: the `subagent_tokens` of the implementer's *last*
-  completion notification. That is context size, not cost (CLAUDE.md, "Token
+- **Carried context**: the `subagent_tokens` of the *last* completion
+  notification of the agent that made the most recent pass on the PR (the
+  implementer, or the fix agent once a fresh one has taken a round). That is context size, not cost (CLAUDE.md, "Token
   cost metadata"), and it approximates what a resume carries into its first call.
-- **Idle time**: minutes since that agent's last pass ended. The prompt cache
+- **Idle time**: minutes since that same agent's last pass ended. The prompt cache
   lives five minutes.
 
 **Rule.** Resume only when carried context is **under 150k tokens AND the
@@ -250,11 +251,20 @@ either figure is unknown, dispatch a **fresh agent with a digested brief**:
 the findings (verbatim, with their severities), the PR URL and head sha (or the
 diff), the files to read, and the setup items of section 2 (prisma generate,
 capped vitest workers, the bot identity, a named model, the long-command rule).
-Do not use section 2's worktree item: it cuts a new branch off `origin/main`,
-and a fix must land on the PR's existing head branch. Name that branch and the
-implementer's existing worktree (`/tmp/wt-<short>`) in the brief and tell the
-fresh agent to work there; if that worktree is gone, it re-adds one on the
-existing branch (`git worktree add /tmp/wt-<short> <branch>`, no `-b`). Do not
+Do not use section 2's worktree item as written: its `git worktree add -b ...
+origin/<base>` form (the workers' machine section) cuts a new branch for new
+work, and a fix must land on the PR's existing head branch. Name that branch in
+the brief and tell the fresh agent to `git fetch origin <branch>` and add its
+OWN worktree on it: `git worktree add /tmp/wt-<bead-id>-fix<N> <branch>` (no
+`-b`; `<N>` is the fix round), never the implementer's worktree or its path,
+which the machine section forbids borrowing and which another agent may still
+hold. ugcportal-2day adds this existing-branch form to the machine section;
+until it lands, this section owns the fix-agent worktree form. A fresh,
+agent-named path also sidesteps `git worktree add` refusing with "missing but
+already registered worktree" when an earlier directory was deleted without
+`git worktree remove` (the machine section permits neither `git worktree prune`
+nor `-f`). If git instead refuses because the branch is already checked out in
+a stale registered worktree, stop and report that; do not force it. Do not
 forward the old agent's history.
 
 Case K1, quoted from the bead: an implementer whose last context was 300k
@@ -296,7 +306,9 @@ worked case's fix answered it).
 Filled in: `Fix round 1 2026-10-16: fresh, carried context 353k, idle 20 min, agent a0b5576299a5578a3`.
 Write `unknown` in place of a figure you could not read, with no `k`
 (`carried context unknown`, `idle unknown min`); that is itself a reason for
-`fresh`. `<id>` is the agent that takes the round, the new one when fresh.
+`fresh`. `<id>` is the agent that takes the round, the new one when fresh. Note that
+the next round's two figures are keyed to this agent, the one that made the
+most recent pass, not to the original implementer.
 
 **Changing the threshold.** Any change to the 150k or five-minute figure
 requires the n per arm and the rounds-after-fix comparison beside it, never
