@@ -15,7 +15,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { ctxOf, iteOf, notificationTotals, parsePasses, roleOf, scan, scanTool, toolCallCost, validUsage } from "./agent-pass-cost.mjs";
+import { ctxOf, iteOf, notificationTotals, parsePasses, reportScan, reportTool, roleOf, scan, scanTool, toolCallCost, validUsage } from "./agent-pass-cost.mjs";
 
 const usage = (o) => ({ input_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 10, ...o });
 const asst = (id, ts, u, content = []) => ({ type: "assistant", timestamp: ts, message: { id, usage: u, content } });
@@ -106,6 +106,18 @@ describe("notificationTotals, a long notification", () => {
   });
 });
 
+describe("notificationTotals, an unterminated notification", () => {
+  it("reads a notification without a closing tag up to the next one, not through it", () => {
+    const text = [
+      "<task-notification>\\n<task-id>aa11</task-id>\\n<usage><subagent_tokens>111</subagent_tokens></usage>",
+      "<task-notification>\\n<task-id>bb22</task-id>\\n<usage><subagent_tokens>222</subagent_tokens></usage>\\n</task-notification>",
+    ].join("\n");
+    const out = notificationTotals(text);
+    expect(out.get("bb22")).toEqual([222]);
+    expect(out.get("aa11")).toEqual([111]); // read to the next opening tag, not credited with 222
+  });
+});
+
 describe("missing or non-numeric usage is counted, not zero-filled", () => {
   const bad = [
     asst("b1", "2026-10-15T09:00:06Z", undefined),
@@ -179,6 +191,49 @@ describe("scan and scanTool over a transcript directory", () => {
     const { rows, reach } = scan(dir);
     expect(reach.badUsage).toBe(1);
     expect(rows[0]).toMatchObject({ calls: 1, lowerBound: true });
+  });
+});
+
+describe("the printed reach lines and warnings", () => {
+  const zero = { filesExamined: 3, unreadable: 0, malformedLines: 0, badUsage: 0, unpriced: 0, rows: [] };
+  const zeroScan = { rows: [], reach: { sessions: 1, agentFiles: 3, parsed: 3, unreadable: 0, malformedLines: 0, badUsage: 0 } };
+  it("--tool prints all three skip counters and no warning on clean input", () => {
+    const { err, out } = reportTool(zero, "x");
+    expect(err).toHaveLength(1);
+    expect(err[0]).toMatch(/0 skipped unreadable, 0 malformed lines skipped, 0 assistant entries with missing\/invalid usage/);
+    expect(out[out.length - 1]).not.toMatch(/lower bound/);
+  });
+  it("--tool prints each non-zero counter, the WARNING and the lower-bound mark", () => {
+    const { err, out } = reportTool({ ...zero, unreadable: 2, malformedLines: 5, badUsage: 7, unpriced: 1 }, "x");
+    expect(err[0]).toContain("2 skipped unreadable, 5 malformed lines skipped, 7 assistant entries with missing/invalid usage, 1 matching calls unpriced");
+    expect(err[1]).toMatch(/^WARNING: .*LOWER BOUNDS/);
+    expect(out[out.length - 1]).toMatch(/\(lower bound\)$/);
+  });
+  it("default mode prints all three skip counters and the WARNING when any is non-zero, none when clean", () => {
+    expect(reportScan(zeroScan, "d").err).toHaveLength(1);
+    const label = { unreadable: "skipped unreadable", malformedLines: "malformed lines skipped", badUsage: "assistant entries with missing/invalid usage" };
+    for (const k of ["unreadable", "malformedLines", "badUsage"]) {
+      const { err } = reportScan({ ...zeroScan, reach: { ...zeroScan.reach, [k]: 4 } }, "d");
+      expect(err[0]).toContain(`4 ${label[k]}`);
+      expect(err[1]).toMatch(/^WARNING: .*LOWER BOUNDS/);
+    }
+  });
+});
+
+describe("usage blocks and entries that cannot be priced", () => {
+  it("an empty cache_creation object beside a cache write is invalid, not a free cache write", () => {
+    const u = usage({ cache_creation_input_tokens: 30000, cache_creation: {} });
+    expect(validUsage(u)).toBe(false);
+    const stats = { badUsage: 0 };
+    parsePasses([prompt("2026-10-15T09:00:00Z", "go"), asst("m1", "2026-10-15T09:00:05Z", u)], stats);
+    expect(stats.badUsage).toBe(1);
+  });
+  it("toolCallCost counts an assistant entry without a message id the way parsePasses does, and reports its matching calls unpriced", () => {
+    const e = { type: "assistant", timestamp: "2026-10-14T11:00:00Z", message: { usage: usage({}), content: [{ type: "tool_use", id: "u1", input: { command: "check-bead-dispatch" } }] } };
+    const stats = { badUsage: 0 };
+    parsePasses([prompt("2026-10-14T10:59:00Z", "go"), e], stats);
+    expect(stats.badUsage).toBe(1);
+    expect(toolCallCost([e], /check-bead-dispatch/)).toMatchObject({ calls: 1, turns: 0, ite: 0, unpriced: 1, badUsage: 1 });
   });
 });
 

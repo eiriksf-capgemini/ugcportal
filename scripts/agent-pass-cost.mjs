@@ -70,7 +70,10 @@ export function validUsage(u) {
   if (!USAGE_FIELDS.every((k) => isNum(u[k]))) return false;
   const cc = u.cache_creation;
   if (cc === undefined || cc === null) return true;
-  return typeof cc === "object" && [cc.ephemeral_5m_input_tokens, cc.ephemeral_1h_input_tokens].every((x) => x === undefined || isNum(x));
+  if (typeof cc !== "object") return false;
+  const eph = [cc.ephemeral_5m_input_tokens, cc.ephemeral_1h_input_tokens];
+  // an object with neither ephemeral field would price the cache write at 0
+  return eph.some(isNum) && eph.every((x) => x === undefined || isNum(x));
 }
 
 /** Parse a jsonl file line by line; a bad line is skipped and counted, never fatal to the file. */
@@ -135,7 +138,7 @@ export function parsePasses(entries, stats = { badUsage: 0 }) {
 /** Every task-notification's token figure in a parent session's text, keyed by task id, in order. */
 export function notificationTotals(text) {
   const out = new Map();
-  const re = /<task-id>([a-z0-9]+)<\/task-id>([\s\S]*?)<\/task-notification>/g;
+  const re = /<task-id>([a-z0-9]+)<\/task-id>((?:(?!<task-id>|<task-notification>|<\/task-notification>)[\s\S])*)/g;
   for (const m of text.matchAll(re)) {
     const t = /<subagent_tokens>(\d+)<\/subagent_tokens>|total_tokens:\s*(\d+)/.exec(m[2].replace(/\\n/g, "\n"));
     if (!t) continue;
@@ -158,11 +161,12 @@ export function toolCallCost(entries, re, before = null) {
   let badUsage = 0;
   const usage = new Map(), issued = new Map(), resultAt = new Map();
   for (const e of entries) {
-    if (e.type === "assistant" && e.message?.id) {
-      if (validUsage(e.message.usage)) usage.set(e.message.id, e.message.usage); else badUsage++;
-      for (const c of Array.isArray(e.message.content) ? e.message.content : []) {
+    if (e.type === "assistant") {
+      const mid = e.message?.id ?? null; // an entry without an id cannot be priced: counted, and its matching calls reported unpriced
+      if (mid && validUsage(e.message.usage)) usage.set(mid, e.message.usage); else badUsage++;
+      for (const c of Array.isArray(e.message?.content) ? e.message.content : []) {
         if (before && e.timestamp >= before) continue;
-        if (c.type === "tool_use" && re.test(JSON.stringify(c.input ?? {}))) issued.set(c.id, { msg: e.message.id, at: e.timestamp });
+        if (c.type === "tool_use" && re.test(JSON.stringify(c.input ?? {}))) issued.set(c.id, { msg: mid, at: e.timestamp });
       }
     } else if (e.type === "user" && Array.isArray(e.message?.content)) {
       for (const c of e.message.content) if (c.type === "tool_result" && issued.has(c.tool_use_id)) resultAt.set(c.tool_use_id, e.timestamp);
@@ -263,29 +267,42 @@ export function scanTool(dir, re, before = null) {
   return { rows: out, files: files.length, ...reach };
 }
 
+/** The lines --tool mode prints: stderr (reach, warning) and stdout (rows, TOTAL). */
+export function reportTool(t, tool, before = null) {
+  const { rows } = t;
+  const sum = (k) => rows.reduce((a, r) => a + r[k], 0);
+  const lower = t.badUsage > 0 || t.unpriced > 0 || t.unreadable > 0 || t.malformedLines > 0;
+  const err = [`reach: ${t.filesExamined} transcript files examined, ${t.unreadable} skipped unreadable, ${t.malformedLines} malformed lines skipped, ${t.badUsage} assistant entries with missing/invalid usage, ${t.unpriced} matching calls unpriced, ${rows.length} with a matching tool call; /${tool}/${before ? `; calls before ${before}` : ""}`];
+  if (lower) err.push("WARNING: input was skipped or unpriced; ite and seconds are LOWER BOUNDS (calls may also be undercounted)");
+  const out = rows.map((r) => [r.session, r.who, r.firstAt, r.calls, r.turns, r.ite, r.seconds].join("\t"));
+  out.push(`TOTAL\tcalls=${sum("calls")}\tturns=${sum("turns")}\tite=${sum("ite")}\tseconds=${sum("seconds")}${lower ? "\t(lower bound)" : ""}`);
+  return { err, out };
+}
+
+/** The lines default mode prints: stderr (reach, warning) and stdout (one row per pass). */
+export function reportScan({ rows, reach }, dir, before = null) {
+  const err = [`reach: ${dir}: ${reach.sessions} sessions with subagents, ${reach.agentFiles} agent files, ${reach.parsed} parsed, ${reach.unreadable} skipped unreadable, ${reach.malformedLines} malformed lines skipped, ${reach.badUsage} assistant entries with missing/invalid usage, ${rows.length} passes${before ? ` starting before ${before}` : ""}`];
+  if (reach.badUsage || reach.malformedLines || reach.unreadable) err.push("WARNING: input was skipped; figures from affected transcripts are LOWER BOUNDS (rows marked >= in the ite column)");
+  const out = rows.map((r) => [r.agentId, r.role, r.model, r.pass, r.calls, r.ctxStart, r.ctxEnd, (r.lowerBound ? ">=" : "") + r.ite, r.beads.join(",")].join("\t"));
+  return { err, out };
+}
+
 function main() {
   const args = process.argv.slice(2);
   const opt = (k, d) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : d; };
   const dir = opt("--dir", path.join(os.homedir(), ".claude/projects/-Users-eiriksf-code-ugcportal"));
   const tool = opt("--tool");
   const before = opt("--before", null);
+  const emit = ({ err, out }) => { for (const l of err) console.error(l); for (const l of out) console.log(l); };
   if (tool) {
-    const t = scanTool(dir, new RegExp(tool), before);
-    const { rows } = t;
-    const sum = (k) => rows.reduce((a, r) => a + r[k], 0);
-    const lower = t.badUsage > 0 || t.unpriced > 0 || t.unreadable > 0 || t.malformedLines > 0;
-    console.error(`reach: ${t.filesExamined} transcript files examined, ${t.unreadable} skipped unreadable, ${t.malformedLines} malformed lines skipped, ${t.badUsage} assistant entries with missing/invalid usage, ${t.unpriced} matching calls unpriced, ${rows.length} with a matching tool call; /${tool}/${before ? `; calls before ${before}` : ""}`);
-    if (lower) console.error("WARNING: input was skipped or unpriced; ite and seconds are LOWER BOUNDS (calls may also be undercounted)");
-    for (const r of rows) console.log([r.session, r.who, r.firstAt, r.calls, r.turns, r.ite, r.seconds].join("\t"));
-    console.log(`TOTAL\tcalls=${sum("calls")}\tturns=${sum("turns")}\tite=${sum("ite")}\tseconds=${sum("seconds")}${lower ? "\t(lower bound)" : ""}`);
+    emit(reportTool(scanTool(dir, new RegExp(tool), before), tool, before));
     return;
   }
-  const { rows, reach } = scan(dir, before);
-  console.error(`reach: ${dir}: ${reach.sessions} sessions with subagents, ${reach.agentFiles} agent files, ${reach.parsed} parsed, ${reach.unreadable} skipped unreadable, ${reach.malformedLines} malformed lines skipped, ${reach.badUsage} assistant entries with missing/invalid usage, ${rows.length} passes${before ? ` starting before ${before}` : ""}`);
-  if (reach.badUsage || reach.malformedLines || reach.unreadable) console.error("WARNING: input was skipped; figures from affected transcripts are LOWER BOUNDS (rows marked >= in the ite column)");
+  const result = scan(dir, before);
   const json = opt("--json");
-  if (json) fs.writeFileSync(json, JSON.stringify(rows, null, 1));
-  else for (const r of rows) console.log([r.agentId, r.role, r.model, r.pass, r.calls, r.ctxStart, r.ctxEnd, (r.lowerBound ? ">=" : "") + r.ite, r.beads.join(",")].join("\t"));
+  const rep = reportScan(result, dir, before);
+  if (json) { fs.writeFileSync(json, JSON.stringify(result.rows, null, 1)); rep.out = []; }
+  emit(rep);
 }
 
 if (isMainModule(import.meta.url)) main();
