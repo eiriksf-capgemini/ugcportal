@@ -231,3 +231,114 @@ before dispatch, or its own bead — not a note.
 Three implementer agents at a time in practice, and never two on the same
 `cc_scope`. Claim the bead (`bd update <id> --claim`) and hand over the
 brief.
+
+## 5. Sending a fix round back: resume or fresh (ugcportal-8r06)
+
+A review round that blocks needs a fix. The agent that made the most recent
+pass on the PR can be resumed (`SendMessage`), or a fresh agent can be dispatched. Choose on two
+figures, not on how many passes the agent has already had:
+
+- **Carried context**: the `subagent_tokens` of the *last* completion
+  notification of the agent that made the most recent pass on the PR (the
+  implementer, or the fix agent once a fresh one has taken a round). That is context size, not cost (CLAUDE.md, "Token
+  cost metadata"), and it approximates what a resume carries into its first call.
+- **Idle time**: minutes since that same agent's last pass ended. The prompt cache
+  lives five minutes.
+
+**Rule.** Resume only when carried context is **under 150k tokens AND the
+agent has been idle under five minutes**. In every other case, including when
+either figure is unknown, dispatch a **fresh agent with a digested brief**:
+the findings (verbatim, with their severities), the PR URL and head sha (or the
+diff), the files to read, and the setup items of section 2 (prisma generate,
+capped vitest workers, the bot identity, a named model, the long-command rule).
+Do not use section 2's worktree item as written: its `git worktree add -b ...
+origin/<base>` form (the workers' machine section) cuts a new branch for new
+work, and a fix must land on the PR's existing head branch. The orchestrator,
+which the workers' machine section does not bind, runs `git fetch origin
+<branch>` in the shared checkout itself before it spawns, so that the head
+commit is present locally, and puts the branch name and the head sha in the
+brief. The fresh agent then adds its OWN detached worktree on that commit, from
+the shared checkout: `git worktree add --detach /tmp/wt-<bead-id>-fix<N>
+<head-sha>` (`<N>` is the fix round; `<head-sha>` may be written
+`origin/<branch>`), and pushes with `git push origin HEAD:<branch>`. That
+`--detach <path> <commit>` call is the one the machine section already grants
+reviewers and analysts (it names no `-b`), so the agent runs no `git fetch` of
+its own and needs no exception for it; ugcportal-2day adds the detached
+fix-round form to the implementer's list, and until it lands this section owns
+it. Do not run `git worktree add <path> <branch>`: the PR's head branch is
+normally still checked out in the implementer's live worktree (until the
+post-merge sweep removes it), and git then refuses with `fatal: '<branch>' is
+already used by worktree at '<path>'` (reproduced in a scratch repo, git 2.54.0,
+rc=128, in PR #280's body). A detached worktree creates no local branch, so it
+does not depend on who holds one. Never use the implementer's worktree or its
+path, which the machine section forbids borrowing. A fresh, agent-named path
+also sidesteps `git worktree add` refusing with "missing but already
+registered worktree" when an earlier directory was deleted without `git
+worktree remove` (the machine section permits neither `git worktree prune` nor
+`-f`). If git still refuses on the path, stop and report that; do not force it. Do not
+forward the old agent's history.
+
+Case K1, quoted from the bead: an implementer whose last context was 300k
+tokens and who has been idle twenty minutes gets a **fresh agent with a
+digested brief, not a resume**. Both figures fail the rule independently.
+
+**Where the threshold comes from, stated honestly.**
+`docs/process/cost-performance-claims-v0.7.0-2026-10-16.md` section 3 (374
+resumed implementer passes, 85 fresh fix agents, 2026-09-17 to 2026-10-15)
+puts the crossover between **150k and 250k** of carried context: resumed passes
+that started under 150k cost a median 199k ITE, those at 150-250k cost 1,003k,
+against a median 612k for a fresh fix agent. 150k is the **conservative edge**
+of that band, not a measured optimum. 84% of second passes began with the
+cache expired (median idle 888 s), which is why idle time is the second test.
+The comparison is observational (fresh fix agents cluster on 2026-10-08 to
+10-14, and which rounds got one was not random) and says nothing about whether
+a fresh agent's fix needed more review rounds afterwards.
+
+**Worked case.** ugcportal-l6t5, 2026-10-16: implementer `ab608c13f79bda3dd`
+ended its one pass with a last notification of 352,596 tokens (the transcript's
+last call: 349,162), so the first fix round on PR #255 went to a fresh agent,
+`a0b5576299a5578a3`, which began at 29,081 tokens of context and its fix pass
+cost at least 183,843 ITE (a lower bound: `a0b5576299a5578a3` ran on
+`claude-sonnet-5-5`, whose transcripts under-record output, document section 1.2;
+it recorded 109 output tokens over 17 calls). Reproduce with `node scripts/agent-pass-cost.mjs --json
+/tmp/passes.json` and select those two agent ids.
+
+**Record one line per fix round (K2).** Write it once the spawn (or the
+`SendMessage`) has returned the agent id, in the same turn as the dispatch, and
+never with a placeholder such as `pending-spawn`: a placeholder forces a second
+line, which a reader matching on the `Fix round` prefix sees as a malformed
+record.
+
+```bash
+bd update <id> --append-notes "Fix round <N> <date>: <resume|fresh>, carried context <tokens>k|unknown, idle <minutes> min, agent <id>"
+```
+
+`<N>` is the review round whose findings the fix answers, so the first fix
+round after a round-1 review is 1 (PR #255 carries one round marker, and the
+worked case's fix answered it).
+
+Filled in: `Fix round 1 2026-10-16: fresh, carried context 353k, idle 20 min, agent a0b5576299a5578a3`.
+Write `unknown` in place of a figure you could not read, with no `k`
+(`carried context unknown`, `idle unknown min`); that is itself a reason for
+`fresh`. Never write a bound such as `idle over 5 min`: the format defines
+none. `<id>` is the agent that takes the round, the new one when fresh. Note that
+the next round's two figures are keyed to this agent, the one that made the
+most recent pass, not to the original implementer.
+
+**How idle is measured.** From the previous agent's last pass end (`endTs` in
+`node scripts/agent-pass-cost.mjs --json`, or the last timestamp in its
+transcript) to the dispatch time, which for a fresh agent is its first call
+(`startTs`). Do not use the orchestrator's own clock (when it noticed the
+review comment, or when it began composing the brief): the idle figures
+recorded on 2026-10-16 did that and overstated the transcript measure (for
+example 25 min recorded against 13.3 min measured for ugcportal-8r06 round 2).
+
+**Correcting a wrong line.** Do not edit or re-use the `Fix round` prefix.
+Append `bd update <id> --append-notes "Correction to the Fix round <N> line: <what was wrong, the right figure and how it was measured>"`.
+
+**Changing the threshold.** Any change to the 150k or five-minute figure
+requires the n per arm and the rounds-after-fix comparison beside it, never
+one release's median alone. That re-measurement is `ugcportal-hw97`; until it
+reports, the figures above stand. The cost unit the figures are in is
+`ugcportal-cii0`; reviewer agents are outside this rule, since their late
+passes are short and cheap in the same data.
