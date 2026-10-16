@@ -49,7 +49,7 @@ describe("isMainModule", () => {
         const out = execFileSync(process.execPath, [path.join(dir, "fixture.mjs")], {
           encoding: "utf8",
         });
-        // K2: a guarded script must never exit 0 silently as the entry point.
+        // K2 guardrail: exiting 0 with empty stdout is the failure being pinned.
         expect(out).not.toBe("");
         expect(out).toContain("IS_MAIN_RAN");
       }
