@@ -236,7 +236,7 @@ brief.
 
 A review round that blocks needs a fix. The agent that made the most recent
 pass on the PR can be resumed (`SendMessage`), or a fresh agent can be dispatched. Choose on two
-figures, not on how many passes the implementer has already had:
+figures, not on how many passes the agent has already had:
 
 - **Carried context**: the `subagent_tokens` of the *last* completion
   notification of the agent that made the most recent pass on the PR (the
@@ -253,18 +253,29 @@ diff), the files to read, and the setup items of section 2 (prisma generate,
 capped vitest workers, the bot identity, a named model, the long-command rule).
 Do not use section 2's worktree item as written: its `git worktree add -b ...
 origin/<base>` form (the workers' machine section) cuts a new branch for new
-work, and a fix must land on the PR's existing head branch. Name that branch in
-the brief and tell the fresh agent to `git fetch origin <branch>` and add its
-OWN worktree on it: `git worktree add /tmp/wt-<bead-id>-fix<N> <branch>` (no
-`-b`; `<N>` is the fix round), never the implementer's worktree or its path,
-which the machine section forbids borrowing and which another agent may still
-hold. ugcportal-2day adds this existing-branch form to the machine section;
-until it lands, this section owns the fix-agent worktree form. A fresh,
-agent-named path also sidesteps `git worktree add` refusing with "missing but
-already registered worktree" when an earlier directory was deleted without
-`git worktree remove` (the machine section permits neither `git worktree prune`
-nor `-f`). If git instead refuses because the branch is already checked out in
-a stale registered worktree, stop and report that; do not force it. Do not
+work, and a fix must land on the PR's existing head branch. The orchestrator,
+which the workers' machine section does not bind, runs `git fetch origin
+<branch>` in the shared checkout itself before it spawns, so that the head
+commit is present locally, and puts the branch name and the head sha in the
+brief. The fresh agent then adds its OWN detached worktree on that commit, from
+the shared checkout: `git worktree add --detach /tmp/wt-<bead-id>-fix<N>
+<head-sha>` (`<N>` is the fix round; `<head-sha>` may be written
+`origin/<branch>`), and pushes with `git push origin HEAD:<branch>`. That
+`--detach <path> <commit>` call is the one the machine section already grants
+reviewers and analysts (it names no `-b`), so the agent runs no `git fetch` of
+its own and needs no exception for it; ugcportal-2day adds the detached
+fix-round form to the implementer's list, and until it lands this section owns
+it. Do not run `git worktree add <path> <branch>`: the PR's head branch is
+normally still checked out in the implementer's live worktree (until the
+post-merge sweep removes it), and git then refuses with `fatal: '<branch>' is
+already used by worktree at '<path>'` (reproduced in a scratch repo, git 2.54.0,
+rc=128, in PR #280's body). A detached worktree creates no local branch, so it
+does not depend on who holds one. Never use the implementer's worktree or its
+path, which the machine section forbids borrowing. A fresh, agent-named path
+also sidesteps `git worktree add` refusing with "missing but already
+registered worktree" when an earlier directory was deleted without `git
+worktree remove` (the machine section permits neither `git worktree prune` nor
+`-f`). If git still refuses on the path, stop and report that; do not force it. Do not
 forward the old agent's history.
 
 Case K1, quoted from the bead: an implementer whose last context was 300k
@@ -292,8 +303,11 @@ cost at least 183,843 ITE (a lower bound: `a0b5576299a5578a3` ran on
 it recorded 109 output tokens over 17 calls). Reproduce with `node scripts/agent-pass-cost.mjs --json
 /tmp/passes.json` and select those two agent ids.
 
-**Record one line per fix round (K2).** Append it to the bead, in the same
-turn as the dispatch:
+**Record one line per fix round (K2).** Write it once the spawn (or the
+`SendMessage`) has returned the agent id, in the same turn as the dispatch, and
+never with a placeholder such as `pending-spawn`: a placeholder forces a second
+line, which a reader matching on the `Fix round` prefix sees as a malformed
+record.
 
 ```bash
 bd update <id> --append-notes "Fix round <N> <date>: <resume|fresh>, carried context <tokens>k|unknown, idle <minutes> min, agent <id>"
@@ -306,9 +320,21 @@ worked case's fix answered it).
 Filled in: `Fix round 1 2026-10-16: fresh, carried context 353k, idle 20 min, agent a0b5576299a5578a3`.
 Write `unknown` in place of a figure you could not read, with no `k`
 (`carried context unknown`, `idle unknown min`); that is itself a reason for
-`fresh`. `<id>` is the agent that takes the round, the new one when fresh. Note that
+`fresh`. Never write a bound such as `idle over 5 min`: the format defines
+none. `<id>` is the agent that takes the round, the new one when fresh. Note that
 the next round's two figures are keyed to this agent, the one that made the
 most recent pass, not to the original implementer.
+
+**How idle is measured.** From the previous agent's last pass end (`endTs` in
+`node scripts/agent-pass-cost.mjs --json`, or the last timestamp in its
+transcript) to the dispatch time, which for a fresh agent is its first call
+(`startTs`). Do not use the orchestrator's own clock (when it noticed the
+review comment, or when it began composing the brief): the idle figures
+recorded on 2026-10-16 did that and overstated the transcript measure (for
+example 25 min recorded against 13.3 min measured for ugcportal-8r06 round 2).
+
+**Correcting a wrong line.** Do not edit or re-use the `Fix round` prefix.
+Append `bd update <id> --append-notes "Correction to the Fix round <N> line: <what was wrong, the right figure and how it was measured>"`.
 
 **Changing the threshold.** Any change to the 150k or five-minute figure
 requires the n per arm and the rounds-after-fix comparison beside it, never
