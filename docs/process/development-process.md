@@ -334,7 +334,7 @@ round 4 an unsettled plausible medium blocks exactly as a confirmed one
 does. Both late-round defects that motivated the rule presented as
 unconfirmed plausible mediums before anyone ran them down.
 
-**As of 2026-10-16, before the first bot-authored PR (#277), the gate's
+**As of 2026-10-16, before bot-authored PRs existed (#275, a throwaway; #277, the first real one), the gate's
 lenient band had never been legitimately reached in this repo.** (It was applied by mistake three times in v0.5.0 — PRs #60, #61,
 #75 — which is a separate defect, not an exception to this.) Until
 `ugcportal-62b6` the reviewer and the PR author were the same GitHub account,
