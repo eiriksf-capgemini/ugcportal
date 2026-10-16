@@ -58,8 +58,8 @@ describe("refuses (K1, K2)", () => {
 });
 
 describe("$(cat <path>) allowance", () => {
-  it("must-pass: cut-release lines 247-248, read at test time", () => {
-    const { first, text } = lines(".claude/skills/cut-release/SKILL.md", 247, 248);
+  it("must-pass: cut-release lines 263-264, read at test time", () => {
+    const { first, text } = lines(".claude/skills/cut-release/SKILL.md", 263, 264);
     expect(first).toContain('$(cat "$scratch/acc.md")');
     const r = hook(`bd create --title t \\\n${text}`);
     expect(r.stderr).toBe("");
@@ -91,7 +91,7 @@ describe("allows (K2 must-pass, K4)", () => {
     expect(hook('bd create --description "a \\`b\\` c"').code).toBe(0);
   });
   const blessed = [
-    ["cut-release/SKILL.md:242", ".claude/skills/cut-release/SKILL.md", 242, 246],
+    ["cut-release/SKILL.md:258", ".claude/skills/cut-release/SKILL.md", 258, 262],
     ["pr-review-merge/SKILL.md:941", ".claude/skills/pr-review-merge/SKILL.md", 941, 947],
     ["review-standards/SKILL.md:38", ".claude/skills/review-standards/SKILL.md", 38, 44],
   ];

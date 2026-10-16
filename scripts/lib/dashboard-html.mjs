@@ -33,6 +33,11 @@ import {
   blockedByThis,
   blockersOf,
   buildAttention,
+  HUMAN_WAIT_BEAD_LABELS,
+  HUMAN_WAIT_PR_LABELS,
+  humanWaitChecked,
+  humanWaitLabel,
+  uniqueOpenBeads,
   extractBeadId,
   joinRows,
   normalisePath,
@@ -365,7 +370,7 @@ function beadRow(row, ctx, rightMeta, overflow, idPrefix = "bead") {
 <span class="id">${esc(bead.id)}</span>
 <span class="pri">P${esc(bead.priority ?? "?")}</span>
 <span class="title" title="${esc(bead.title)}">${esc(bead.title)}</span>
-<span class="meta">${rightMeta}</span>
+<span class="meta">${humanWaitChip(bead, HUMAN_WAIT_BEAD_LABELS)}${rightMeta}</span>
 </summary>
 <div class="body">${beadBody({ cmuxItems: [], agentState: "", pr: null, worktree: null, ...row }, ctx)}</div>
 </details>`;
@@ -452,6 +457,12 @@ function queueMeta(row, ctx) {
   return parts.join(" ");
 }
 
+/** The human-wait label as a chip on a row's collapsed line, "" when it has none. */
+function humanWaitChip(x, wanted) {
+  const label = humanWaitLabel(x, wanted);
+  return label ? `<span class="chip human-wait">${icon("tag")}${esc(label)}</span> ` : "";
+}
+
 function prRow(pr, ctx, overflow) {
   const checks = summariseChecks(pr.statusCheckRollup);
   const search = searchText(`#${pr.number}`, pr.title, pr.headRefName, pr.author?.login, pr.labels?.map((l) => l.name ?? l), pr.body);
@@ -459,7 +470,7 @@ function prRow(pr, ctx, overflow) {
 <summary>
 <span class="id">${link(pr.url, `#${pr.number}`, "", "pr")}</span>
 <span class="title" title="${esc(pr.title)}">${esc(pr.title)}</span>
-<span class="meta">${ciIcon(checks)} ${reviewIcon(pr)} ${
+<span class="meta">${humanWaitChip(pr, HUMAN_WAIT_PR_LABELS)}${ciIcon(checks)} ${reviewIcon(pr)} ${
     pr.mergeable === "CONFLICTING" ? icon("alert", "merge conflict", "bad") : ""
   }<code class="muted wt" title="${esc(pr.headRefName)}">${icon("branch")}${esc(pr.headRefName)}</code> <span class="num muted">+${esc(pr.additions ?? "?")} / -${esc(pr.deletions ?? "?")}</span> ${timeIcon(pr.updatedAt, ctx.now)}</span>
 </summary>
@@ -528,7 +539,14 @@ export function renderHtml({ repoName, prefix, sources, now, refreshSeconds = 30
   const mainLog = sources.mainLog?.ok ? sources.mainLog.value.trim() : "";
 
   const joined = joinRows({ prefix, inProgress, prs, worktrees, currentItems, now });
-  const attention = buildAttention({ prefix, joined, currentItems, sources, now });
+  const humanWaitBeads = uniqueOpenBeads(inProgress, ready, blocked);
+  const attention = buildAttention({ prefix, joined, currentItems, sources, now, prs, beads: humanWaitBeads });
+  const checkedText = humanWaitChecked({
+    prs,
+    beads: humanWaitBeads,
+    prsUp: sources.prs?.ok === true,
+    beadsUp: ["inProgress", "ready", "blocked"].every((k) => sources[k]?.ok === true),
+  });
   const inProgressIds = new Set(inProgress.map((b) => b.id));
   const known = new Map();
   for (const b of [...inProgress, ...ready, ...blocked]) if (b?.id && !known.has(b.id)) known.set(b.id, b);
@@ -572,6 +590,7 @@ export function renderHtml({ repoName, prefix, sources, now, refreshSeconds = 30
   );
   const attnSection = `<section class="attn" id="sec-needs" aria-labelledby="attn-h">
 <h2 id="attn-h">${icon("bell")}Needs you <span class="count">${attention.length}</span></h2>
+<p class="muted checked" id="human-wait-checked">${esc(checkedText)}</p>
 ${attention.length === 0 ? `<p class="empty win">${icon("check-circle", undefined, "ok")}Nothing is waiting on you.</p>` : `<ul>${attnRows.join("\n")}</ul>`}
 </section>`;
 
