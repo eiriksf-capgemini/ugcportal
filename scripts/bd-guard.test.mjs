@@ -150,7 +150,7 @@ describe("command-word prefixes (F1): each shape is refused", () => {
     "--db": "bd --db p update x --notes a",
     "--database": "bd --database n update x --notes a",
     "2>&1 does not split": "bd update x 2>&1 --notes a",
-    "&> does not split": "bd update x &>/dev/null --notes a",
+    "&> does not split": "bd update x &>out.log --notes a",
   };
   for (const [name, cmd] of Object.entries(shapes)) {
     it(name, () => {
