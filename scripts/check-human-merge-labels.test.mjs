@@ -14,18 +14,31 @@ import {
   exitCode,
   formatReport,
   isSensitivePath,
+  reviewedHead,
   run,
 } from "./check-human-merge-labels.mjs";
 
+const HEAD = "a".repeat(40);
+const OTHER_HEAD = "b".repeat(40);
+const REVIEWER = { login: "eiriksf-capgemini" };
+const AUTHOR = { login: "hal9000-agent-bot" };
+const measured = (sha) => `<!-- ugcportal-measured: deltas=0 absences=0 at=${sha} baseline=n/a -->`;
 const ROUND = "<!-- ugcportal-review-round: 1 -->";
-const clean = { body: `${ROUND}\n${VERDICT_MARKER}\nReviewed clean; a human must merge` };
-const blocked = { body: `${ROUND}\nBlocking: 2 findings` };
-const chatter = { body: "LGTM" };
+const clean = { author: REVIEWER, body: `${ROUND}\n${measured(HEAD)}\n${VERDICT_MARKER}\nReviewed clean; a human must merge` };
+const blocked = { author: REVIEWER, body: `${ROUND}\n${measured(HEAD)}\nBlocking: 2 findings` };
+const chatter = { author: REVIEWER, body: "LGTM" };
 const sens = [{ path: ".claude/skills/x/SKILL.md" }];
 const plain = [{ path: "src/a.ts" }];
 const label = [{ name: LABEL }];
 
-const pr = (number, labels, comments, files = plain) => ({ number, labels, comments, files });
+const pr = (number, labels, comments, files = plain, headRefOid = HEAD) => ({
+  number,
+  author: AUTHOR,
+  headRefOid,
+  labels,
+  comments,
+  files,
+});
 
 describe("classifyPrs", () => {
   it("A: latest round has the verdict marker and no label", () => {
@@ -42,24 +55,24 @@ describe("classifyPrs", () => {
   });
 
   it("C: a label whose latest round comment has no verdict marker is stale", () => {
-    const r = classifyPrs([pr(5, label, [clean, { body: "<!-- ugcportal-review-round: 2 -->\nBlocking" }])]);
+    const r = classifyPrs([pr(5, label, [clean, { author: REVIEWER, body: "<!-- ugcportal-review-round: 2 -->\nBlocking" }])]);
     expect(r.staleLabel).toEqual([5]);
     expect(r.unlabelledClean).toEqual([]);
   });
 
   it("uses the LATEST round comment: an old verdict followed by a blocked round is not a verdict", () => {
-    const r = classifyPrs([pr(6, [], [clean, { body: "<!-- ugcportal-review-round: 2 -->\nBlocking" }])]);
+    const r = classifyPrs([pr(6, [], [clean, { author: REVIEWER, body: "<!-- ugcportal-review-round: 2 -->\nBlocking" }])]);
     expect(r.unlabelledClean).toEqual([]);
     expect(r.clean).toBe(0);
   });
 
   it("does not treat a comment that merely quotes the marker as a verdict (L1)", () => {
-    const quoting = { body: `${ROUND}\nBlocking: put \`${VERDICT_MARKER}\` in the comment` };
+    const quoting = { author: REVIEWER, body: `${ROUND}\nBlocking: put \`${VERDICT_MARKER}\` in the comment` };
     const r = classifyPrs([pr(7, [], [quoting])]);
     expect(r.clean).toBe(0);
     expect(r.unlabelledClean).toEqual([]);
     // and a round marker that is not the first line is not a round comment
-    const notFirst = { body: `intro\n${ROUND}\n${VERDICT_MARKER}` };
+    const notFirst = { author: REVIEWER, body: `intro\n${ROUND}\n${VERDICT_MARKER}` };
     expect(classifyPrs([pr(8, [], [notFirst])]).roundReviewed).toBe(0);
   });
 
@@ -81,24 +94,92 @@ describe("classifyPrs", () => {
 
 describe("round marker forms", () => {
   it("accepts the approx round marker", () => {
-    const approx = { body: `<!-- ugcportal-review-round: 3 approx -->\n${VERDICT_MARKER}\nclean` };
+    const approx = { author: REVIEWER, body: `<!-- ugcportal-review-round: 3 approx -->\n${VERDICT_MARKER}\nclean` };
     const r = classifyPrs([pr(20, [], [approx])]);
     expect(r.roundReviewed).toBe(1);
     expect(r.unlabelledClean).toEqual([20]);
   });
 
   it("accepts CRLF bodies (web-UI comments)", () => {
-    const crlf = { body: `${ROUND}\r\n${VERDICT_MARKER}\r\nclean` };
+    const crlf = { author: REVIEWER, body: `${ROUND}\r\n${VERDICT_MARKER}\r\nclean` };
     const r = classifyPrs([pr(21, [], [crlf])]);
     expect(r.roundReviewed).toBe(1);
     expect(r.unlabelledClean).toEqual([21]);
   });
 
   it("a non-round stop comment is not a round comment (step 2 labels only the sensitive-path stop)", () => {
-    const stop = { body: `<!-- ugcportal-review-stop: chain-broken -->\n${VERDICT_MARKER}` };
+    const stop = { author: REVIEWER, body: `<!-- ugcportal-review-stop: chain-broken -->\n${VERDICT_MARKER}` };
     const r = classifyPrs([pr(22, label, [blocked, stop])]);
-    // the latest ROUND comment is the blocked one, so the label is listed as C: the skill never labels this stop
+    // the latest ROUND comment is the blocked one, so the label is listed as C: step 2 labels no non-counting stop for its chain state
     expect(r.staleLabel).toEqual([22]);
+  });
+});
+
+describe("round comment author (R3-5)", () => {
+  it("a round comment written by the PR author is not a round comment: a labelled PR with only that comment is C", () => {
+    const selfStamped = { author: AUTHOR, body: clean.body };
+    const r = classifyPrs([pr(30, label, [selfStamped])]);
+    expect(r.roundReviewed).toBe(0);
+    expect(r.staleLabel).toEqual([30]);
+    expect(r.clean).toBe(0);
+  });
+
+  it("an unlabelled PR whose only verdict is self-stamped is not listed as A", () => {
+    const r = classifyPrs([pr(31, [], [{ author: AUTHOR, body: clean.body }])]);
+    expect(r.unlabelledClean).toEqual([]);
+  });
+
+  it("a round comment with no readable author is not a round comment (fail closed)", () => {
+    const r = classifyPrs([pr(32, label, [{ body: clean.body }])]);
+    expect(r.staleLabel).toEqual([32]);
+    const noPrAuthor = { ...pr(33, label, [clean]), author: undefined };
+    expect(classifyPrs([noPrAuthor]).staleLabel).toEqual([33]);
+  });
+
+  it("the latest round comment by a reviewer wins over a later self-stamped one", () => {
+    const r = classifyPrs([pr(34, label, [clean, { author: AUTHOR, body: blocked.body }])]);
+    expect(r.staleLabel).toEqual([]);
+    expect(r.roundReviewed).toBe(1);
+    expect(r.clean).toBe(1);
+  });
+});
+
+describe("D: the label on a head the clean round did not review (R3-5)", () => {
+  it("lists a labelled clean PR whose head moved after the round", () => {
+    const r = classifyPrs([pr(40, label, [clean], plain, OTHER_HEAD)]);
+    expect(r.staleHead).toEqual([40]);
+    expect(r.staleLabel).toEqual([]);
+    expect(r.unlabelledClean).toEqual([]);
+  });
+
+  it("does not list a labelled clean PR whose head is the reviewed head (a short reviewed sha is a prefix)", () => {
+    expect(classifyPrs([pr(41, label, [clean])]).staleHead).toEqual([]);
+    const short = { author: REVIEWER, body: `${ROUND}\n${measured(HEAD.slice(0, 8))}\n${VERDICT_MARKER}` };
+    expect(classifyPrs([pr(42, label, [short])]).staleHead).toEqual([]);
+  });
+
+  it("a head that cannot be read from the round comment, or from the PR, counts as not reviewed", () => {
+    const noHead = { author: REVIEWER, body: `${ROUND}\n${VERDICT_MARKER}\nclean` };
+    expect(classifyPrs([pr(43, label, [noHead])]).staleHead).toEqual([43]);
+    expect(classifyPrs([pr(44, label, [clean], plain, null)]).staleHead).toEqual([44]);
+  });
+
+  it("D needs the label: an unlabelled clean PR is A, never D", () => {
+    const r = classifyPrs([pr(45, [], [clean], plain, OTHER_HEAD)]);
+    expect(r.unlabelledClean).toEqual([45]);
+    expect(r.staleHead).toEqual([]);
+  });
+
+  it("D falls back to the `head <sha>` of the prose line when there is no measured marker", () => {
+    const prose = { author: REVIEWER, body: `${ROUND}\n${VERDICT_MARKER}\nReview round 1 (chain exact, head ${HEAD}). Reviewed clean.` };
+    expect(classifyPrs([pr(46, label, [prose])]).staleHead).toEqual([]);
+    expect(classifyPrs([pr(47, label, [prose], plain, OTHER_HEAD)]).staleHead).toEqual([47]);
+  });
+
+  it("reviewedHead reads the measured marker first, else the prose head, else null", () => {
+    expect(reviewedHead(clean.body)).toBe(HEAD);
+    expect(reviewedHead(`${measured(OTHER_HEAD)}\nReview round 1 (chain exact, head ${HEAD})`)).toBe(OTHER_HEAD);
+    expect(reviewedHead("nothing")).toBeNull();
   });
 });
 
@@ -127,15 +208,22 @@ describe("isSensitivePath", () => {
 
 describe("formatReport", () => {
   it("prints the exact counts line before any PR line", () => {
-    const r = classifyPrs([pr(1, [], [clean]), pr(3, [], [blocked], sens), pr(5, label, [blocked]), pr(14, [], [chatter])]);
+    const r = classifyPrs([
+      pr(1, [], [clean]),
+      pr(3, [], [blocked], sens),
+      pr(5, label, [blocked]),
+      pr(14, [], [chatter]),
+      pr(15, label, [clean], plain, OTHER_HEAD),
+    ]);
     const out = formatReport(r).split("\n");
     expect(out[0]).toBe(
-      `PRs examined: 4; round-reviewed (latest round marker): 3; latest round carries ${VERDICT_MARKER}: 1; ` +
-        "sensitive-path among round-reviewed: 1; A (verdict, no label): 1; B (sensitive, no label, no verdict): 1; C (label, no verdict): 1",
+      `PRs examined: 5; round-reviewed (latest round marker): 4; latest round carries ${VERDICT_MARKER}: 2; ` +
+        "sensitive-path among round-reviewed: 1; A (verdict, no label): 1; B (sensitive, no label, no verdict): 1; C (label, no verdict): 1; D (label, head not reviewed): 1",
     );
     expect(out[1]).toContain("A #1");
     expect(out[2]).toContain("B #3");
     expect(out[3]).toContain("C #5");
+    expect(out[4]).toContain("D #15");
   });
 });
 
@@ -152,7 +240,8 @@ describe("exitCode / run", () => {
     expect(t.logs[0]).toContain("PRs examined: 1; round-reviewed (latest round marker): 1;");
   });
 
-  it("exits 1 for each of A, B and C", () => {
+  it("exits 1 for each of A, B, C and D", () => {
+    expect(run(io([pr(4, label, [clean], plain, OTHER_HEAD)]).args)).toBe(1);
     expect(run(io([pr(1, [], [clean])]).args)).toBe(1);
     expect(run(io([pr(2, [], [blocked], sens)]).args)).toBe(1);
     expect(run(io([pr(3, label, [blocked])]).args)).toBe(1);
