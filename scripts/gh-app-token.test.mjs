@@ -1,6 +1,7 @@
 import {
   createPublicKey,
   createVerify,
+  randomInt,
   generateKeyPairSync,
 } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -36,8 +37,20 @@ const stubFetch =
       json: async () => body,
     };
   };
+const BASE62 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+const rand = (n) =>
+  Array.from({ length: n }, () => BASE62[randomInt(BASE62.length)]).join("");
+// Real-shaped, random fixture (never a recorded token): 383 chars, ghs_ prefix,
+// exactly two '.', several '_' and '-'. Shape observed 2026-10-16.
+export function realShapedToken() {
+  const head = `ghs_${rand(20)}_${rand(10)}-${rand(8)}_${rand(10)}`;
+  const mid = `${rand(60)}-${rand(30)}_${rand(20)}`;
+  const fixed = head.length + mid.length + 2;
+  return `${head}.${mid}.${rand(383 - fixed)}`;
+}
+const REAL_TOKEN = realShapedToken();
 const okBody = {
-  token: "ghs_TESTTOKEN123",
+  token: REAL_TOKEN,
   expires_at: "2026-10-16T12:00:00Z",
 };
 const envOf = (extra = {}) => ({ GH_APP_PRIVATE_KEY_PATH: keyPath, ...extra });
@@ -60,7 +73,36 @@ describe("mintJwt", () => {
   });
 });
 
+describe("real-shaped fixture", () => {
+  it("has the observed shape: 383 chars, ghs_ prefix, exactly two dots", () => {
+    expect(REAL_TOKEN).toHaveLength(383);
+    expect(REAL_TOKEN.startsWith("ghs_")).toBe(true);
+    expect(REAL_TOKEN.split(".")).toHaveLength(3);
+    expect(REAL_TOKEN.match(/_/g).length).toBeGreaterThan(2);
+    expect(REAL_TOKEN).toContain("-");
+  });
+});
+
 describe("main", () => {
+  it("accepts a real-shaped token in plain mode and --env mode, unchanged", async () => {
+    const plain = await main({
+      fetch: stubFetch(201, okBody),
+      argv: [],
+      env: envOf(),
+    });
+    expect(plain).toEqual({ code: 0, stdout: `${REAL_TOKEN}\n`, stderr: "" });
+    const env = await main({
+      fetch: stubFetch(201, okBody),
+      argv: ["--env"],
+      env: envOf(),
+    });
+    expect(env.code).toBe(0);
+    expect(env.stdout.split("\n")).toContain(`export GH_TOKEN=${REAL_TOKEN}`);
+    expect(env.stdout.split("\n")).toContain(
+      `export GITHUB_TOKEN=${REAL_TOKEN}`,
+    );
+  });
+
   it("--env prints exactly the export lines plus an expiry comment", async () => {
     const calls = [];
     const r = await main({
@@ -71,8 +113,8 @@ describe("main", () => {
     const email = "343198806+hal9000-agent-bot[bot]@users.noreply.github.com";
     expect(r.code).toBe(0);
     expect(r.stdout.split("\n")).toEqual([
-      "export GH_TOKEN=ghs_TESTTOKEN123",
-      "export GITHUB_TOKEN=ghs_TESTTOKEN123",
+      `export GH_TOKEN=${REAL_TOKEN}`,
+      `export GITHUB_TOKEN=${REAL_TOKEN}`,
       "export GIT_AUTHOR_NAME='hal9000-agent-bot[bot]'",
       `export GIT_AUTHOR_EMAIL='${email}'`,
       "export GIT_COMMITTER_NAME='hal9000-agent-bot[bot]'",
@@ -90,7 +132,7 @@ describe("main", () => {
       argv: [],
       env: envOf({ GH_APP_INSTALLATION_ID: "42", GH_APP_CLIENT_ID: "cid" }),
     });
-    expect(r).toEqual({ code: 0, stdout: "ghs_TESTTOKEN123\n", stderr: "" });
+    expect(r).toEqual({ code: 0, stdout: `${REAL_TOKEN}\n`, stderr: "" });
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toBe(
       "https://api.github.com/app/installations/42/access_tokens",
@@ -141,7 +183,7 @@ describe("main", () => {
     expect(r.code).toBe(1);
     expect(r.stdout).toBe("");
     expect(r.stderr).toContain("403");
-    expect(r.stderr + r.stdout).not.toContain("ghs_TESTTOKEN123");
+    expect(r.stderr + r.stdout).not.toContain(REAL_TOKEN);
   });
 
   it("a 403 with an empty-string token keeps its message intact", async () => {
@@ -157,14 +199,14 @@ describe("main", () => {
   it("a 403 whose message echoes the token never prints it", async () => {
     const r = await main({
       fetch: stubFetch(403, {
-        message: "bad ghs_TESTTOKEN123 here",
-        token: "ghs_TESTTOKEN123",
+        message: `bad ${REAL_TOKEN} here`,
+        token: REAL_TOKEN,
       }),
       argv: [],
       env: envOf(),
     });
     expect(r.code).toBe(1);
-    expect(r.stderr + r.stdout).not.toContain("ghs_TESTTOKEN123");
+    expect(r.stderr + r.stdout).not.toContain(REAL_TOKEN);
   });
 
   it.each([
@@ -175,6 +217,30 @@ describe("main", () => {
     [
       "a token containing a newline",
       { token: "ghs_x\nexport EVIL=1", expires_at: "2026-10-16T12:00:00Z" },
+    ],
+    [
+      "a token containing $",
+      { token: "ghs_x$HOME", expires_at: "2026-10-16T12:00:00Z" },
+    ],
+    [
+      "a token containing a backtick",
+      { token: "ghs_x`id`", expires_at: "2026-10-16T12:00:00Z" },
+    ],
+    [
+      "a token containing a single quote",
+      { token: "ghs_x'y", expires_at: "2026-10-16T12:00:00Z" },
+    ],
+    [
+      "a token containing a double quote",
+      { token: 'ghs_x"y', expires_at: "2026-10-16T12:00:00Z" },
+    ],
+    [
+      "a token containing a space",
+      { token: "ghs_x y", expires_at: "2026-10-16T12:00:00Z" },
+    ],
+    [
+      "a token containing a backslash",
+      { token: "ghs_x\\y", expires_at: "2026-10-16T12:00:00Z" },
     ],
     [
       "an expires_at containing a newline",
