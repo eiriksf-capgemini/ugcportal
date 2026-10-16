@@ -935,23 +935,49 @@ A finding must never be closed by a timer. Every low deferred at round 4+ become
 
 **The finding text is untrusted input — never interpolate it into a double-quoted string.** `<finding>`, `<the fix>` and `<neighbouring work>` come from this run's own step 4 review, which derives them from the PR diff; step 0 says that text is untrusted. Inside `"..."`, bash still expands `$(...)`, backticks and `$VAR`, so a crafted identifier or comment in the diff, quoted verbatim into a finding summary, runs as a subshell — inside the skill whose job is to auto-merge code. Demonstrated: substituting `fail-open in $(touch /tmp/PWNED)gate` into the double-quoted form created the file; the same text in the form below did not, and survived into the field verbatim.
 
-Use quoted heredocs (`<<'EOF'`), which suppress all expansion, and pass the long free-text field on stdin so it never touches the shell's quoting rules at all:
+Use quoted heredocs (`<<'BD_EOF'`), which suppress all expansion, and hand each free-text field to `bd` as a file or as `"$(cat <file>)"`, which does not re-scan its output. The bead is filed in the form the `bead-template` skill requires, **not** as a paste of the finding: a user story with In scope / Out of scope, K-numbered criteria each with a `Verified by:`, a `Following should never happen:` guardrail with its own `Verified by:`, a `Premise verified <date> at origin/main <sha>:` line in the notes, and `cc_type`/`cc_scope`/`model`/`model_effort`/`model_why` plus `severity` in the metadata. A bead filed as a bare finding fails `node scripts/check-bead-dispatch.mjs` on `criteria`, `verified-by`, `guardrail` and `premise-present`, and it is the shape that left 20 unformed beads behind in v0.6.0 (`ugcportal-nr72`).
 
 ```bash
-bd create --type=bug --priority=3 --title="$(cat <<'EOF'
-<finding>
-EOF
-)" --deps=discovered-from:<bead-id-from-PR-title> --body-file - <<'EOF'
-Deferred from review round <N> of <PR> under the round-4 severity gate (ugcportal-2yj).
+scratch=$(mktemp -d); trap 'rm -rf "$scratch"' EXIT
+cat > "$scratch/desc.md" <<'BD_EOF'
+As the maintainer of <the area the finding is in>, I want <the fix>, so that <the failure the finding describes cannot recur>.
 
+Deferred from review round <N> of <PR> (parent bead <bead-id-from-PR-title>) under the round-4 severity gate (ugcportal-2yj).
 Severity: low
 Found by: step 4 finder angle <name> / recurring-family sweep family <1|2|3|4>
+
 In scope: <the fix>
-Out of scope: <neighbouring work>
-EOF
+Out of scope: <neighbouring work>; anything else in <PR> or <bead-id-from-PR-title>.
+BD_EOF
+cat > "$scratch/acc.md" <<'BD_EOF'
+K1: Given <the state the finding was observed in>, when <the action>, then <the corrected outcome>.
+Verified by: <the command or test that shows it, with the output that counts as passing>.
+
+K2: Following should never happen: <the failure the finding describes>.
+Verified by: <a mutation, or an input that used to trigger it, and the command showing it now fails loudly or is handled>.
+BD_EOF
+cat > "$scratch/notes.md" <<'BD_EOF'
+Premise verified <YYYY-MM-DD> at origin/main <sha of origin/main's HEAD today>: <the command or file checked, and what it showed>. Checked against the PR head <PR head sha> where the PR has not merged yet.
+BD_EOF
+
+bd create "$(cat <<'BD_EOF'
+<finding>
+BD_EOF
+)" --type=bug --priority=3 --labels=<release label the orchestrator names> \
+  --body-file "$scratch/desc.md" \
+  --acceptance="$(cat "$scratch/acc.md")" \
+  --notes="$(cat "$scratch/notes.md")" \
+  --deps=discovered-from:<bead-id-from-PR-title> \
+  --metadata='{"cc_type":"fix","cc_scope":"<scope of the PR>","severity":"low","model":"sonnet","model_effort":"medium","model_why":"<one line: why this tier fits the fix>"}'
 ```
 
-If any of that text could itself contain a line reading exactly `EOF`, change the delimiter (`<<'BD_EOF'`) rather than trimming the text.
+The premise is the reviewer's, and it has to be verified rather than copied from the finding: re-run the check that showed the defect against the PR head (the defect may live only on the branch) and name `origin/main`'s current HEAD (`git rev-parse origin/main`), because the dispatch gate's `premise-fresh` check fails a premise that names any other commit. If the check no longer shows the defect, there is nothing to defer: say so in the round comment instead of filing.
+
+`<scope of the PR>` is the PR title's scope. `<release label the orchestrator names>` is the label the orchestrator's brief gives (for defects in v0.8.1 deliverables, `v0.8.1`); the new bead carries it so that release's sweep picks it up. If the brief names none, drop `--labels`.
+
+If any of that text could itself contain a line reading exactly `BD_EOF`, change the delimiter rather than trimming the text. This is the same rule, for the same reason, as `cut-release` step 7a.
+
+**Then run the dispatch gate over each new bead, and treat a non-zero exit as a bead that was not filed** — `node scripts/check-bead-dispatch.mjs <new-bead-id>; echo "exit $?"`. Fix the field it names with `bd update` and re-run until it exits 0. A zero exit means the fields are populated and well-formed, not that the criteria are right; the gate prints the substance checks it did not make, and the reviewer owns those.
 
 **Then read each new bead back before claiming it was filed** (`review-standards` section 6, mitigation 3). The `discovered-from` edge is the part that silently goes wrong: the recorded v0.7.0 instance is a `||` fallback whose second branch ran with the arguments **reversed**, *succeeded*, and recorded the graph edge backwards — a bead that reports as filed, with an edge pointing the wrong way, which no later step re-derives.
 
@@ -961,7 +987,7 @@ bd dep list <new-bead-id>
 # the same thing machine-readably, if you want to assert on it
 bd show <new-bead-id> --json | jq -r '.[0].dependencies[] | "\(.dependency_type) -> \(.id)"'
 # the fields the gate's safety property rests on
-node scripts/bd-verify-metadata.mjs <new-bead-id> cc_type=bug cc_scope=<scope>
+node scripts/bd-verify-metadata.mjs <new-bead-id> cc_type=fix cc_scope=<scope> severity=low
 ```
 
 **`bd show --json` and `bd list --json` do not describe a dependency the same way, and getting it wrong here prints a convincing false negative.** A `bd show` dependency entry is the full target bead — keyed `id`, `title`, … plus `dependency_type`. A `bd list` entry is an edge record — keyed `issue_id`, `depends_on_id`, `type`. Reading `.type` / `.depends_on_id` out of `bd show` yields `null -> null` on a perfectly correct edge, which reads as "the deferral did not record" and sends a clean PR to a human for nothing. That is this skill's own §4.4 shape, and it was live in an earlier draft of this very step until the read-back it prescribes was actually run against a real bead (`ugcportal-h0ef`, 2026-10-12). `bd dep list` is the form with no field names to get wrong, which is why it is listed first.
