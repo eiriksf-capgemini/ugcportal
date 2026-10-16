@@ -88,6 +88,39 @@ Mandatory setup, because each item below has burned a session:
 - **a named model** on the spawn (`harness-cost-controls`); the bead's
   `model` / `model_effort` metadata is the estimate to use.
 
+The brief also names the **long-command rule** from the machine section of
+`.claude/agents/worker-*.md`: a foreground command carries an explicit
+`timeout`; a command expected to run longer than about eight minutes (the full
+suite on a cold worktree, Playwright, a cold build) is started in the
+background with its output redirected to a file and polled in-turn; a stall is
+reported with the command and the elapsed time, never waited out silently, and
+the turn does not end while the background task is still running. One example
+of each form, to paste into the brief:
+
+```bash
+# Foreground, Bash tool call with timeout: 600000 (the ceiling; the default is two minutes).
+cd /tmp/wt-<short> && VITEST_MAX_FORKS=2 VITEST_MAX_THREADS=2 npx vitest run src/lib/design
+```
+
+```bash
+# Background, Bash tool call with run_in_background: true. Output goes to a file;
+# the trailing echo records the exit status the poll below waits for.
+cd /tmp/wt-<short> && date +%s > /tmp/vitest-<bead-id>.start && VITEST_MAX_FORKS=2 VITEST_MAX_THREADS=2 npx vitest run > /tmp/vitest-<bead-id>.log 2>&1; echo "exit $?" >> /tmp/vitest-<bead-id>.log
+
+# Poll, in a foreground Bash tool call with timeout: 600000, in the same turn.
+# Bounded at nine minutes; repeat it while the byte count keeps growing, and
+# report a stall (command, elapsed time, last lines) once it stops growing.
+i=0; until grep -q '^exit ' /tmp/vitest-<bead-id>.log || [ $i -ge 54 ]; do sleep 10; i=$((i+1)); done; echo "$(( $(date +%s) - $(cat /tmp/vitest-<bead-id>.start) ))s since start, $(wc -c < /tmp/vitest-<bead-id>.log) bytes"; tail -5 /tmp/vitest-<bead-id>.log
+```
+
+The bounded `until` loop is the only in-turn poll a worker has. The Monitor
+tool is an orchestrator-side tool, not a wait available to a worker: it
+returns at once and delivers events as notifications, which a worker could
+only receive by ending its turn. The measured basis is the
+`ugcportal-fbng` catalogue: entry A19 of 2026-10-14 for the foreground
+stalls, and the 2026-10-09 B-side entry for the turns that ended on a
+background wait.
+
 And the rule that governs briefs: **never enumerate a set in a brief from
 memory**. Paste the command that produced it, or tell the implementer to
 re-derive the set and report differences.
