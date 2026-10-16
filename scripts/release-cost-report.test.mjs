@@ -16,6 +16,18 @@
  * ("two lows fixed", with an unrelated `--since` flag later in the same
  * paragraph) and PR #193's round-1 review ("one CONFIRMED low", with the
  * CSS custom property `--color-petrol-deep` later on the same line).
+ *
+ * Two suites at the end cover the cost unit and recording helper
+ * (ugcportal-cii0), with inline fixtures. "cost unit" tests costUnitOf
+ * (one unit per bead; a cost_ite_* is accepted only as a positive integer
+ * on a side not marked incomplete), the tokens_impl_convention flag,
+ * buildRows, aggregate, the per-unit review shares (pct), the tier table
+ * and the report's unit labels and Data gaps lines.
+ * "agentCostFromPasses" tests the recording rule CLAUDE.md's one-liner
+ * runs: the last notification per agent, the un-notified final pass,
+ * INCOMPLETE when a transcript is missing, the coverage checks
+ * (uncoveredByAgents, coverageIncomplete across two recordings), the
+ * INCOMPLETE note forms (formatAgentCost) and runAgentCost's arguments.
  */
 import fs from "node:fs";
 import os from "node:os";

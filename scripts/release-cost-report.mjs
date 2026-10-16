@@ -53,8 +53,9 @@
  * are about the round chain, not a cost.
  *
  * Cost unit (ugcportal-cii0): a bead is read in exactly one unit, transcript
- * cost (cost_ite_*) when it has one, else the old tokens_* context-size
- * figures, labelled "context-size, not cost"; see costUnitOf.
+ * cost (cost_ite_*) when it has an accepted one, else the old tokens_*
+ * context-size figures, labelled "context-size, not cost": a bead with no
+ * accepted cost_ite_* figure (absent, 0, malformed, or on a side marked incomplete) is read in context size; see costUnitOf.
  *
  * Per-round review figures: tokens_qa_rN holds round N's reviewer figure
  * (context size, not cost) on many beads, but this report does not read it;
@@ -1010,7 +1011,8 @@ export function outcomeOf(bead, prAnalyses, rounds) {
 //             model priced at the standard ratios; cost-performance-claims-
 //             v0.7.0 section 1.2 names two models where it overstates the
 //             cache-read part.
-//   "context" no accepted cost_ite_* figure: tokens_impl / tokens_qa, the agent's
+//   "context" no accepted cost_ite_* figure (absent, 0, malformed, or on a
+//             side marked incomplete): tokens_impl / tokens_qa, the agent's
 //             context size at its last call (same document, section 1.2).
 //             Not cost, and printed with CONTEXT_LABEL.
 //
@@ -1543,7 +1545,7 @@ export function renderReport(ctx) {
   const out = [];
   out.push(GENERATED_START);
   out.push("");
-  out.push(`_Generated ${generatedAt} by \`node scripts/release-cost-report.mjs\`; reviewer identity \`${reviewer ?? "unknown"}\`; ${prCount} PRs read via \`gh\`. Legend: \`~\` = the bead's own notes call this figure an estimate; \`(cr)\` = round count from the close reason (pre-marker PR); \`(!)\` = markers and close reason disagree, markers shown; \`rN:?\` = that round's verdict states no severity; "Lows (labels)" counts severity labels, a single \`LOW:\` label often covers several items, so it is a floor. qa/round is the QA figure divided by rounds, a crude mean (\`tokens_qa_rN\` is not read here). Unit (ugcportal-cii0): each bead is read in ONE unit — \`ITE (cost)\` from \`cost_ite_impl\`/\`cost_ite_qa\` (transcript input-token equivalents, scripts/agent-pass-cost.mjs), or \`${CONTEXT_LABEL}\` from \`tokens_impl\`/\`tokens_qa\` when the bead has no accepted \`cost_ite_*\` figure (the agent's final context size, docs/process/cost-performance-claims-v0.7.0-2026-10-16.md section 1.2); impl/qa totals, medians, and the top-five tables are ${CONTEXT_LABEL}; the tier tables carry both, ITE in its own three columns; ITE is totalled only in its own columns and rows, and the two are never added._`);
+  out.push(`_Generated ${generatedAt} by \`node scripts/release-cost-report.mjs\`; reviewer identity \`${reviewer ?? "unknown"}\`; ${prCount} PRs read via \`gh\`. Legend: \`~\` = the bead's own notes call this figure an estimate; \`(cr)\` = round count from the close reason (pre-marker PR); \`(!)\` = markers and close reason disagree, markers shown; \`rN:?\` = that round's verdict states no severity; "Lows (labels)" counts severity labels, a single \`LOW:\` label often covers several items, so it is a floor. qa/round is the QA figure divided by rounds, a crude mean (\`tokens_qa_rN\` is not read here). Unit (ugcportal-cii0): each bead is read in ONE unit — \`ITE (cost)\` from \`cost_ite_impl\`/\`cost_ite_qa\` (transcript input-token equivalents, scripts/agent-pass-cost.mjs), or \`${CONTEXT_LABEL}\` from \`tokens_impl\`/\`tokens_qa\` when the bead has no accepted \`cost_ite_*\` figure (absent, 0, malformed, or on a side marked incomplete) (the agent's final context size, docs/process/cost-performance-claims-v0.7.0-2026-10-16.md section 1.2); impl/qa totals, medians, and the top-five tables are ${CONTEXT_LABEL}; the tier tables carry both, ITE in its own three columns; ITE is totalled only in its own columns and rows, and the two are never added._`);
   out.push("");
   for (const version of releases) {
     const rows = rowsByRelease.get(version);

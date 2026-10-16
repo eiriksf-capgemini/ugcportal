@@ -609,5 +609,7 @@ in-review mechanism growth, not from picking the wrong model tier.
 ## What this does not do
 
 This file governs neither review depth nor the round-based severity gate.
-It touches no file that does — see `review-standards` and `pr-review-merge`
-for those, which are out of scope for any PR that also touches this skill.
+See `review-standards` and `pr-review-merge` for those. A change to review
+depth or the round gate is out of scope for any PR that also touches this
+skill; a change to how review cost is recorded (`pr-review-merge` step 4a)
+is not (ugcportal-cii0 changed both in one PR).

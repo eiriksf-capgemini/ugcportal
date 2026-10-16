@@ -117,7 +117,7 @@ Add a final **Total** row to each table: `Total = Impl + QA` there too, and its 
 | 🔧 Chores | — | — | — | 0/1 |
 | **Total** | **30,018,329** | **11,063,233** | **41,081,562** | **1/5** |
 
-**Context-size, not cost** (beads with no accepted `cost_ite_*` figure)
+**Context-size, not cost** (beads with no accepted `cost_ite_*` figure (absent, 0, malformed, or on a side marked incomplete))
 
 | Type | Impl | QA | Total | Beads with data |
 |---|---:|---:|---:|:---:|
