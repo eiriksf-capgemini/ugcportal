@@ -1,12 +1,19 @@
 #!/usr/bin/env node
 // Anonymous image-resolution gate for docker-compose.yml (ugcportal-vtgz).
 //
-// Usage: node scripts/check-compose-images.mjs [compose-file]
+// Usage: node scripts/check-compose-images.mjs [compose-file] [--local-image <name>]...
 //
-// For every service it classifies the image as
-//   registry          -> resolved with an anonymous token and a manifest HEAD
-//   build-local       -> the service has a `build:` key; no registry has it
-//   unresolved-var    -> the reference contains a ${...} placeholder, so it names no registry image
+// `${VAR:-default}` and `${VAR-default}` are expanded to the default before
+// classification (the operator environment is never read). For every service
+// it then classifies the image as
+//   registry              -> resolved with an anonymous token and a manifest HEAD
+//   local (build)         -> the service has a `build:` key; no registry has it
+//   local (allowlist)     -> the image name (last path segment, no tag/digest) is on the
+//                            local-image allowlist: ugcportal and ugcportal-migrate are
+//                            built locally yet carry no `build:` key. `--local-image <name>`
+//                            (repeatable) adds names to it. The allowlist is printed in the
+//                            reach line so a silent exclusion is visible.
+//   unresolved-var        -> a ${VAR} with no default remains, so it names no registry image
 // Exclusions are printed by name. Exit is non-zero on any non-200 or when
 // the set of registry images checked is empty (a gate that checked nothing
 // must not read as a pass).
@@ -53,11 +60,29 @@ export function parseServices(text) {
   return services;
 }
 
-export function classify(svc) {
-  if (svc.build) return { ...svc, kind: "build-local" };
+export const DEFAULT_LOCAL_IMAGES = ["ugcportal", "ugcportal-migrate"];
+
+// ${VAR:-default} and ${VAR-default} -> default. A ${VAR} with no default is left in place.
+export function expandDefaults(image) {
+  return image.replace(/\$\{[A-Za-z_][A-Za-z0-9_]*:?-([^}]*)\}/g, "$1");
+}
+
+// "reg.io/ns/name:tag@sha256:..." -> "name"
+export function imageName(image) {
+  const noDigest = image.split("@")[0];
+  const lastSlash = noDigest.lastIndexOf("/");
+  const base = noDigest.slice(lastSlash + 1);
+  const colon = base.indexOf(":");
+  return colon >= 0 ? base.slice(0, colon) : base;
+}
+
+export function classify(svc, localImages = DEFAULT_LOCAL_IMAGES) {
+  if (svc.build) return { ...svc, kind: "local (build)" };
   if (!svc.image) return { ...svc, kind: "no-image" };
-  if (svc.image.includes("${")) return { ...svc, kind: "unresolved-var" };
-  return { ...svc, kind: "registry" };
+  const expanded = expandDefaults(svc.image);
+  if (expanded.includes("${")) return { ...svc, kind: "unresolved-var" };
+  if (localImages.includes(imageName(expanded))) return { ...svc, kind: "local (allowlist)", image: expanded };
+  return { ...svc, kind: "registry", image: expanded };
 }
 
 // "repo[:tag][@sha256:...]" with an optional registry host first.
@@ -126,11 +151,18 @@ export async function resolveImage(image, fetchImpl) {
   }
 }
 
-export async function run({ composeText, fetchImpl = fetch, out = (s) => process.stdout.write(`${s}\n`) }) {
-  const services = parseServices(composeText).map(classify);
+export async function run({
+  composeText,
+  fetchImpl = fetch,
+  localImages = [],
+  out = (s) => process.stdout.write(`${s}\n`),
+}) {
+  const allowlist = [...new Set([...DEFAULT_LOCAL_IMAGES, ...localImages])];
+  const services = parseServices(composeText).map((svc) => classify(svc, allowlist));
   const excluded = services.filter((s) => s.kind !== "registry");
   const checked = services.filter((s) => s.kind === "registry");
   out(`compose services found: ${services.length}`);
+  out(`local-image allowlist: ${allowlist.join(", ")}`);
   for (const s of excluded) {
     out(`EXCLUDED ${s.kind}: service ${s.name} (${s.image ?? "no image"})`);
   }
@@ -162,6 +194,18 @@ function invokedDirectly() {
 }
 
 if (invokedDirectly()) {
-  const path = process.argv[2] ?? "docker-compose.yml";
-  process.exitCode = await run({ composeText: readFileSync(path, "utf8") });
+  const args = process.argv.slice(2);
+  const localImages = [];
+  const positional = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--local-image") {
+      if (!args[i + 1]) {
+        process.stderr.write("--local-image needs a name\n");
+        process.exit(2);
+      }
+      localImages.push(args[++i]);
+    } else positional.push(args[i]);
+  }
+  const path = positional[0] ?? "docker-compose.yml";
+  process.exitCode = await run({ composeText: readFileSync(path, "utf8"), localImages });
 }

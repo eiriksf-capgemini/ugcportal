@@ -52,17 +52,76 @@ async function exec(composeText, fetchImpl) {
   return { code, lines };
 }
 
+async function exec2(composeText, fetchImpl, localImages) {
+  const lines = [];
+  const code = await run({ composeText, fetchImpl, localImages, out: (s) => lines.push(s) });
+  return { code, lines };
+}
+
 describe("check-compose-images", () => {
   it("excludes build-local and ${VAR} images by name and checks only the registry image", async () => {
     const { fetchImpl, calls } = stub(() => 200);
     const { code, lines } = await exec(ONE_OF_EACH, fetchImpl);
     expect(code).toBe(0);
-    expect(lines).toContain("EXCLUDED build-local: service builder (local-built:latest)");
+    expect(lines).toContain("EXCLUDED local (build): service builder (local-built:latest)");
     expect(lines).toContain("EXCLUDED unresolved-var: service app (ugcportal:${TAG})");
     const manifestCalls = calls.filter((c) => c.url.includes("/manifests/"));
     expect(manifestCalls).toHaveLength(1);
     expect(manifestCalls[0].url).toBe("https://registry-1.docker.io/v2/library/redis/manifests/7");
     expect(lines.some((l) => l.startsWith("OK   200 redis:7"))).toBe(true);
+  });
+
+  it("K1: expands ${VAR:-default} and ${VAR-default} and HEADs the expanded manifest", async () => {
+    for (const form of ["${TAG:-1.2}", "${TAG-1.2}"]) {
+      const { fetchImpl, calls } = stub(() => 200);
+      const { code, lines } = await exec(`services:\n  app:\n    image: quay.io/example/app:${form}\n`, fetchImpl);
+      expect(code).toBe(0);
+      const heads = calls.filter((c) => c.method === "HEAD");
+      expect(heads).toHaveLength(1);
+      expect(heads[0].url).toBe("https://quay.io/v2/example/app/manifests/1.2");
+      expect(lines.some((l) => l.startsWith("OK   200 quay.io/example/app:1.2"))).toBe(true);
+    }
+  });
+
+  it("K2: a no-default variable stays unresolved-var, printed by name", async () => {
+    const { fetchImpl, calls } = stub(() => 200);
+    const { lines } = await exec(
+      "services:\n  cache:\n    image: redis:7\n  app:\n    image: example/app:${TAG}\n",
+      fetchImpl,
+    );
+    expect(lines).toContain("EXCLUDED unresolved-var: service app (example/app:${TAG})");
+    expect(calls.filter((c) => c.url.includes("example/app"))).toHaveLength(0);
+  });
+
+  it("K2/K4: the real docker-compose.yml excludes both ugcportal images as local, prints the allowlist, checks the registry images", async () => {
+    const { readFileSync } = await import("node:fs");
+    const composeText = readFileSync(new URL("../docker-compose.yml", import.meta.url), "utf8");
+    const { fetchImpl, calls } = stub(() => 200);
+    const { code, lines } = await exec(composeText, fetchImpl);
+    expect(code).toBe(0);
+    expect(lines).toContain("local-image allowlist: ugcportal, ugcportal-migrate");
+    expect(lines.filter((l) => l.startsWith("EXCLUDED local (allowlist): service "))).toHaveLength(2);
+    expect(lines.filter((l) => l.startsWith("OK   200 "))).toHaveLength(2);
+    expect(lines.some((l) => l.includes("registry images checked: 2, excluded: 2, failed: 0"))).toBe(true);
+    expect(calls.filter((c) => c.method === "HEAD")).toHaveLength(2);
+    expect(calls.some((c) => /ugcportal/.test(c.url))).toBe(false);
+  });
+
+  it("K3: --local-image foo excludes foo:${TAG:-1} with no request for it", async () => {
+    const compose = "services:\n  cache:\n    image: redis:7\n  f:\n    image: foo:${TAG:-1}\n";
+    const { fetchImpl, calls } = stub(() => 200);
+    const { lines } = await exec2(compose, fetchImpl, ["foo"]);
+    expect(lines).toContain("EXCLUDED local (allowlist): service f (foo:1)");
+    expect(lines).toContain("local-image allowlist: ugcportal, ugcportal-migrate, foo");
+    expect(calls.filter((c) => c.url.includes("/foo/"))).toHaveLength(0);
+  });
+
+  it("K3: without the flag foo:${TAG:-1} is resolved as foo:1", async () => {
+    const compose = "services:\n  f:\n    image: foo:${TAG:-1}\n";
+    const { fetchImpl, calls } = stub(() => 200);
+    await exec(compose, fetchImpl);
+    const heads = calls.filter((c) => c.method === "HEAD");
+    expect(heads.map((c) => c.url)).toEqual(["https://registry-1.docker.io/v2/library/foo/manifests/1"]);
   });
 
   it("fails non-zero when every image is excluded", async () => {
