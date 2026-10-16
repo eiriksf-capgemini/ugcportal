@@ -52,9 +52,15 @@
  * marks both. Plain "chain approx" sentences do not mark anything -- they
  * are about the round chain, not a cost.
  *
- * Per-round review cost is NOT recorded anywhere: tokens_qa accumulates
- * across rounds on the bead. The per-round column is tokens_qa / rounds, a
- * crude mean, and is labelled as such.
+ * Cost unit (ugcportal-cii0): a bead is read in exactly one unit, transcript
+ * cost (cost_ite_*) when it has an accepted one, else the old tokens_*
+ * context-size figures, labelled "context-size, not cost": a bead with no
+ * accepted cost_ite_* figure (absent, 0, malformed, or on a side marked incomplete) is read in context size; see costUnitOf.
+ *
+ * Per-round review figures: tokens_qa_rN holds round N's reviewer figure
+ * (context size, not cost) on many beads, but this report does not read it;
+ * the per-round column is the bead's QA figure / rounds, a crude mean, and
+ * is labelled as such.
  *
  * Usage:
  *   node scripts/release-cost-report.mjs [options]
@@ -107,6 +113,11 @@ export function median(values) {
 /** @param {number[]} values */
 export function sum(values) {
   return values.filter((v) => Number.isFinite(v)).reduce((a, b) => a + b, 0);
+}
+
+/** `NN%`, or `—` when the denominator is zero or not a number. */
+export function pct(part, whole) {
+  return Number.isFinite(whole) && whole > 0 ? `${Math.round((100 * part) / whole)}%` : "—";
 }
 
 export function fmt(n) {
@@ -989,6 +1000,219 @@ export function outcomeOf(bead, prAnalyses, rounds) {
   return "merged";
 }
 
+// --- cost unit (ugcportal-cii0) -------------------------------------------
+//
+// A bead carries its cost in exactly ONE of two units, and this is the one
+// place that decides which (CLAUDE.md > "Token cost metadata"):
+//
+//   "ite"     transcript-derived cost: cost_ite_impl / cost_ite_qa, input-token
+//             equivalents summed over every API call of every agent, from
+//             scripts/agent-pass-cost.mjs. Proportional to price only for a
+//             model priced at the standard ratios; cost-performance-claims-
+//             v0.7.0 section 1.2 names two models where it overstates the
+//             cache-read part.
+//   "context" no accepted cost_ite_* figure (absent, 0, malformed, or on a
+//             side marked incomplete): tokens_impl / tokens_qa, the agent's
+//             context size at its last call (same document, section 1.2).
+//             Not cost, and printed with CONTEXT_LABEL.
+//
+// Only a positive integer counts as an ITE figure. A cost_ite_* key that is
+// 0, negative, fractional or non-numeric is not one (a 0 is what a transcript
+// sum over agents with no transcript yields, and must not print as a measured
+// zero cost): it is listed in `iteRejected`, shown under Data gaps, and the
+// bead falls back to its context-size figures. Nor is a cost_ite_* on a side
+// whose coverage is marked incomplete (coverageIncomplete below): that value
+// survives from an earlier complete recording that a later INCOMPLETE one
+// left behind, so it misses at least the later agents. It is listed in
+// `iteIncomplete` and shown under Data gaps. A bead with at least one
+// accepted ITE figure is read in "ite" and its tokens_* are not read at all,
+// so no row and no total ever adds one unit to the other.
+//
+// tokens_impl_convention is normalised (trimmed, lower-cased, `_` read as
+// `-`). Absent or `last-per-agent` counts tokens_impl; `summed-snapshots`
+// flags a value that added one resumed agent's cumulative snapshots and is
+// not counted; any other value is unknown and is not counted either. Both
+// exclusions are listed under Data gaps.
+
+export const CONTEXT_LABEL = "context-size, not cost";
+export const SUMMED_SNAPSHOTS = "summed-snapshots";
+export const LAST_PER_AGENT = "last-per-agent";
+
+/** A positive integer, or null for anything else (0, "abc", 1.5, absent). */
+export function positiveInt(v) {
+  const n = toInt(v);
+  return n !== null && Number.isInteger(n) && n > 0 ? n : null;
+}
+
+export function normaliseConvention(v) {
+  if (v === null || v === undefined) return null;
+  return String(v).trim().toLowerCase().replace(/_/g, "-");
+}
+
+export const ALL_PRESENT = "all transcripts present";
+
+/**
+ * Whether the bead records that `side`'s cost coverage is incomplete: a
+ * `cost_coverage_<side>` key with any non-empty value (the INCOMPLETE
+ * recording writes it; only a human who has backfilled every earlier agent
+ * id removes it), or a `cost_note_<side>` that does not begin with
+ * "all transcripts present" (what a complete recording writes). Returns the
+ * key that marks it, or null. This is the state that makes the coverage
+ * check hold across recordings (ugcportal-cii0 M3): an INCOMPLETE recording
+ * writes the agents it knows of into cost_agents_<side>, which would
+ * otherwise read on the next recording as a list covering the whole figure.
+ */
+export function coverageIncomplete(meta, side) {
+  const filled = (v) => v !== undefined && v !== null && String(v).trim() !== "";
+  if (filled(meta[`cost_coverage_${side}`])) return `cost_coverage_${side}`;
+  const note = meta[`cost_note_${side}`];
+  if (filled(note) && !String(note).trim().toLowerCase().startsWith(ALL_PRESENT)) return `cost_note_${side}`;
+  return null;
+}
+
+export function costUnitOf(meta = {}) {
+  const iteRejected = [];
+  const iteIncomplete = [];
+  const ite = {};
+  for (const side of ["impl", "qa"]) {
+    const key = `cost_ite_${side}`;
+    const present = meta[key] !== undefined && meta[key] !== null && meta[key] !== "";
+    ite[side] = positiveInt(meta[key]);
+    if (present && ite[side] === null) iteRejected.push(`${key}=${meta[key]}`);
+    const marked = coverageIncomplete(meta, side);
+    if (ite[side] !== null && marked) {
+      iteIncomplete.push(`${key}=${meta[key]}, ${marked}`);
+      ite[side] = null;
+    }
+  }
+  const base = { implSummedExcluded: false, implConventionUnknown: null, iteRejected, iteIncomplete };
+  if (ite.impl !== null || ite.qa !== null) return { ...base, unit: "ite", impl: ite.impl, qa: ite.qa };
+  const ctxImpl = toInt(meta.tokens_impl);
+  const ctxQa = toInt(meta.tokens_qa);
+  if (ctxImpl === null && ctxQa === null) return { ...base, unit: null, impl: null, qa: null };
+  const conv = normaliseConvention(meta.tokens_impl_convention);
+  const summed = ctxImpl !== null && conv === SUMMED_SNAPSHOTS;
+  const unknown = ctxImpl !== null && conv !== null && conv !== SUMMED_SNAPSHOTS && conv !== LAST_PER_AGENT ? String(meta.tokens_impl_convention) : null;
+  return { ...base, unit: "context", impl: summed || unknown !== null ? null : ctxImpl, qa: ctxQa, implSummedExcluded: summed, implConventionUnknown: unknown };
+}
+
+/**
+ * The recording rule, applied to scripts/agent-pass-cost.mjs --json rows for
+ * a list of agent ids (CLAUDE.md > "Token cost metadata" runs this through a
+ * one-liner). Per agent:
+ *   ctx  = its LAST notification's figure; when the agent has more passes
+ *          than notifications (its final pass got none), the final pass's
+ *          ctxEnd from the transcript instead -- the same quantity (section
+ *          1.2). Summed over distinct agents: the value for tokens_impl/_qa.
+ *   ite, calls = summed over every pass of every agent.
+ * `complete` is false when any listed agent has no transcript row, or --
+ * given the bead's current metadata and the side -- when the list does not
+ * cover what the bead already records (`uncoveredFigures`):
+ *   - a side an earlier recording marked incomplete (coverageIncomplete:
+ *     "marked incomplete by <key>"), whatever the list now holds;
+ *   - an agent already in cost_agents_<side> that the list drops ("dropped <id>");
+ *   - for qa, any tokens_qa_rN with no tokens_qa_rN_agent ("rN": a round
+ *     recorded before agent ids were kept), or whose agent id is recorded but
+ *     not in the list ("rN unlisted");
+ *   - a tokens_<side> recorded with no cost_agents_<side> at all.
+ * Then ite, calls and ctx are all null: a sum over the agents that have a
+ * transcript, or over only the newest agent, is partial, and over none it
+ * is a 0 that would read as a measured zero. Write cost_note_* naming
+ * `missing` / `uncoveredFigures` and cost_coverage_<side> (`marker`)
+ * instead of any cost_ite_* key, unset any cost_ite_* and cost_calls_*
+ * already there, and do not overwrite tokens_<side>.
+ */
+export function agentCostFromPasses(rows, agentIds, { meta = null, side = null } = {}) {
+  const want = [...new Set(agentIds.filter(Boolean))];
+  const byAgent = new Map(want.map((id) => [id, []]));
+  for (const r of rows) if (byAgent.has(r.agentId)) byAgent.get(r.agentId).push(r);
+  const missing = want.filter((id) => byAgent.get(id).length === 0);
+  const passes = [...byAgent.values()].reduce((a, rs) => a + rs.length, 0);
+  const uncoveredFigures = meta ? uncoveredByAgents(meta, side, want) : [];
+  const complete = want.length > 0 && missing.length === 0 && uncoveredFigures.length === 0;
+  const marker = meta && side ? String(meta[`cost_coverage_${side}`] ?? "").trim() || null : null;
+  if (!complete) return { complete, side, marker, agents: want.length, passes, missing, uncoveredFigures, ite: null, calls: null, ctx: null };
+  let ite = 0, calls = 0, ctx = 0;
+  for (const rs of byAgent.values()) {
+    const sorted = rs.slice().sort((a, b) => a.pass - b.pass);
+    const notified = sorted[0].notified ?? [];
+    ctx += notified.length >= sorted.length ? notified[notified.length - 1] : sorted[sorted.length - 1].ctxEnd;
+    for (const r of sorted) { ite += r.ite; calls += r.calls; }
+  }
+  return { complete, side, marker, agents: want.length, passes, missing, uncoveredFigures, ite, calls, ctx };
+}
+
+/** What `meta` already records for `side` that the agent list `ids` does not cover. */
+export function uncoveredByAgents(meta, side, ids) {
+  if (side !== "impl" && side !== "qa") throw new Error(`side must be impl or qa, got ${side}`);
+  const listed = new Set(ids);
+  const out = [];
+  const marked = coverageIncomplete(meta, side);
+  if (marked) out.push(`marked incomplete by ${marked}`);
+  const recorded = String(meta[`cost_agents_${side}`] ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+  for (const id of recorded) if (!listed.has(id)) out.push(`dropped ${id}`);
+  let rounds = [];
+  if (side === "qa") {
+    rounds = Object.keys(meta).map((k) => /^tokens_qa_r(\d+)$/.exec(k)?.[1]).filter(Boolean).sort((x, y) => Number(x) - Number(y));
+    for (const n of rounds) {
+      const agent = meta[`tokens_qa_r${n}_agent`];
+      if (!agent || !String(agent).trim()) out.push(`r${n}`);
+      else if (!listed.has(String(agent).trim())) out.push(`r${n} unlisted`);
+    }
+  }
+  // A figure with neither an agent list nor per-round keys to check it against.
+  if (toInt(meta[`tokens_${side}`]) !== null && recorded.length === 0 && rounds.length === 0) {
+    out.push(`tokens_${side} recorded before cost_agents_${side}`);
+  }
+  return out;
+}
+
+export function formatAgentCost(c) {
+  if (!c.complete) {
+    const uncovered = c.uncoveredFigures ?? [];
+    const dropped = uncovered.filter((u) => u.startsWith("dropped ")).map((u) => u.slice(8));
+    const noId = uncovered.filter((u) => /^r\d+$/.test(u));
+    const unlisted = uncovered.filter((u) => /^r\d+ unlisted$/.test(u)).map((u) => u.split(" ")[0]);
+    const marked = uncovered.filter((u) => u.startsWith("marked incomplete by ")).map((u) => u.slice(21));
+    const preRule = uncovered.filter((u) => / recorded before cost_agents_/.test(u));
+    const why = [
+      c.missing.length ? `missing: ${c.missing.join(",")}` : "",
+      marked.length ? `marked incomplete by an earlier recording: ${marked.join(",")}` : "",
+      noId.length ? `rounds without agent ids: ${noId.join(", ")}` : "",
+      unlisted.length ? `rounds whose agents are not in the list: ${unlisted.join(", ")}` : "",
+      dropped.length ? `recorded agents dropped from the list: ${dropped.join(",")}` : "",
+      preRule.length ? preRule.join("; ") : "",
+    ].filter(Boolean).join("; ") || "no agents listed";
+    const s = c.side ?? "<side>";
+    // An existing marker is kept as it is: only a human who backfilled clears it.
+    const marker = c.marker ?? `incomplete: ${why}`;
+    return `INCOMPLETE agents=${c.agents} passes=${c.passes} missing=${c.missing.join(",") || "none"} uncovered=${uncovered.join(",") || "none"} -- write no cost_ite_*/cost_calls_* and unset any already there, do not overwrite tokens_* from this; set cost_note_${s} to "${why}" and cost_coverage_${s} to "${marker}"`;
+  }
+  return `ite=${c.ite} calls=${c.calls} ctx=${c.ctx} agents=${c.agents} passes=${c.passes} missing=none uncovered=none`;
+}
+
+/**
+ * What CLAUDE.md's one-liner calls: `passesPath` is agent-pass-cost.mjs
+ * --json output, `ids` the comma-separated agent list, `beadPath` a saved
+ * `bd show <id> --json`, `side` impl or qa. Every argument is required, so
+ * the coverage check above cannot be skipped by leaving one out.
+ */
+export function runAgentCost(passesPath, ids, beadPath, side) {
+  if (!passesPath || !ids || !beadPath || !side) throw new Error("usage: runAgentCost(<passes.json>, <id,id>, <bd show --json file>, impl|qa)");
+  const rows = JSON.parse(fs.readFileSync(passesPath, "utf8"));
+  const shown = JSON.parse(fs.readFileSync(beadPath, "utf8"));
+  const bead = Array.isArray(shown) ? shown[0] : shown;
+  if (!bead || typeof bead !== "object") throw new Error(`${beadPath}: no bead in that file`);
+  return formatAgentCost(agentCostFromPasses(rows, ids.split(","), { meta: bead.metadata ?? {}, side }));
+}
+
+/** The unit label printed beside a bead's figures. */
+export function unitLabel(unit) {
+  if (unit === "ite") return "ITE (cost)";
+  if (unit === "context") return CONTEXT_LABEL;
+  return "—";
+}
+
 export function buildRows(release, beadsById, prAnalysesByNumber) {
   const rows = [];
   for (const id of release.ids) {
@@ -998,8 +1222,14 @@ export function buildRows(release, beadsById, prAnalysesByNumber) {
     const prs = parsePrs(meta.prs);
     const prAnalyses = prs.map((n) => prAnalysesByNumber.get(n)).filter(Boolean);
     const est = estimateFlags(`${bead?.notes ?? ""}\n${bead?.close_reason ?? ""}`);
-    const impl = toInt(meta.tokens_impl);
-    const qa = toInt(meta.tokens_qa);
+    // One unit per bead: `impl`/`qa` hold the context-size figures and
+    // `iteImpl`/`iteQa` the transcript cost, and a row fills only one pair,
+    // so every existing sum below stays within its unit by construction.
+    const cost = costUnitOf(meta);
+    const impl = cost.unit === "context" ? cost.impl : null;
+    const qa = cost.unit === "context" ? cost.qa : null;
+    const iteImpl = cost.unit === "ite" ? cost.impl : null;
+    const iteQa = cost.unit === "ite" ? cost.qa : null;
     const markerRounds = prAnalyses.filter((p) => p.rounds.length > 0);
     const closeRounds = parseRoundsFromCloseReason(bead?.close_reason ?? "");
     let rounds = null;
@@ -1027,8 +1257,16 @@ export function buildRows(release, beadsById, prAnalysesByNumber) {
       tier: tierOf(bead ?? {}),
       effort: meta.model_effort ?? null,
       modelWhy: meta.model_why ?? null,
+      unit: cost.unit,
+      implSummedExcluded: cost.implSummedExcluded,
+      implConventionUnknown: cost.implConventionUnknown,
+      iteRejected: cost.iteRejected,
+      iteIncomplete: cost.iteIncomplete,
       impl,
       qa,
+      iteImpl,
+      iteQa,
+      iteTotal: iteImpl === null && iteQa === null ? null : (iteImpl ?? 0) + (iteQa ?? 0),
       implEstimated: est.impl,
       qaEstimated: est.qa,
       estimateReasons: est.reasons,
@@ -1077,7 +1315,15 @@ export function aggregate(rows) {
     n: rows.length,
     nImpl: impl.length,
     nQa: qa.length,
-    nAny: rows.filter((r) => r.impl !== null || r.qa !== null).length,
+    nAny: rows.filter((r) => r.impl !== null || r.qa !== null || r.iteTotal != null).length,
+    // Transcript cost (ITE), summed only over rows read in that unit; the
+    // impl/qa/grand totals above and below are context-size only (cii0).
+    nIte: rows.filter((r) => r.iteTotal != null).length,
+    iteImplTotal: sum(rows.map((r) => r.iteImpl ?? null)),
+    iteQaTotal: sum(rows.map((r) => r.iteQa ?? null)),
+    iteGrandTotal: sum(rows.map((r) => r.iteImpl ?? null)) + sum(rows.map((r) => r.iteQa ?? null)),
+    nContext: rows.filter((r) => r.unit === "context").length,
+    nSummedExcluded: rows.filter((r) => r.implSummedExcluded).length,
     implTotal: sum(impl),
     qaTotal: sum(qa),
     grandTotal: sum(impl) + sum(qa),
@@ -1128,6 +1374,11 @@ export function tierPerformance(rows) {
       implMedian: median(impl),
       mediums: sum(group.map((r) => r.mediums)),
       perRoundMedian: median(group.map((r) => r.perRound).filter((v) => v !== null)),
+      // The calibration signal (CLAUDE.md > "Model-fit metadata"), in its own
+      // columns: never added to the context-size columns above.
+      nIte: group.filter((r) => r.iteTotal != null).length,
+      iteTotal: sum(group.map((r) => r.iteTotal ?? null)),
+      iteMedian: median(group.map((r) => r.iteTotal).filter((v) => v != null)),
     });
   }
   const order = ["haiku", "sonnet", "opus", "fable", "(none)"];
@@ -1142,18 +1393,21 @@ function mdTable(headers, rows) {
 }
 
 function renderReleaseTable(rows) {
-  const headers = ["Bead", "Type", "Scope", "Tier/effort", "tokens_impl", "tokens_qa", "Total", "PRs", "Rounds", "Chain", "Mediums by round", "Lows (labels)", "qa/round", "Outcome (heuristic)"];
+  const headers = ["Bead", "Type", "Scope", "Tier/effort", "Impl", "QA", "Total", "Unit", "PRs", "Rounds", "Chain", "Mediums by round", "Lows (labels)", "qa/round", "Outcome (heuristic)"];
+  // Rows are ranked within their unit (ITE first), never across units.
+  const unitRank = (r) => (r.unit === "ite" ? 0 : r.unit === "context" ? 1 : 2);
   const body = rows
     .slice()
-    .sort((a, b) => (b.total ?? -1) - (a.total ?? -1))
+    .sort((a, b) => unitRank(a) - unitRank(b) || ((b.unit === "ite" ? b.iteTotal : b.total) ?? -1) - ((a.unit === "ite" ? a.iteTotal : a.total) ?? -1))
     .map((r) => [
       `\`${r.id.replace("ugcportal-", "")}\``,
       r.ccType ?? "—",
       r.scope ?? "—",
       r.tier ? `${r.tier}/${r.effort ?? "?"}` : "—",
-      fmtTokens(r.impl, r.implEstimated),
-      fmtTokens(r.qa, r.qaEstimated),
-      fmtTokens(r.total, r.implEstimated || r.qaEstimated),
+      r.unit === "ite" ? fmt(r.iteImpl) : r.implSummedExcluded ? "excluded (summed snapshots)" : fmtTokens(r.impl, r.implEstimated),
+      r.unit === "ite" ? fmt(r.iteQa) : fmtTokens(r.qa, r.qaEstimated),
+      r.unit === "ite" ? fmt(r.iteTotal) : fmtTokens(r.total, r.implEstimated || r.qaEstimated),
+      unitLabel(r.unit),
       r.prs.length ? r.prs.map((n) => `#${n}`).join(", ") : "—",
       r.rounds === null ? "—" : `${r.rounds}${r.roundsSource === "close reason" ? " (cr)" : r.roundsSource.startsWith("markers (") ? " (!)" : ""}`,
       r.chain,
@@ -1166,7 +1420,7 @@ function renderReleaseTable(rows) {
 }
 
 function renderAggregateTable(name, rows) {
-  const headers = ["Group", "Beads", "with impl", "with qa", "impl total", "qa total", "Total", "impl median", "qa median", "Rounds median (n)", "At cap", "Mediums stated"];
+  const headers = ["Group", "Beads", "with impl", "with qa", "impl total", "qa total", "Total", "impl median", "qa median", "ITE total (beads)", "Rounds median (n)", "At cap", "Mediums stated"];
   const line = (label, agg) => [
     label,
     String(agg.n),
@@ -1177,6 +1431,7 @@ function renderAggregateTable(name, rows) {
     fmt(agg.grandTotal),
     fmt(agg.implMedian),
     fmt(agg.qaMedian),
+    agg.nIte ? `${fmt(agg.iteGrandTotal)} (${agg.nIte})` : "—",
     `${fmt(agg.roundsMedian)} (${agg.roundsN})`,
     String(agg.capCount),
     String(agg.mediums),
@@ -1191,7 +1446,7 @@ function renderAggregateTable(name, rows) {
 }
 
 function renderTierTable(rows) {
-  const headers = ["Tier", "Beads", "with rounds", "Passed in ≤2 rounds", "Reached cap (≥6)", "Rounds median", "qa total", "qa median", "impl total", "impl median", "Mediums stated", "qa/round median"];
+  const headers = ["Tier", "Beads", "with rounds", "Passed in ≤2 rounds", "Reached cap (≥6)", "Rounds median", "qa total", "qa median", "impl total", "impl median", "Mediums stated", "qa/round median", "ITE beads", "ITE total", "ITE median"];
   const body = tierPerformance(rows).map((t) => [
     t.tier,
     String(t.n),
@@ -1205,6 +1460,9 @@ function renderTierTable(rows) {
     fmt(t.implMedian),
     String(t.mediums),
     fmt(t.perRoundMedian),
+    String(t.nIte),
+    t.nIte ? fmt(t.iteTotal) : "—",
+    t.nIte ? fmt(t.iteMedian) : "—",
   ]);
   return mdTable(headers, body);
 }
@@ -1246,8 +1504,11 @@ function renderMembershipChecks(checks) {
 function renderDataGaps(rowsByRelease, prAnalysesByNumber, unmerged) {
   const lines = [];
   for (const [version, rows] of rowsByRelease) {
-    const noImpl = rows.filter((r) => r.impl === null).map((r) => r.id.replace("ugcportal-", ""));
-    const noQa = rows.filter((r) => r.qa === null).map((r) => r.id.replace("ugcportal-", ""));
+    // "In the bead's unit": an ITE bead with tokens_qa but no cost_ite_qa has
+    // no QA figure here, and is listed with its unit so that reads right.
+    const unitOf = (r) => `${r.id.replace("ugcportal-", "")} (${r.unit ?? "none"})`;
+    const noImpl = rows.filter((r) => r.impl === null && r.iteImpl == null && !r.implSummedExcluded && !r.implConventionUnknown).map(unitOf);
+    const noQa = rows.filter((r) => r.qa === null && r.iteQa == null).map(unitOf);
     const noRounds = rows.filter((r) => r.prs.length && r.rounds === null).map((r) => r.id.replace("ugcportal-", ""));
     const noPr = rows.filter((r) => !r.prs.length).map((r) => r.id.replace("ugcportal-", ""));
     const crRounds = rows.filter((r) => r.roundsSource === "close reason").map((r) => r.id.replace("ugcportal-", ""));
@@ -1256,8 +1517,16 @@ function renderDataGaps(rowsByRelease, prAnalysesByNumber, unmerged) {
     const broken = rows.filter((r) => /broken/.test(r.chain)).map((r) => `${r.id.replace("ugcportal-", "")} ${r.chain}`);
     const missing = rows.filter((r) => r.missingBead).map((r) => r.id);
     lines.push(`- **${version}**`);
-    lines.push(`  - no \`tokens_impl\` (${noImpl.length}): ${noImpl.join(", ") || "—"}`);
-    lines.push(`  - no \`tokens_qa\` (${noQa.length}): ${noQa.join(", ") || "—"}`);
+    lines.push(`  - no impl figure in the bead's unit (${noImpl.length}): ${noImpl.join(", ") || "—"}`);
+    lines.push(`  - no QA figure in the bead's unit (${noQa.length}): ${noQa.join(", ") || "—"}`);
+    const rejected = rows.filter((r) => r.iteRejected?.length).map((r) => `${r.id.replace("ugcportal-", "")} (${r.iteRejected.join(", ")})`);
+    if (rejected.length) lines.push(`  - \`cost_ite_*\` not a positive integer, not read as ITE (${rejected.length}): ${rejected.join("; ")}`);
+    const stale = rows.filter((r) => r.iteIncomplete?.length).map((r) => `${r.id.replace("ugcportal-", "")} (${r.iteIncomplete.join("; ")})`);
+    if (stale.length) lines.push(`  - \`cost_ite_*\` on a side whose coverage is marked incomplete, not read as ITE (${stale.length}): ${stale.join("; ")}`);
+    const unknownConv = rows.filter((r) => r.implConventionUnknown).map((r) => `${r.id.replace("ugcportal-", "")} (${r.implConventionUnknown})`);
+    if (unknownConv.length) lines.push(`  - \`tokens_impl\` not counted, unknown \`tokens_impl_convention\` (${unknownConv.length}): ${unknownConv.join("; ")}`);
+    const summedOut = rows.filter((r) => r.implSummedExcluded).map((r) => r.id.replace("ugcportal-", ""));
+    if (summedOut.length) lines.push(`  - \`tokens_impl\` not counted, flagged \`tokens_impl_convention=${SUMMED_SNAPSHOTS}\` (${summedOut.length}): ${summedOut.join(", ")}`);
     lines.push(`  - no PR in \`prs\` (${noPr.length}): ${noPr.join(", ") || "—"}`);
     lines.push(`  - PR but no round count from markers or close reason (${noRounds.length}): ${noRounds.join(", ") || "—"}`);
     lines.push(`  - round count from the close reason, not markers (${crRounds.length}): ${crRounds.join(", ") || "—"}`);
@@ -1276,7 +1545,7 @@ export function renderReport(ctx) {
   const out = [];
   out.push(GENERATED_START);
   out.push("");
-  out.push(`_Generated ${generatedAt} by \`node scripts/release-cost-report.mjs\`; reviewer identity \`${reviewer ?? "unknown"}\`; ${prCount} PRs read via \`gh\`. Legend: \`~\` = the bead's own notes call this figure an estimate; \`(cr)\` = round count from the close reason (pre-marker PR); \`(!)\` = markers and close reason disagree, markers shown; \`rN:?\` = that round's verdict states no severity; "Lows (labels)" counts severity labels, a single \`LOW:\` label often covers several items, so it is a floor. qa/round is tokens_qa divided by rounds, a crude mean, because per-round cost is not recorded._`);
+  out.push(`_Generated ${generatedAt} by \`node scripts/release-cost-report.mjs\`; reviewer identity \`${reviewer ?? "unknown"}\`; ${prCount} PRs read via \`gh\`. Legend: \`~\` = the bead's own notes call this figure an estimate; \`(cr)\` = round count from the close reason (pre-marker PR); \`(!)\` = markers and close reason disagree, markers shown; \`rN:?\` = that round's verdict states no severity; "Lows (labels)" counts severity labels, a single \`LOW:\` label often covers several items, so it is a floor. qa/round is the QA figure divided by rounds, a crude mean (\`tokens_qa_rN\` is not read here). Unit (ugcportal-cii0): each bead is read in ONE unit — \`ITE (cost)\` from \`cost_ite_impl\`/\`cost_ite_qa\` (transcript input-token equivalents, scripts/agent-pass-cost.mjs), or \`${CONTEXT_LABEL}\` from \`tokens_impl\`/\`tokens_qa\` when the bead has no accepted \`cost_ite_*\` figure (absent, 0, malformed, or on a side marked incomplete) (the agent's final context size, docs/process/cost-performance-claims-v0.7.0-2026-10-16.md section 1.2); impl/qa totals, medians, and the top-five tables are ${CONTEXT_LABEL}; the tier tables carry both, ITE in its own three columns; ITE is totalled only in its own columns and rows, and the two are never added._`);
   out.push("");
   for (const version of releases) {
     const rows = rowsByRelease.get(version);
@@ -1297,12 +1566,16 @@ export function renderReport(ctx) {
     ["Beads in the CHANGELOG section", ...aggs.map((a) => String(a.n))],
     ["Beads with any token figure", ...aggs.map((a) => `${a.nAny} (${Math.round((100 * a.nAny) / a.n)}%)`)],
     ["Beads with tokens_impl / tokens_qa", ...aggs.map((a) => `${a.nImpl} / ${a.nQa}`)],
-    ["tokens_impl total (lower bound)", ...aggs.map((a) => fmt(a.implTotal))],
-    ["tokens_qa total (lower bound)", ...aggs.map((a) => fmt(a.qaTotal))],
-    ["Grand total (lower bound)", ...aggs.map((a) => fmt(a.grandTotal))],
+    ["tokens_impl total (context-size, not cost)", ...aggs.map((a) => fmt(a.implTotal))],
+    ["tokens_qa total (context-size, not cost)", ...aggs.map((a) => fmt(a.qaTotal))],
+    ["Grand total (context-size, not cost)", ...aggs.map((a) => fmt(a.grandTotal))],
+    ["Beads read as transcript cost (ITE) / as context-size", ...aggs.map((a) => `${a.nIte} / ${a.nContext}`)],
+    ["ITE total, impl / qa / both (transcript cost)", ...aggs.map((a) => (a.nIte ? `${fmt(a.iteImplTotal)} / ${fmt(a.iteQaTotal)} / ${fmt(a.iteGrandTotal)}` : "—"))],
+    ["tokens_impl excluded as summed snapshots", ...aggs.map((a) => String(a.nSummedExcluded))],
     ["tokens_impl median (beads with a figure)", ...aggs.map((a) => fmt(a.implMedian))],
     ["tokens_qa median (beads with a figure)", ...aggs.map((a) => fmt(a.qaMedian))],
-    ["Review share of recorded cost", ...aggs.map((a) => `${Math.round((100 * a.qaTotal) / a.grandTotal)}%`)],
+    ["Review share of context-size (qa / impl+qa, not cost)", ...aggs.map((a) => pct(a.qaTotal, a.grandTotal))],
+    ["Review share of transcript cost (ITE)", ...aggs.map((a) => pct(a.iteQaTotal, a.iteGrandTotal))],
     ["Rounds median (beads with a count)", ...aggs.map((a) => `${fmt(a.roundsMedian)} (n=${a.roundsN})`)],
     ["Beads whose PR reached the cap (≥6 rounds)", ...aggs.map((a) => String(a.capCount))],
     ["Mediums stated in verdicts (marker PRs only, each PR once)", ...aggs.map((a) => String(a.mediums))],
@@ -1322,7 +1595,7 @@ export function renderReport(ctx) {
   out.push(renderTierTable(releases.flatMap((v) => rowsByRelease.get(v))));
   out.push("");
   for (const version of releases) {
-    out.push(`### ${version}: five most expensive beads (recorded cost, lower bound)`);
+    out.push(`### ${version}: five most expensive beads (${CONTEXT_LABEL})`);
     out.push("");
     out.push(renderTopTable(rowsByRelease.get(version)));
     out.push("");
