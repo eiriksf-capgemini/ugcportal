@@ -505,6 +505,15 @@ predicting cost, per `CLAUDE.md`'s own calibration test ("if a sonnet bead
 consistently costs what an opus bead costs, the estimate was wrong — fix the
 bead, and the guidance here")?
 
+**Unit note (ugcportal-cii0, added later).** The `tokens_impl`/`tokens_qa`
+figures quoted in this section are what the beads recorded on 2026-09-29.
+They are context-size snapshots, not cost
+(`docs/process/cost-performance-claims-v0.7.0-2026-10-16.md` section 1.2),
+and five of the beads named below (`jsc`, `t0y`, `egp`, `bdh`, `44q`) had summed
+one resumed agent's cumulative snapshots into `tokens_impl`. Those beads now
+carry the corrected per-agent value, with the figure quoted here kept in
+`tokens_impl_summed_was`; see CLAUDE.md > "Token cost metadata".
+
 Measured 2026-09-29, across the 31 closed beads carrying at least one token
 figure (`bd list --status closed --json`; re-run that query verbatim rather
 than trusting this snapshot — beads keep closing, and one, `ugcportal-2pnq`,
@@ -600,5 +609,7 @@ in-review mechanism growth, not from picking the wrong model tier.
 ## What this does not do
 
 This file governs neither review depth nor the round-based severity gate.
-It touches no file that does — see `review-standards` and `pr-review-merge`
-for those, which are out of scope for any PR that also touches this skill.
+See `review-standards` and `pr-review-merge` for those. A change to review
+depth or the round gate is out of scope for any PR that also touches this
+skill; a change to how review cost is recorded (`pr-review-merge` step 4a)
+is not (ugcportal-cii0 changed both in one PR).

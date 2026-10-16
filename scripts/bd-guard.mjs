@@ -37,7 +37,7 @@
  *
  * Also allowed inside double quotes: `$(cat <path>)` where the only argument
  * is one path token (double-quoted, single-quoted or bare, `$VAR` fine) with
- * no nested `$(`, backtick, extra word or pipe (cut-release/SKILL.md:235-236).
+ * no nested `$(`, backtick, extra word or pipe (cut-release/SKILL.md:263-264).
  * File content is not re-scanned by bash, so reading it is safe. Every other
  * `$(` is refused.
  *

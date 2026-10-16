@@ -28,6 +28,7 @@ import {
   blockedByThis,
   blockersOf,
   buildAttention,
+  humanWaitChecked,
   compareSemver,
   DASHBOARD_URL_PLACEHOLDER,
   dashboardUrl,
@@ -194,6 +195,7 @@ const RELEASE_BEADS = [
 function allSourcesOk(overrides = {}) {
   return {
     release: ok(RELEASE_BEADS),
+    labelled: ok([]),
     inProgress: ok([BEAD_H0EF, BEAD_STALE_NO_PR]),
     ready: ok([{ id: "ugcportal-74w", priority: 1, title: "Curation UI", updated_at: "2026-10-12T12:00:00Z", metadata: { cc_scope: "curation" } }]),
     blocked: ok([BLOCKED_UL2J]),
@@ -610,7 +612,7 @@ describe("renderHtml", () => {
 
   it("a down source never shows a 0 count: tiles, section headings and sidebar pills read -", () => {
     // Every list source down at once. Before the fix each of these read 0.
-    const listSources = ["inProgress", "prs", "ready", "blocked", "release", "merged", "current", "worktrees"];
+    const listSources = ["inProgress", "prs", "ready", "blocked", "release", "labelled", "merged", "current", "worktrees"];
     const allDown = Object.fromEntries(listSources.map((k) => [k, down(`${k}: refused`)]));
     const { html, attention } = page(allDown);
     const c = counts(html);
@@ -947,6 +949,10 @@ describe("gatherSources", () => {
     expect(limitOf(call("bd", "list", "--status", "in_progress"))).toBe("0");
     expect(limitOf(call("bd", "ready"))).toBe("0");
     expect(limitOf(call("bd", "list", "--all"))).toBe("0");
+    const labelledCall = call("bd", "list", "--all", "--label-any");
+    expect(labelledCall[labelledCall.indexOf("--label-any") + 1]).toBe("stalled-on-human,human-only");
+    expect(limitOf(labelledCall)).toBe("0");
+    expect(sources).toHaveProperty("labelled");
     expect(limitOf(call("gh", "pr", "list", "--state", "open"))).toBe("200");
     expect(limitOf(call("gh", "pr", "list", "--state", "merged"))).toBe("8"); // intentionally recent only
     // Release state is read off each bead's released_in, not package.json.
@@ -1118,5 +1124,204 @@ describe("findWorkspaceCommand", () => {
   it("fails loudly when the command is missing rather than opening an empty workspace", () => {
     expect(() => findWorkspaceCommand({ commands: [] })).toThrow(/no command "ugcportal dashboard"/);
     expect(() => findWorkspaceCommand({ commands: [{ name: WORKSPACE_COMMAND, workspace: {} }] })).toThrow(/workspace.layout/);
+  });
+});
+
+describe("human-wait rules in Needs you (ugcportal-a2fl)", () => {
+  const labelled = (n, branch, labels = [{ name: "needs-human-merge" }]) => ({
+    ...PR_232,
+    number: n,
+    headRefName: branch,
+    url: `https://github.com/eiriksf-capgemini/ugcportal/pull/${n}`,
+    labels,
+  });
+  const queued = (id, labels, extra = {}) => ({ id, title: `Title of ${id}`, priority: 2, status: "open", updated_at: "2026-10-12T12:00:00Z", labels, metadata: {}, ...extra });
+  const items = (a, label) => a.filter((x) => x.label === label);
+  /** A page with every list source empty except the ones given, so the fixture's own rows are most of what Needs you can say. */
+  const quietPage = (overrides) =>
+    page(
+      {
+        inProgress: ok([]),
+        ready: ok([]),
+        blocked: ok([]),
+        prs: ok([]),
+        current: ok({ items: [] }),
+        worktrees: ok("worktree /Users/eiriksf/code/ugcportal\nHEAD 4c8584e0\nbranch refs/heads/main\n"),
+        ...overrides,
+      },
+    );
+
+  it("K1: one labelled and one unlabelled PR give exactly one Merge needed item, anchored to the PR row, severity bad", () => {
+    const unlabelled = { ...labelled(271, "fix/ugcportal-zzzz-other", []), statusCheckRollup: PR_232.statusCheckRollup };
+    const { attention, html } = quietPage({ prs: ok([labelled(270, "fix/ugcportal-aaaa-thing"), unlabelled]) });
+    const merge = items(attention, "Merge needed");
+    expect(merge).toHaveLength(1);
+    expect(merge[0]).toMatchObject({ severity: "bad", anchor: "pr-270" });
+    expect(merge[0].text).toContain("#270 for ugcportal-aaaa, reviewed clean, sensitive path");
+    expect(attention.map((a) => a.text).join("\n")).not.toContain("#271");
+    // The anchor exists on the page, and the PR row's collapsed line shows the label.
+    expect(html).toContain('id="pr-270"');
+    const row = html.slice(html.indexOf('id="pr-270"'), html.indexOf("</summary>", html.indexOf('id="pr-270"')));
+    expect(row).toContain('class="chip human-wait"');
+    expect(row).toContain("needs-human-merge");
+    const row271 = html.slice(html.indexOf('id="pr-271"'), html.indexOf("</summary>", html.indexOf('id="pr-271"')));
+    expect(row271).not.toContain("human-wait");
+  });
+
+  it("K1: a PR whose branch names no bead is still listed, without a bead id", () => {
+    const { attention } = quietPage({ prs: ok([labelled(272, "chore/no-bead")]) });
+    expect(items(attention, "Merge needed").map((a) => a.text)).toEqual(["#272, reviewed clean, sensitive path (needs-human-merge)"]);
+  });
+
+  it.each(["stalled-on-human", "human-only"])("K2: an open bead labelled %s gets one Waiting on you item, anchored to its row; without the label it does not", (label) => {
+    const withLabel = quietPage({ ready: ok([queued("ugcportal-wait1", [label, "v0.8.1"]), queued("ugcportal-calm", ["v0.8.1"])]) });
+    const wait = items(withLabel.attention, "Waiting on you");
+    expect(wait).toHaveLength(1);
+    expect(wait[0]).toMatchObject({ severity: "warn", anchor: "bead-ugcportal-wait1" });
+    expect(wait[0].text).toBe(`ugcportal-wait1 \u2014 Title of ugcportal-wait1 (${label})`);
+    expect(withLabel.html).toContain('id="bead-ugcportal-wait1"');
+    // Mutated fixture: the label removed, the item is gone.
+    const without = quietPage({ ready: ok([queued("ugcportal-wait1", ["v0.8.1"])]) });
+    expect(items(without.attention, "Waiting on you")).toHaveLength(0);
+  });
+
+  it("K2: a closed bead carrying the label is not waiting on anyone, and a bead in two lists counts once", () => {
+    const closed = queued("ugcportal-done", ["human-only"], { status: "closed" });
+    const twice = queued("ugcportal-twice", ["stalled-on-human"], { status: "in_progress" });
+    const { attention } = quietPage({ inProgress: ok([twice]), blocked: ok([twice]), ready: ok([closed]) });
+    expect(items(attention, "Waiting on you").map((a) => a.anchor)).toEqual(["bead-ugcportal-twice"]);
+  });
+
+  it("K2: a bead and its own PR both waiting give one Merge needed and one Waiting on you, no duplicates", () => {
+    const bead = queued("ugcportal-both", ["stalled-on-human"], { status: "in_progress" });
+    const { attention } = quietPage({ inProgress: ok([bead]), prs: ok([labelled(273, "fix/ugcportal-both-thing")]) });
+    expect(items(attention, "Merge needed")).toHaveLength(1);
+    expect(items(attention, "Waiting on you")).toHaveLength(1);
+    expect(attention.filter((a) => ["Merge needed", "Waiting on you"].includes(a.label) && /ugcportal-both/.test(a.text))).toHaveLength(2);
+  });
+
+  it("the label names are parameters of buildAttention, not literals in the rules", () => {
+    const joined = joinRows({ prefix: PREFIX, inProgress: [], prs: [], worktrees: [], currentItems: [], now: NOW });
+    const base = { prefix: PREFIX, joined, currentItems: [], sources: allSourcesOk(), now: NOW };
+    const prs = [labelled(274, "fix/ugcportal-cfg-x", [{ name: "needs-human-merge" }, { name: "custom-wait" }])];
+    const beads = [queued("ugcportal-cfg", ["custom-bead-wait"])];
+    expect(items(buildAttention({ ...base, prs, beads, humanWaitPrLabels: ["custom-wait"], humanWaitBeadLabels: ["custom-bead-wait"] }), "Merge needed")[0].text).toContain("(custom-wait)");
+    expect(items(buildAttention({ ...base, prs, beads, humanWaitPrLabels: ["custom-wait"], humanWaitBeadLabels: ["custom-bead-wait"] }), "Waiting on you")).toHaveLength(1);
+    const none = buildAttention({ ...base, prs, beads, humanWaitPrLabels: ["nope"], humanWaitBeadLabels: ["nope"] });
+    expect(items(none, "Merge needed")).toHaveLength(0);
+    expect(items(none, "Waiting on you")).toHaveLength(0);
+  });
+
+  it("K3: with gh down the page names prs as a Source down item and does not say nothing is waiting", () => {
+    const { attention, html } = quietPage({ prs: down("gh pr list: gh not found on PATH") });
+    expect(items(attention, "Merge needed")).toHaveLength(0);
+    expect(attention.map(attentionText)).toContain("Source down: prs is unavailable: gh pr list: gh not found on PATH");
+    expect(html).not.toContain("Nothing is waiting on you");
+    expect(html).toContain("PRs unavailable (gh down); 0 beads checked for human-wait labels (the in_progress, ready and blocked lists, and the labelled-bead source, which returned 0 of any non-closed status; 0 of those outside the three lists)");
+    expect(html).not.toMatch(/\b0 PRs\b/);
+  });
+
+  it("K3: buildAttention itself skips the PR rule when prs is down, even if handed PRs, and says Source down", () => {
+    const joined = joinRows({ prefix: PREFIX, inProgress: [], prs: [], worktrees: [], currentItems: [], now: NOW });
+    const a = buildAttention({ prefix: PREFIX, joined, currentItems: [], sources: allSourcesOk({ prs: down("gh refused") }), now: NOW, prs: [labelled(275, "fix/ugcportal-x-y")] });
+    expect(items(a, "Merge needed")).toHaveLength(0);
+    expect(items(a, "Source down").map((x) => x.text)).toEqual(["prs is unavailable: gh refused"]);
+  });
+
+  it.each([
+    ["all three bead lists down", { inProgress: down("bd refused"), ready: down("bd refused"), blocked: down("bd refused") }],
+    ["only ready down", { ready: down("bd refused") }],
+  ])("F1: with bd down (%s) the page says beads are unavailable, never 0 beads, and not that nothing is waiting", (_name, overrides) => {
+    const { html } = quietPage({ prs: ok([labelled(276, "fix/ugcportal-x-y")]), ...overrides });
+    expect(html).toContain("1 PR checked for human-wait labels; beads unavailable (bd down)");
+    expect(html).not.toMatch(/\b0 beads\b/);
+    expect(html).not.toContain("Nothing is waiting on you");
+  });
+
+  it("both gh and bd down: nothing is claimed as checked", () => {
+    const { html } = quietPage({ prs: down("x"), ready: down("x") });
+    expect(html).toContain("PRs unavailable (gh down); beads unavailable (bd down); nothing checked for human-wait labels");
+  });
+
+  const deferredBead = (id = "ugcportal-68r", labels = ["backlog", "known-gap", "stalled-on-human"]) => queued(id, labels, { status: "deferred" });
+
+  it("uu8p K1: a deferred labelled bead in no other list gives exactly one Waiting on you item saying deferred, and the sentence names the source", () => {
+    const { attention, html } = quietPage({
+      labelled: ok([deferredBead(), deferredBead("ugcportal-deferred2", ["human-only"]), queued("ugcportal-gone", ["human-only"], { status: "closed" })]),
+      ready: ok([queued("ugcportal-calm", ["v0.8.1"])]),
+    });
+    const wait = items(attention, "Waiting on you");
+    // Two non-closed labelled beads, one item each; the closed one is not waiting.
+    expect(wait.map((a) => a.text)).toEqual([
+      "ugcportal-68r \u2014 Title of ugcportal-68r (deferred) (stalled-on-human)",
+      "ugcportal-deferred2 \u2014 Title of ugcportal-deferred2 (deferred) (human-only)",
+    ]);
+    // A deferred bead has no row on the page, so no dead anchor.
+    expect(wait.every((a) => a.anchor === undefined)).toBe(true);
+    expect(html).not.toContain("Nothing is waiting on you");
+    expect(html).toContain("3 beads checked for human-wait labels (the in_progress, ready and blocked lists, and the labelled-bead source, which returned 2 of any non-closed status; 2 of those outside the three lists)");
+  });
+
+  it("uu8p K1: an open (not deferred) bead seen only through the labelled source is still one item, without the deferred marker", () => {
+    const { attention } = quietPage({ labelled: ok([queued("ugcportal-only", ["human-only"])]) });
+    expect(items(attention, "Waiting on you").map((a) => a.text)).toEqual(["ugcportal-only \u2014 Title of ugcportal-only (human-only)"]);
+  });
+
+  it("uu8p K2: with the labelled source down the page names it Source down, says deferred beads were not checked, and never says nothing is waiting", () => {
+    const { attention, html } = quietPage({ labelled: down("bd list: refused") });
+    expect(attention.map(attentionText)).toContain("Source down: labelled is unavailable: bd list: refused");
+    expect(html).not.toContain("Nothing is waiting on you");
+    expect(html).toContain("labelled-bead source unavailable (bd down), so deferred beads were not checked");
+    expect(html).not.toContain("labelled beads of any non-closed status");
+    // The other three lists still answered, so their beads are checked.
+    const still = quietPage({ labelled: down("x"), ready: ok([queued("ugcportal-wait1", ["human-only"])]) });
+    expect(items(still.attention, "Waiting on you")).toHaveLength(1);
+    expect(still.html).toContain("1 bead checked for human-wait labels");
+  });
+
+  it("uu8p K3: the same bead in the labelled source and an in_progress/ready/blocked list is one item, not two", () => {
+    const inProg = queued("ugcportal-dup", ["stalled-on-human"], { status: "in_progress" });
+    for (const list of ["inProgress", "ready", "blocked"]) {
+      const { attention } = quietPage({ [list]: ok([inProg]), labelled: ok([{ ...inProg }]) });
+      expect(items(attention, "Waiting on you").map((a) => a.text), list).toEqual(["ugcportal-dup \u2014 Title of ugcportal-dup (stalled-on-human)"]);
+    }
+    // The in_progress copy wins over a stale labelled copy: no "(deferred)" on it.
+    const both = quietPage({ inProgress: ok([inProg]), labelled: ok([{ ...inProg, status: "deferred" }]) });
+    expect(items(both.attention, "Waiting on you")).toHaveLength(1);
+    expect(items(both.attention, "Waiting on you")[0].text).not.toContain("deferred");
+    // Two copies inside the labelled source itself (a bead carrying both labels is one row, but guard anyway).
+    expect(items(quietPage({ labelled: ok([inProg, inProg]) }).attention, "Waiting on you")).toHaveLength(1);
+  });
+
+  it("uu8p F3: humanWaitChecked refuses to describe the labelled source when its arguments are omitted, and prints the outside count when given", () => {
+    const base = { prs: [], beads: [], prsUp: true, beadsUp: true };
+    expect(() => humanWaitChecked(base)).toThrow(/labelledUp is required/);
+    expect(() => humanWaitChecked({ ...base, labelledUp: true })).toThrow(/required integers/);
+    expect(humanWaitChecked({ ...base, labelledUp: false })).toContain("labelled-bead source unavailable (bd down)");
+    expect(humanWaitChecked({ ...base, labelledUp: true, labelled: 5, labelledOutside: 1 })).toContain("which returned 5 of any non-closed status; 1 of those outside the three lists");
+  });
+
+  it("uu8p F1: the outside count counts only labelled beads absent from the three lists, and the beads total is not inflated", () => {
+    const inP = queued("ugcportal-inl", ["human-only"], { status: "in_progress" });
+    const { html } = quietPage({ inProgress: ok([inP]), labelled: ok([inP, deferredBead()]) });
+    expect(html).toContain("2 beads checked for human-wait labels (the in_progress, ready and blocked lists, and the labelled-bead source, which returned 2 of any non-closed status; 1 of those outside the three lists)");
+  });
+
+  it("K4: with exactly the three labelled PRs and four labelled beads the sentence is absent, the count is non-zero and the checked line prints the counts", () => {
+    const prs = [labelled(263, "fix/ugcportal-vtgz-a"), labelled(264, "fix/ugcportal-4bok-b"), labelled(265, "fix/ugcportal-xb68-c")];
+    const inProgress = ["vtgz", "4bok", "xb68"].map((s) => queued(`ugcportal-${s}`, ["stalled-on-human"], { status: "in_progress" }));
+    const ready = [queued("ugcportal-pyky", ["human-only"])];
+    const { attention, html } = quietPage({ prs: ok(prs), inProgress: ok(inProgress), ready: ok(ready) });
+    expect(html).not.toContain("Nothing is waiting on you");
+    // Other rules (stale beads, unreviewed green PRs) may add items on these fixtures; the seven below are the point.
+    expect(items(attention, "Merge needed")).toHaveLength(3);
+    expect(items(attention, "Waiting on you")).toHaveLength(4);
+    expect(attention.length).toBeGreaterThanOrEqual(7);
+    expect(counts(html).headings[0]).toBe(String(attention.length));
+    expect(html).toContain("3 PRs and 4 beads checked for human-wait labels (the in_progress, ready and blocked lists, and the labelled-bead source, which returned 0 of any non-closed status; 0 of those outside the three lists)");
+    // Source summary does not hide the zero case either: nothing labelled, 0 shown, sentence shown.
+    const quiet = quietPage({ prs: ok([]) });
+    expect(quiet.html).toContain("Nothing is waiting on you");
+    expect(quiet.html).toContain("0 PRs and 0 beads checked for human-wait labels");
   });
 });
