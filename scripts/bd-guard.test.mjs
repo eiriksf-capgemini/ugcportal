@@ -1,7 +1,8 @@
 /**
  * Tests for scripts/bd-guard.mjs (ugcportal-vu49). Every case runs the real CLI
- * with hook JSON on stdin. The blessed-form fixtures are sliced from the three
- * skill files at test time, with a drift check on the line they start at.
+ * with hook JSON on stdin. The blessed-form fixtures are loaded from the three
+ * skill files at test time by content anchor (scripts/bd-guard-fixtures.mjs),
+ * never by line number.
  */
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -10,6 +11,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
+
+import { OPENER, loadBlessedBlock, loadBlessedLine } from "./bd-guard-fixtures.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const script = path.join(root, "scripts", "bd-guard.mjs");
@@ -20,10 +23,13 @@ function run(stdin) {
 }
 const hook = (command) => run(JSON.stringify({ tool_name: "Bash", tool_input: { command } }));
 
-function lines(file, from, to) {
-  const all = fs.readFileSync(path.join(root, file), "utf8").split("\n");
-  return { first: all[from - 1], text: all.slice(from - 1, to).join("\n") };
-}
+const skill = (name) => path.join(root, ".claude", "skills", name, "SKILL.md");
+const ACC_ANCHOR = '--acceptance="$(cat "$scratch/acc.md")"';
+const BLESSED = [
+  ["cut-release", skill("cut-release"), "bd create \"$(cat <<'BD_EOF'"],
+  ["pr-review-merge", skill("pr-review-merge"), "Use quoted heredocs (`<<'EOF'`)"],
+  ["review-standards", skill("review-standards"), "so use quoted heredocs, which expand nothing"],
+];
 
 describe("refuses (K1, K2)", () => {
   it("K1: bd update --notes names --append-notes", () => {
@@ -58,10 +64,10 @@ describe("refuses (K1, K2)", () => {
 });
 
 describe("$(cat <path>) allowance", () => {
-  it("must-pass: cut-release lines 263-264, read at test time", () => {
-    const { first, text } = lines(".claude/skills/cut-release/SKILL.md", 263, 264);
-    expect(first).toContain('$(cat "$scratch/acc.md")');
-    const r = hook(`bd create --title t \\\n${text}`);
+  it("must-pass: the cut-release acceptance line, found by anchor at test time", () => {
+    const line = loadBlessedLine(skill("cut-release"), ACC_ANCHOR);
+    expect(line).toContain('$(cat "$scratch/acc.md")');
+    const r = hook(`bd create --title t \\\n${line}`);
     expect(r.stderr).toBe("");
     expect(r.code).toBe(0);
   });
@@ -90,15 +96,10 @@ describe("allows (K2 must-pass, K4)", () => {
   it("escaped backtick inside double quotes is literal", () => {
     expect(hook('bd create --description "a \\`b\\` c"').code).toBe(0);
   });
-  const blessed = [
-    ["cut-release/SKILL.md:258", ".claude/skills/cut-release/SKILL.md", 258, 262],
-    ["pr-review-merge/SKILL.md:941", ".claude/skills/pr-review-merge/SKILL.md", 941, 947],
-    ["review-standards/SKILL.md:38", ".claude/skills/review-standards/SKILL.md", 38, 44],
-  ];
-  for (const [label, file, from, to] of blessed) {
-    it(`K4: blessed heredoc as used at ${label}`, () => {
-      const { first, text } = lines(file, from, to);
-      expect(first).toContain("$(cat <<'");
+  for (const [label, file, anchor] of BLESSED) {
+    it(`K4: blessed heredoc as used in ${label}/SKILL.md`, () => {
+      const text = loadBlessedBlock(file, anchor);
+      expect(text).toContain("$(cat <<'");
       const r = hook(text);
       expect(r.stderr).toBe("");
       expect(r.code).toBe(0);
@@ -283,5 +284,73 @@ describe("scripts/bd-guard.sh wrapper (F4)", () => {
       env: { PATH: path.dirname(process.execPath), HOME: tmp() },
     });
     expect(r.status).toBe(2);
+  });
+});
+
+describe("fixture loader (ugcportal-ucnf)", () => {
+  const cutRelease = skill("cut-release");
+  const [, , cutAnchor] = BLESSED[0];
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "bd-guard-fx-"));
+  const write = (name, text) => {
+    const f = path.join(tmp, name);
+    fs.writeFileSync(f, text);
+    return f;
+  };
+  const orig = fs.readFileSync(cutRelease, "utf8");
+
+  it("K1: 20 lines prepended leave every loaded fixture byte-identical", () => {
+    const shifted = write("shifted.md", "filler line\n".repeat(20) + orig);
+    for (const [, file, anchor] of BLESSED) {
+      const moved = write(
+        `moved-${path.basename(path.dirname(file))}.md`,
+        "filler line\n".repeat(20) + fs.readFileSync(file, "utf8"),
+      );
+      expect(loadBlessedBlock(moved, anchor)).toBe(loadBlessedBlock(file, anchor));
+    }
+    expect(loadBlessedLine(shifted, ACC_ANCHOR)).toBe(loadBlessedLine(cutRelease, ACC_ANCHOR));
+    expect(loadBlessedLine(shifted, ACC_ANCHOR).length).toBeGreaterThan(0);
+  });
+
+  it("K2: an absent anchor throws, naming the file and the anchor", () => {
+    const f = write("absent.md", orig.split(cutAnchor).join("bd create REMOVED"));
+    expect(() => loadBlessedBlock(f, cutAnchor)).toThrow(f);
+    expect(() => loadBlessedBlock(f, cutAnchor)).toThrow(JSON.stringify(cutAnchor).slice(0, 20));
+    expect(() => loadBlessedBlock(f, cutAnchor)).toThrow(/matched 0 line/);
+    const g = write("absent-line.md", "nothing here\n");
+    expect(() => loadBlessedLine(g, ACC_ANCHOR)).toThrow(/matched 0 line/);
+  });
+
+  it("K2: a duplicated anchor throws, naming the file and the anchor", () => {
+    const f = write("dup.md", orig + "\n" + orig);
+    expect(() => loadBlessedBlock(f, cutAnchor)).toThrow(f);
+    expect(() => loadBlessedBlock(f, cutAnchor)).toThrow(/matched 2 line/);
+    expect(() => loadBlessedLine(f, ACC_ANCHOR)).toThrow(/matched 2 line/);
+    expect(() => loadBlessedLine(f, ACC_ANCHOR)).toThrow(f);
+  });
+
+  it("K2: an anchor with no opener after it, or no terminator, throws", () => {
+    const a = write("noopener.md", "anchor here\njust text\n");
+    expect(() => loadBlessedBlock(a, "anchor here")).toThrow(/no blessed opener/);
+    const b = write("noterm.md", "anchor here\nx \"$(cat <<'EOF'\nbody\n");
+    expect(() => loadBlessedBlock(b, "anchor here")).toThrow(/no EOF terminator/);
+    const c = write("noparen.md", "anchor here\nx \"$(cat <<'EOF'\nbody\nEOF\nnot a paren\n");
+    expect(() => loadBlessedBlock(c, "anchor here")).toThrow(/not followed by a \) line/);
+  });
+
+  it("K3: every loaded block starts at a blessed opener and ends terminator then )", () => {
+    for (const [label, file, anchor] of BLESSED) {
+      const block = loadBlessedBlock(file, anchor).split("\n");
+      const m = OPENER.exec(block[0]);
+      expect(m, `${label} first line`).not.toBeNull();
+      expect(block.length).toBeGreaterThanOrEqual(4);
+      expect(block[block.length - 2]).toBe(m[2]);
+      expect(block[block.length - 1].startsWith(")")).toBe(true);
+      // the terminator is the first line equal to the delimiter: no earlier one
+      expect(block.slice(1, -2)).not.toContain(m[2]);
+    }
+    expect(OPENER.test("x <<-\"EOF\"")).toBe(false);
+    expect(OPENER.test('$(cat <<-"EOF"')).toBe(true);
+    expect(OPENER.test('$(cat <<"EOF"')).toBe(true);
+    expect(OPENER.test("$(cat <<EOF")).toBe(false);
   });
 });
