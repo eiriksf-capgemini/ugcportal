@@ -1272,7 +1272,7 @@ describe("human-wait rules in Needs you (ugcportal-a2fl)", () => {
     expect(html).not.toContain("Nothing is waiting on you");
     expect(html).toContain("labelled-bead source unavailable (bd down), so deferred beads were not checked");
     expect(html).not.toContain("labelled beads of any non-closed status");
-    // The other three lists still answered, so their beads are still checked.
+    // The other three lists still answered, so their beads are checked.
     const still = quietPage({ labelled: down("x"), ready: ok([queued("ugcportal-wait1", ["human-only"])]) });
     expect(items(still.attention, "Waiting on you")).toHaveLength(1);
     expect(still.html).toContain("1 bead checked for human-wait labels");

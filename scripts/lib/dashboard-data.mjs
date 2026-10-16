@@ -271,7 +271,8 @@ export function humanWaitLabel(x, wanted) {
 /**
  * Open (not closed) beads from the in-progress, ready, blocked and
  * labelled-bead lists, each once (first list wins by id). The labelled list
- * is the only one that carries deferred beads; the printed sentence names
+ * is queried by label with --all, so it can carry deferred beads that the
+ * other three lists are not asked for; the printed sentence names
  * the lists it covers (humanWaitChecked).
  * @param {any[][]} lists
  */
@@ -289,9 +290,9 @@ export function uniqueOpenBeads(...lists) {
  */
 export function humanWaitChecked({ prs, beads, prsUp, beadsUp, labelledUp = true, labelled = 0 }) {
   const lists = "beads from the in_progress, ready and blocked lists";
-  // The labelled-bead source (bd list --all --label-any ...) is the only one
-  // that sees deferred beads. Down, the sentence says so and still counts what
-  // the three lists gave; the page never then reads as a complete check.
+  // The labelled-bead source (bd list --all --label-any ...) is the one asked
+  // for deferred beads. When it is down the sentence says so, and counts what
+  // the three lists gave (test: "uu8p K2").
   const where = labelledUp
     ? `${lists} plus ${plural(labelled, "labelled bead")} of any non-closed status`
     : `${lists}; labelled-bead source unavailable (bd down), so deferred beads were not checked`;
