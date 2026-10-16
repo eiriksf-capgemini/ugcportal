@@ -137,7 +137,10 @@ describe("main", () => {
 
 describe("K4: no private key is ever tracked", () => {
   it("git ls-files contains no .pem file", () => {
-    const files = execFileSync("git", ["ls-files"], { encoding: "utf8" })
+    const files = execFileSync("git", ["ls-files"], {
+      encoding: "utf8",
+      timeout: 30_000, // git ls-files reads the whole index; inherent cost
+    })
       .split("\n")
       .filter(Boolean);
     expect(files.length).toBeGreaterThan(100); // proves the listing was read
