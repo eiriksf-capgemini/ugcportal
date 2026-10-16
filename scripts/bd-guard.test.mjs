@@ -27,7 +27,8 @@ const skill = (name) => path.join(root, ".claude", "skills", name, "SKILL.md");
 const ACC_ANCHOR = '--acceptance="$(cat "$scratch/acc.md")"';
 const BLESSED = [
   ["cut-release", skill("cut-release"), "bd create \"$(cat <<'BD_EOF'"],
-  ["pr-review-merge", skill("pr-review-merge"), "Use quoted heredocs (`<<'BD_EOF'`)"],
+  // pr-review-merge step 5a no longer uses the inline `"$(cat <<'BD_EOF' ... )"` form
+  // (unsafe on bash 3.2, ugcportal-nr72); its block is tested below instead.
   ["review-standards", skill("review-standards"), "so use quoted heredocs, which expand nothing"],
 ];
 
@@ -105,6 +106,22 @@ describe("allows (K2 must-pass, K4)", () => {
       expect(r.code).toBe(0);
     });
   }
+});
+
+describe("pr-review-merge step 5a block (ugcportal-nr72)", () => {
+  const text = fs.readFileSync(skill("pr-review-merge"), "utf8");
+  const heading = text.indexOf("## 5a. File every deferred finding as a bead");
+  const open = text.indexOf("```bash\n", heading) + "```bash\n".length;
+  const block = text.slice(open, text.indexOf("\n```", open) + 1);
+  it("the anchor is found and the block is the bd create block", () => {
+    expect(heading).toBeGreaterThan(-1);
+    expect(block).toContain('--metadata @"$scratch/meta.json"');
+    expect(block).toContain('"$(cat "$scratch/title.txt")"');
+  });
+  it("is allowed raw, and with every <fill: ...> placeholder filled", () => {
+    expect(hook(block).code).toBe(0);
+    expect(hook(block.replace(/<fill: [^>]*>/g, "x")).code).toBe(0);
+  });
 });
 
 describe("passes through / fail-open", () => {
