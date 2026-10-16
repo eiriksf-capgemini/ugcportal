@@ -30,7 +30,7 @@
  * INCOMPLETE note forms (formatAgentCost) and runAgentCost's arguments.
  * The last suite, "findings_rN keys" (ugcportal-2jvh), covers the keyed
  * severity reader (parseFindingsKey, withFindingsKeys, the `clean` verdict
- * read from the verdict line only, keyedConflicts, roundsSplit, and the
+ * read from an approval-shaped verdict line only, keyedConflicts, roundsSplit, and the
  * orphan/unstamped key reports), with fixtures from real review comments.
  */
 import fs from "node:fs";
@@ -1324,7 +1324,7 @@ describe("findings_rN keys (ugcportal-2jvh)", () => {
   });
 
   it("N1: a clean round that mentions earlier rounds' findings reads from its all-zero key, not as inconsistent", () => {
-    const clean = classifySeverity("Review round 3 (chain exact). No findings this round; both round-2 findings are fixed, and the sweep is clean.");
+    const clean = classifySeverity("No findings this round (chain exact); both round-2 findings are fixed, and the sweep is clean.");
     expect(clean).toMatchObject({ findings: null, stated: true, clean: true });
     expect(classifySeverity("Both round 2 findings are fixed.").findings).toBeNull();
     const out = withFindingsKeys(pr(1, [{ ...round(1, 0, 0), ...clean }]), { findings_r1: "f1:0 f2:0 f3:0 f4:0 med:0 low:0" });
@@ -1357,10 +1357,43 @@ describe("findings_rN keys (ugcportal-2jvh)", () => {
 
   it("P1: clean is read from the verdict line: genuine first-line approvals are clean, 'Blocking:' never is, a later sentence never is", () => {
     expect(classifySeverity("Auto-approved (review round 1, chain approx): CI green, no sensitive paths touched, no blocking findings.\n\nReviewed inline.").clean).toBe(true);
-    expect(classifySeverity("Review round 1. Zero findings.\n\nFigures re-derived.").clean).toBe(true);
+    expect(classifySeverity("Zero findings.\n\nFigures re-derived.").clean).toBe(true);
     expect(classifySeverity("Review round 2. Blocking: no findings left, but CI is red.").clean).toBe(false);
     expect(classifySeverity("Review round 2. Blocking: 2 findings.\n\nNo findings in family 3.").clean).toBe(false);
     expect(classifySeverity("Review round 2 (chain exact).\n\nNo findings this round.").clean).toBe(false);
+  });
+
+  it("M1: a blocking verdict line that states the band rule is never clean, so an all-zero key on it is inconsistent (#157 r3 severity word removed, #207 r2, #209 r4)", () => {
+    const zero = { findings_r1: "f1:0 f2:0 f3:0 f4:0 med:0 low:0" };
+    const lines = [
+      ["#157 r3", "Review round 3 (chain `approx` \u2014 self-asserted; head `2f0ca8a`, unchanged since round 2). **Not merged: 1 finding, CONFIRMED.** Strict band (rounds 1-3, and an `approx` chain runs these rules at every round), so zero findings is the only merging state.", 1],
+      ["#207 r2", "Review round 2 (chain approx -- reviewer and PR author are the same account, step 4b). CI green, no sensitive paths, mergeable against main. Per the severity gate, an approx chain always runs the strict rounds-1-3 rule regardless of round number: any finding blocks, merges only with zero findings.", null],
+      ["#209 r4", "Review round 4 (chain **approx** \u2014 self-asserted: reviewer and PR author are both `eiriksf-capgemini`; per step 4b this never reaches the lenient round-4/5 band, so any finding at any severity blocks, and merge requires zero findings). Two findings remain.", null],
+    ];
+    for (const [name, line, count] of lines) {
+      const c = classifySeverity(line);
+      expect(c.clean, name).toBe(false);
+      if (count !== null) expect(c.findings, name).toBe(count);
+      const out = withFindingsKeys(pr(1, [{ ...round(1, 0, 0), ...c, findings: count ?? 2 }]), zero);
+      expect(out.rounds[0], name).toMatchObject({ source: "prose", fallbackReason: "inconsistent" });
+    }
+  });
+
+  it("M1: each part of the approval shape is needed: opening word, no findings count, none of the blocking words", () => {
+    // not approval-shaped (no blocking word, no count): only the opening-word check rejects it
+    expect(classifySeverity("Review round 2 (chain approx). Merge requires zero findings.").clean).toBe(false);
+    // approval-shaped opening, but states a count and no blocking word
+    expect(classifySeverity("Clean on family 3, but 2 findings remain; zero findings is the only merging state.").clean).toBe(false);
+    // approval-shaped, no count, one blocking word each
+    for (const w of ["Blocking: nothing else", "Not merged", "any finding blocks", "left for a human"]) {
+      expect(classifySeverity(`No findings in the diff, ${w}.`).clean, w).toBe(false);
+    }
+    // the genuine approvals (#156 r4, #186 r1, #202 r1) stay clean
+    for (const l of [
+      "Auto-approved (review round 4, chain `approx`, head `f560cf9`): CI green, no sensitive paths touched, **no findings**. Merging.",
+      "Auto-approved (review round 1, chain approx \u2014 self-asserted, reviewer is the PR's author; head ea9ee12): CI green, no sensitive paths touched, no blocking findings.",
+      "Auto-approved (review round 1, chain approx): CI green, no sensitive paths touched, no blocking findings.",
+    ]) expect(classifySeverity(l).clean, l).toBe(true);
   });
 
   it("L2: a PR shared by a keyed bead and a prose sibling counts its rounds once, as keyed, and names the sibling separately", () => {

@@ -593,6 +593,10 @@ function replaceKeepingSpans(lexed, re, build) {
   return { text: out.join(""), spanIds: ids, spanText: lexed.spanText };
 }
 
+/** A stated findings count ("3 findings"); "round-2 findings" is a back-reference, not a count. */
+const FINDINGS_COUNT_RE =
+  /(?<![\w-])(?<!round\s)\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(?:candidate\s+|surviving\s+|new\s+|further\s+)?findings?\b/i;
+
 const NONE_RE =
   /\b(no|zero)\s+(blocking\s+|code\s+)?findings?\b|\bno medium(-or-above| or above)?\s+(found|anywhere|outstanding)|\bnone stands as a defect\b|\bdiff is clean\b|\bnothing to fix\b|\bfound nothing\b/i;
 
@@ -770,7 +774,7 @@ export function classifySeverity(body) {
   // "Both round-2 findings are fixed" is a back-reference to an earlier
   // round, not a count of this one: the same exclusion as the summary
   // regex above (no hyphen or "round " before the number).
-  const findings = /(?<![\w-])(?<!round\s)\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(?:candidate\s+|surviving\s+|new\s+|further\s+)?findings?\b/i.exec(text);
+  const findings = FINDINGS_COUNT_RE.exec(text);
   if (findings) result.findings = wordToNumber(findings[1]);
   // Stated means the reviewer put a severity on at least one finding, or
   // said in so many words that nothing (or nothing above low) was found.
@@ -781,12 +785,19 @@ export function classifySeverity(body) {
   result.stated = itemMedium + itemLow + summaryMedium + summaryLow > 0 || none;
   // The verdict's own "no findings" form, kept apart from `stated` so a
   // reader can let it outrank a bare findings count (withFindingsKeys). It is
-  // read from the verdict line only -- the first non-empty line, the one the
-  // summary regex reads -- never from a sub-heading such as "Verified, no
-  // finding:" in a blocking round (#277 r1, #258 r1), and a verdict that says
-  // "Blocking:" is never clean.
+  // true only for an approval-shaped verdict line (the first non-empty line):
+  // it opens with Approved / Auto-approved / Clean / No findings / Zero
+  // findings / Verified clean, matches NONE_RE, states no findings count
+  // ("3 findings", "two findings"), and carries none of "Blocking:", "Not
+  // merged", "block(s)", "left for a human". A blocking verdict that quotes
+  // the band rule ("merge requires zero findings") is therefore never clean
+  // (#157 r3, #207 r2, #209 r4), nor is a sub-heading such as "Verified, no
+  // finding:" in a blocking round (#277 r1, #258 r1).
   const verdictLine = text.split("\n").map((l) => l.trim()).find((l) => l !== "") ?? "";
-  result.clean = none && NONE_RE.test(verdictLine) && !/\bblocking\s*:/i.test(verdictLine);
+  const approvalShaped = /^[*_`\s]*(?:auto-)?approved\b|^[*_`\s]*(?:clean|no findings|zero findings|verified clean)\b/i.test(verdictLine);
+  const statesCount = FINDINGS_COUNT_RE.test(verdictLine);
+  const blockingWord = /\bblocking\s*:|\bnot merged\b|\bblocks?\b|\bleft for a human\b/i.test(verdictLine);
+  result.clean = none && NONE_RE.test(verdictLine) && approvalShaped && !statesCount && !blockingWord;
   return result;
 }
 
@@ -988,9 +999,13 @@ export function parseFindingsKey(value) {
  * make a zero look measured, so the prose figure is kept and the round is
  * flagged. A bare findings count does not make a round inconsistent only when
  * the verdict line itself (the first non-empty line, as classifySeverity
- * reads `clean`) says the round found nothing ("No findings this round")
- * and does not say "Blocking:"; a "Verified, no finding:" sub-heading in a
- * blocking round does not count (P1, #285 round 3: #277 r1, #258 r1). And
+ * reads `clean`) is approval-shaped: it opens with Approved / Auto-approved /
+ * Clean / No findings / Zero findings / Verified clean, says the round found
+ * nothing, states no findings count, and carries none of "Blocking:", "Not
+ * merged", "block(s)", "left for a human". Gate prose such as "merge requires
+ * zero findings" on a blocking line does not count, and neither does a
+ * "Verified, no finding:" sub-heading in a blocking round (M1, #285 round 4:
+ * #157 r3, #207 r2, #209 r4; P1, round 3: #277 r1, #258 r1). And
  * "round-2 findings" is a back-reference, not a count (N1, #285 round 2).
  *
  * A finding recorded as `unstated:<n>` counts as medium-or-above in the
