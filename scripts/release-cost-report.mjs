@@ -593,6 +593,9 @@ function replaceKeepingSpans(lexed, re, build) {
   return { text: out.join(""), spanIds: ids, spanText: lexed.spanText };
 }
 
+const NONE_RE =
+  /\b(no|zero)\s+(blocking\s+|code\s+)?findings?\b|\bno medium(-or-above| or above)?\s+(found|anywhere|outstanding)|\bnone stands as a defect\b|\bdiff is clean\b|\bnothing to fix\b|\bfound nothing\b/i;
+
 /**
  * Counts the severities the reviewer STATED in one verdict comment.
  *
@@ -774,12 +777,16 @@ export function classifySeverity(body) {
   // Prose that merely mentions "medium-or-above blocks" does not count.
   // "Family 3 — checked, nothing found" is about one family, not the
   // verdict, so the bare phrase does not count; the verdict-level forms do.
-  const none =
-    /\b(no|zero)\s+(blocking\s+|code\s+)?findings?\b|\bno medium(-or-above| or above)?\s+(found|anywhere|outstanding)|\bnone stands as a defect\b|\bdiff is clean\b|\bnothing to fix\b|\bfound nothing\b/i.test(text);
+  const none = NONE_RE.test(text);
   result.stated = itemMedium + itemLow + summaryMedium + summaryLow > 0 || none;
   // The verdict's own "no findings" form, kept apart from `stated` so a
-  // reader can let it outrank a bare findings count (withFindingsKeys).
-  result.clean = none;
+  // reader can let it outrank a bare findings count (withFindingsKeys). It is
+  // read from the verdict line only -- the first non-empty line, the one the
+  // summary regex reads -- never from a sub-heading such as "Verified, no
+  // finding:" in a blocking round (#277 r1, #258 r1), and a verdict that says
+  // "Blocking:" is never clean.
+  const verdictLine = text.split("\n").map((l) => l.trim()).find((l) => l !== "") ?? "";
+  result.clean = none && NONE_RE.test(verdictLine) && !/\bblocking\s*:/i.test(verdictLine);
   return result;
 }
 
@@ -979,10 +986,12 @@ export function parseFindingsKey(value) {
  * findings count ("three findings") with no severity words. A round that
  * blocked on findings recorded as all zeros is exactly the shape that would
  * make a zero look measured, so the prose figure is kept and the round is
- * flagged. A bare findings count does not make a round inconsistent when the
- * prose also says so in so many words that the round found nothing ("No
- * findings this round"), and "round-2 findings" is a back-reference, not a
- * count (N1, #285 round 2).
+ * flagged. A bare findings count does not make a round inconsistent only when
+ * the verdict line itself (the first non-empty line, as classifySeverity
+ * reads `clean`) says the round found nothing ("No findings this round")
+ * and does not say "Blocking:"; a "Verified, no finding:" sub-heading in a
+ * blocking round does not count (P1, #285 round 3: #277 r1, #258 r1). And
+ * "round-2 findings" is a back-reference, not a count (N1, #285 round 2).
  *
  * A finding recorded as `unstated:<n>` counts as medium-or-above in the
  * round (pr-review-merge step 4: an unclassified finding counts as medium
@@ -1418,6 +1427,8 @@ export function buildRows(release, beadsById, prAnalysesByNumber) {
       prRounds: Object.fromEntries(prAnalyses.map((p) => [p.number, p.chain.status === "broken" ? p.chain.highest : p.chain.ns.length])),
       lowsLabelled: allRounds.reduce((a, r) => a + (r.stated ? r.low : 0), 0),
       unstatedRounds: allRounds.filter((r) => !r.stated).length,
+      // Per PR, so a PR shared by two beads is counted once (roundsSplit).
+      prRoundSplit: Object.fromEntries(prAnalyses.map((p) => [p.number, { keys: p.rounds.filter((r) => r.source === "keys").length, prose: p.rounds.filter((r) => r.source !== "keys").length }])),
       roundsFromKeys: allRounds.filter((r) => r.source === "keys").length,
       roundsFromProse: allRounds.filter((r) => r.source !== "keys").length,
       // One entry per key, deduped: a bare key skipped on a two-PR bead is
@@ -1461,7 +1472,7 @@ export function buildRows(release, beadsById, prAnalysesByNumber) {
  * PRs on which two beads both carry keys and read different medium counts.
  * Only the PR-title bead is meant to receive keys (step 4a item 2), so this is
  * a recording error; `aggregate` keeps the larger figure (an order-independent
- * choice) and this names the disagreement. Returns `["gh-906 (ugcportal-a 3 vs ugcportal-c 0)"]`.
+ * choice) and this names the disagreement. Returns `["gh-906 (a 3 vs c 0; larger kept)"]` (ids without the `ugcportal-` prefix).
  */
 export function keyedConflicts(rows) {
   const seen = new Map();
@@ -1475,6 +1486,36 @@ export function keyedConflicts(rows) {
     }
   }
   return out;
+}
+
+/**
+ * How many marker rounds read from `findings_rN` keys and how many fell back
+ * to the prose parse, counting each PR once like `aggregate`'s mediums (L2,
+ * #285 round 3): a PR shared by two beads reports the reading of the bead
+ * that carries the most keyed rounds for it (the PR-title bead, step 4a item
+ * 2), so the sibling's prose reading of the same rounds is not a second,
+ * fallen-back count. `fellBack` lists the beads whose reading was counted;
+ * `siblings` lists the other beads on those PRs, as `id (gh-N)`.
+ */
+export function roundsSplit(rows) {
+  const best = new Map();
+  for (const r of rows) {
+    for (const [n, sp] of Object.entries(r.prRoundSplit ?? {})) {
+      const cur = best.get(n);
+      if (!cur || sp.keys > cur.sp.keys) best.set(n, { id: r.id, sp });
+    }
+  }
+  const short = (id) => id.replace("ugcportal-", "");
+  const fellBack = new Map();
+  for (const { id, sp } of best.values()) if (sp.prose > 0) fellBack.set(id, (fellBack.get(id) ?? 0) + sp.prose);
+  const siblings = [];
+  for (const r of rows) for (const n of Object.keys(r.prRoundSplit ?? {})) if (best.get(n)?.id !== r.id) siblings.push(`${short(r.id)} (gh-${n})`);
+  return {
+    fromKeys: sum([...best.values()].map((v) => v.sp.keys)),
+    fromProse: sum([...best.values()].map((v) => v.sp.prose)),
+    fellBack: [...fellBack].map(([id, c]) => `${short(id)} (${c})`),
+    siblings,
+  };
 }
 
 export function aggregate(rows) {
@@ -1522,8 +1563,8 @@ export function aggregate(rows) {
     estQa: rows.filter((r) => r.qa !== null && r.qaEstimated).length,
     mediums: sum([...prMediums.values()].map((v) => v.m)),
     unstated: sum(rows.map((r) => r.unstatedRounds)),
-    roundsFromKeys: sum(rows.map((r) => r.roundsFromKeys)),
-    roundsFromProse: sum(rows.map((r) => r.roundsFromProse)),
+    roundsFromKeys: roundsSplit(rows).fromKeys,
+    roundsFromProse: roundsSplit(rows).fromProse,
   };
 }
 
@@ -1607,7 +1648,7 @@ function renderReleaseTable(rows) {
 }
 
 function renderAggregateTable(name, rows) {
-  const headers = ["Group", "Beads", "with impl", "with qa", "impl total", "qa total", "Total", "impl median", "qa median", "ITE total (beads)", "Rounds median (n)", "At cap", "Mediums stated"];
+  const headers = ["Group", "Beads", "with impl", "with qa", "impl total", "qa total", "Total", "impl median", "qa median", "ITE total (beads)", "Rounds median (n)", "At cap", "Mediums (keys, else verdict labels)"];
   const line = (label, agg) => [
     label,
     String(agg.n),
@@ -1633,7 +1674,7 @@ function renderAggregateTable(name, rows) {
 }
 
 function renderTierTable(rows) {
-  const headers = ["Tier", "Beads", "with rounds", "Passed in ≤2 rounds", "Reached cap (≥6)", "Rounds median", "qa total", "qa median", "impl total", "impl median", "Mediums stated", "qa/round median", "ITE beads", "ITE total", "ITE median"];
+  const headers = ["Tier", "Beads", "with rounds", "Passed in ≤2 rounds", "Reached cap (≥6)", "Rounds median", "qa total", "qa median", "impl total", "impl median", "Mediums (keys, else verdict labels)", "qa/round median", "ITE beads", "ITE total", "ITE median"];
   const body = tierPerformance(rows).map((t) => [
     t.tier,
     String(t.n),
@@ -1719,10 +1760,9 @@ function renderDataGaps(rowsByRelease, prAnalysesByNumber, unmerged) {
     lines.push(`  - round count from the close reason, not markers (${crRounds.length}): ${crRounds.join(", ") || "—"}`);
     if (disagree.length) lines.push(`  - markers and close reason disagree: ${disagree.join("; ")}`);
     if (unstated.length) lines.push(`  - rounds whose verdict states no severity: ${unstated.join(", ")}`);
-    const fromKeys = sum(rows.map((r) => r.roundsFromKeys));
-    const fromProse = sum(rows.map((r) => r.roundsFromProse));
-    const fellBack = rows.filter((r) => r.roundsFromProse > 0).map((r) => `${r.id.replace("ugcportal-", "")} (${r.roundsFromProse})`);
-    lines.push(`  - rounds whose severity came from \`findings_rN\` keys: ${fromKeys}; rounds that fell back to the prose parse: ${fromProse}${fellBack.length ? ` -- ${fellBack.join(", ")}` : ""}`);
+    const split = roundsSplit(rows);
+    lines.push(`  - rounds whose severity came from \`findings_rN\` keys: ${split.fromKeys}; rounds that fell back to the prose parse: ${split.fromProse}${split.fellBack.length ? ` -- ${split.fellBack.join(", ")}` : ""}`);
+    if (split.siblings.length) lines.push(`  - sibling bead, PR counted once (its rounds are in the line above under the bead that carries the keys, not again): ${split.siblings.join(", ")}`);
     const keyProblems = rows.filter((r) => r.keyFallbacks.length).map((r) => `${r.id.replace("ugcportal-", "")} (${r.keyFallbacks.join(", ")})`);
     if (keyProblems.length) lines.push(`  - \`findings_rN\` present but not used, prose kept (${keyProblems.length}): ${keyProblems.join("; ")}`);
     const unstatedF = rows.filter((r) => r.unstatedFindings > 0).map((r) => `${r.id.replace("ugcportal-", "")} (${r.unstatedFindings})`);
@@ -1744,7 +1784,7 @@ export function renderReport(ctx) {
   const out = [];
   out.push(GENERATED_START);
   out.push("");
-  out.push(`_Generated ${generatedAt} by \`node scripts/release-cost-report.mjs\`; reviewer identity \`${reviewer ?? "unknown"}\`; ${prCount} PRs read via \`gh\`. Legend: \`~\` = the bead's own notes call this figure an estimate; \`(cr)\` = round count from the close reason (pre-marker PR); \`(!)\` = markers and close reason disagree, markers shown; \`rN:?\` = that round's verdict states no severity; "Lows (labels)" counts severity labels, a single \`LOW:\` label often covers several items, so it is a floor. qa/round is the QA figure divided by rounds, a crude mean (\`tokens_qa_rN\` is not read here). Unit (ugcportal-cii0): each bead is read in ONE unit — \`ITE (cost)\` from \`cost_ite_impl\`/\`cost_ite_qa\` (transcript input-token equivalents, scripts/agent-pass-cost.mjs), or \`${CONTEXT_LABEL}\` from \`tokens_impl\`/\`tokens_qa\` when the bead has no accepted \`cost_ite_*\` figure (absent, 0, malformed, or on a side marked incomplete) (the agent's final context size, docs/process/cost-performance-claims-v0.7.0-2026-10-16.md section 1.2); impl/qa totals, medians, and the top-five tables are ${CONTEXT_LABEL}; the tier tables carry both, ITE in its own three columns; ITE is totalled only in its own columns and rows, and the two are never added._`);
+  out.push(`_Generated ${generatedAt} by \`node scripts/release-cost-report.mjs\`; reviewer identity \`${reviewer ?? "unknown"}\`; ${prCount} PRs read via \`gh\`. Legend: \`~\` = the bead's own notes call this figure an estimate; \`(cr)\` = round count from the close reason (pre-marker PR); \`(!)\` = markers and close reason disagree, markers shown; \`rN:?\` = that round's verdict states no severity; "Lows (labels)" counts a keyed round's \`low:<n>\` as recorded and an un-keyed round's severity labels, a single \`LOW:\` label often covers several items, so on prose rounds it is a floor; a keyed round's \`unstated:<n>\` is counted as medium, not low. qa/round is the QA figure divided by rounds, a crude mean (\`tokens_qa_rN\` is not read here). Unit (ugcportal-cii0): each bead is read in ONE unit — \`ITE (cost)\` from \`cost_ite_impl\`/\`cost_ite_qa\` (transcript input-token equivalents, scripts/agent-pass-cost.mjs), or \`${CONTEXT_LABEL}\` from \`tokens_impl\`/\`tokens_qa\` when the bead has no accepted \`cost_ite_*\` figure (absent, 0, malformed, or on a side marked incomplete) (the agent's final context size, docs/process/cost-performance-claims-v0.7.0-2026-10-16.md section 1.2); impl/qa totals, medians, and the top-five tables are ${CONTEXT_LABEL}; the tier tables carry both, ITE in its own three columns; ITE is totalled only in its own columns and rows, and the two are never added._`);
   out.push("");
   for (const version of releases) {
     const rows = rowsByRelease.get(version);
@@ -1777,7 +1817,7 @@ export function renderReport(ctx) {
     ["Review share of transcript cost (ITE)", ...aggs.map((a) => pct(a.iteQaTotal, a.iteGrandTotal))],
     ["Rounds median (beads with a count)", ...aggs.map((a) => `${fmt(a.roundsMedian)} (n=${a.roundsN})`)],
     ["Beads whose PR reached the cap (≥6 rounds)", ...aggs.map((a) => String(a.capCount))],
-    ["Mediums stated in verdicts (marker PRs only, each PR once)", ...aggs.map((a) => String(a.mediums))],
+    ["Mediums (keys, else verdict labels; marker PRs only, each PR once)", ...aggs.map((a) => String(a.mediums))],
     ["Rounds with no stated severity", ...aggs.map((a) => String(a.unstated))],
     ["Marker rounds read from findings_rN keys / from the prose parse (ugcportal-2jvh)", ...aggs.map((a) => `${a.roundsFromKeys} / ${a.roundsFromProse}`)],
     ["Figures marked ~ (impl / qa)", ...aggs.map((a) => `${a.estImpl} / ${a.estQa}`)],

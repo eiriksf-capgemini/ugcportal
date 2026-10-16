@@ -28,6 +28,10 @@
  * INCOMPLETE when a transcript is missing, the coverage checks
  * (uncoveredByAgents, coverageIncomplete across two recordings), the
  * INCOMPLETE note forms (formatAgentCost) and runAgentCost's arguments.
+ * The last suite, "findings_rN keys" (ugcportal-2jvh), covers the keyed
+ * severity reader (parseFindingsKey, withFindingsKeys, the `clean` verdict
+ * read from the verdict line only, keyedConflicts, roundsSplit, and the
+ * orphan/unstamped key reports), with fixtures from real review comments.
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -43,6 +47,7 @@ import {
   agentCostFromPasses,
   aggregate,
   keyedConflicts,
+  roundsSplit,
   orphanFindingsKeys,
   CONTROLS,
   buildRows,
@@ -81,6 +86,8 @@ import {
 const loadFixture = (name) => JSON.parse(fs.readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8"));
 const pr121 = loadFixture("pr-121-round1.json");
 const pr173 = loadFixture("pr-173-round2.json");
+const pr277 = loadFixture("pr-277-round1.json");
+const pr258 = loadFixture("pr-258-round1.json");
 const pr185 = loadFixture("pr-185-round1.json");
 const pr131 = loadFixture("pr-131-round1-reply.json");
 const pr193 = loadFixture("pr-193-round1.json");
@@ -1317,7 +1324,7 @@ describe("findings_rN keys (ugcportal-2jvh)", () => {
   });
 
   it("N1: a clean round that mentions earlier rounds' findings reads from its all-zero key, not as inconsistent", () => {
-    const clean = classifySeverity("Review round 3 (chain exact). Both round-2 findings are fixed, and the sweep is clean.\n\nNo findings this round.");
+    const clean = classifySeverity("Review round 3 (chain exact). No findings this round; both round-2 findings are fixed, and the sweep is clean.");
     expect(clean).toMatchObject({ findings: null, stated: true, clean: true });
     expect(classifySeverity("Both round 2 findings are fixed.").findings).toBeNull();
     const out = withFindingsKeys(pr(1, [{ ...round(1, 0, 0), ...clean }]), { findings_r1: "f1:0 f2:0 f3:0 f4:0 med:0 low:0" });
@@ -1334,6 +1341,52 @@ describe("findings_rN keys (ugcportal-2jvh)", () => {
     const real = classifySeverity("Blocking: three findings.");
     expect(real.findings).toBe(3);
     expect(withFindingsKeys(pr(1, [{ ...round(1, 0, 0), ...real }]), zero).rounds[0].fallbackReason).toBe("inconsistent");
+  });
+
+  it("P1: a blocking verdict with a 'Verified, no finding:' sub-heading is never clean, so an all-zero key on it is inconsistent (#277 r1, #258 r1 verbatim)", () => {
+    const zero = { findings_r1: "f1:0 f2:0 f3:0 f4:0 med:0 low:0" };
+    for (const [fx, count] of [[pr277, 4], [pr258, 1]]) {
+      const c = classifySeverity(fx.round1Body);
+      expect(c).toMatchObject({ findings: count, clean: false });
+      // the sub-heading is really in the body, so the fixture exercises the shape
+      expect(fx.round1Body).toMatch(/Verified, no finding/);
+      const out = withFindingsKeys(pr(fx.pr.number, [{ ...round(1, 0, 0), ...c }]), zero);
+      expect(out.rounds[0]).toMatchObject({ source: "prose", fallbackReason: "inconsistent" });
+    }
+  });
+
+  it("P1: clean is read from the verdict line: genuine first-line approvals are clean, 'Blocking:' never is, a later sentence never is", () => {
+    expect(classifySeverity("Auto-approved (review round 1, chain approx): CI green, no sensitive paths touched, no blocking findings.\n\nReviewed inline.").clean).toBe(true);
+    expect(classifySeverity("Review round 1. Zero findings.\n\nFigures re-derived.").clean).toBe(true);
+    expect(classifySeverity("Review round 2. Blocking: no findings left, but CI is red.").clean).toBe(false);
+    expect(classifySeverity("Review round 2. Blocking: 2 findings.\n\nNo findings in family 3.").clean).toBe(false);
+    expect(classifySeverity("Review round 2 (chain exact).\n\nNo findings this round.").clean).toBe(false);
+  });
+
+  it("L2: a PR shared by a keyed bead and a prose sibling counts its rounds once, as keyed, and names the sibling separately", () => {
+    const a = { id: "ugcportal-kkk16", title: "a", metadata: { prs: "gh-907", findings_r1: "f1:0 f2:0 f3:3 f4:0 med:3 low:0" } };
+    const sib = { id: "ugcportal-kkk17", title: "s", metadata: { prs: "gh-907" } };
+    const rel = { version: "v9.9.9", ids: [a.id, sib.id], entries: new Map([a, sib].map((b) => [b.id, { title: "x", type: "Features" }])) };
+    const rows2 = buildRows(rel, new Map([[a.id, a], [sib.id, sib]]), new Map([[907, pr(907, [round(1, 1, 0)])]]));
+    expect(aggregate(rows2)).toMatchObject({ roundsFromKeys: 1, roundsFromProse: 0, mediums: 3 });
+    expect(aggregate([...rows2].reverse())).toMatchObject({ roundsFromKeys: 1, roundsFromProse: 0 });
+    const split = roundsSplit(rows2);
+    expect(split.fellBack).toEqual([]);
+    expect(split.siblings).toEqual(["kkk17 (gh-907)"]);
+    const report = renderReport({ releases: ["v9.9.9"], rowsByRelease: new Map([["v9.9.9", rows2]]), membershipChecks: [], unmerged: [], generatedAt: "2026-10-16", reviewer: "x", prCount: 0 });
+    expect(report).toContain("rounds whose severity came from `findings_rN` keys: 1; rounds that fell back to the prose parse: 0");
+    expect(report).toContain("sibling bead, PR counted once");
+    expect(report).toContain("kkk17 (gh-907)");
+    expect(report).not.toContain("fell back to the prose parse: 1");
+  });
+
+  it("L1: keyedConflicts reports a disagreement in the smaller-first order, and never reports a keyed bead beside a prose sibling", () => {
+    const keyedRow = (id, m) => ({ id, prMediums: { 906: m }, prKeyed: { 906: true } });
+    expect(keyedConflicts([keyedRow("ugcportal-a", 0), keyedRow("ugcportal-c", 3)])).toEqual(["gh-906 (a 0 vs c 3; larger kept)"]);
+    expect(keyedConflicts([keyedRow("ugcportal-a", 3), keyedRow("ugcportal-c", 0)])).toEqual(["gh-906 (a 3 vs c 0; larger kept)"]);
+    const prose = { id: "ugcportal-s", prMediums: { 906: 1 }, prKeyed: { 906: false } };
+    expect(keyedConflicts([keyedRow("ugcportal-a", 3), prose])).toEqual([]);
+    expect(keyedConflicts([prose, keyedRow("ugcportal-a", 3)])).toEqual([]);
   });
 
   it("N2: findings_unstamped is counted and listed under Data gaps, and is never matched to a marker", () => {
