@@ -22,9 +22,14 @@
  * stderr note. A broken guard must not block every Bash call in the session.
  * Nothing is ever written to stdout.
  *
+ * Also allowed inside double quotes: `$(cat <path>)` where the only argument
+ * is one path token (double-quoted, single-quoted or bare, `$VAR` fine) with
+ * no nested `$(`, backtick, extra word or pipe (cut-release/SKILL.md:235-236).
+ * File content is not re-scanned by bash, so reading it is safe. Every other
+ * `$(` is refused.
+ *
  * Known limit: it is a scanner, not a shell parser. Quoting built by variable
- * expansion or `eval` is not seen. `$(cat "$file")` inside double quotes is
- * refused too (it is not the `cat <<'` form the bead specifies).
+ * expansion or `eval` is not seen.
  */
 import fs from "node:fs";
 
@@ -38,6 +43,14 @@ export const MSG_SUBST =
   "bd-guard: refused `$(` inside a double-quoted bd argument that is not the quoted-heredoc form; use \"$(cat <<'EOF' ... EOF)\" or --body-file.";
 
 const HEREDOC_OPEN = /^\$\(cat <<'(\w+)'\n/;
+
+// $(cat <path>): one path token (double-quoted, single-quoted or bare; $VAR or
+// ${VAR} allowed), no nested $(, backtick, extra word, pipe or redirect. The
+// file's content is not re-scanned by bash, so reading it is safe.
+const VAR = String.raw`\$\{?\w+\}?`;
+const CAT_PATH = new RegExp(
+  String.raw`^\$\(cat[ \t]+(?:"(?:[^"\x60\\()|;&<>$]|${VAR})*"|'[^']*'|(?:[^\s"'\x60$()|;&<>\\]|${VAR})+)[ \t]*\)`,
+);
 
 /** Scan a double-quoted string starting at cmd[i] === '"'. */
 function scanDoubleQuoted(cmd, i) {
@@ -64,6 +77,11 @@ function scanDoubleQuoted(cmd, i) {
           j = at + close.length;
           continue;
         }
+      }
+      const p = CAT_PATH.exec(cmd.slice(j));
+      if (p) {
+        j += p[0].length;
+        continue;
       }
       problem ??= MSG_SUBST;
       j += 2;

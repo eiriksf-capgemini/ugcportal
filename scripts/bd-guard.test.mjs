@@ -56,6 +56,25 @@ describe("refuses (K1, K2)", () => {
   });
 });
 
+describe("$(cat <path>) allowance", () => {
+  it("must-pass: cut-release lines 235-236, read at test time", () => {
+    const { first, text } = lines(".claude/skills/cut-release/SKILL.md", 235, 236);
+    expect(first).toContain('$(cat "$scratch/acc.md")');
+    const r = hook(`bd create --title t \\\n${text}`);
+    expect(r.stderr).toBe("");
+    expect(r.code).toBe(0);
+  });
+  it("must-pass: single-quoted and bare path", () => {
+    expect(hook("bd create --acceptance=\"$(cat '/tmp/a b.md')\"").code).toBe(0);
+    expect(hook('bd create --acceptance="$(cat /tmp/acc.md)"').code).toBe(0);
+  });
+  for (const bad of ['$(cat a b)', '$(cat "$x" | tr x y)', "$(cat $(echo f))", "$(cat `echo f`)"]) {
+    it(`must-fail: ${bad}`, () => {
+      expect(hook(`bd create --acceptance="${bad}"`).code).toBe(2);
+    });
+  }
+});
+
 describe("allows (K2 must-pass, K4)", () => {
   it("K4: --append-notes", () => {
     expect(hook('bd update x --append-notes "text"').code).toBe(0);
