@@ -1,5 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
+import { E2E_SIGNED_IN_EMAIL } from "./scripts/lib/e2e-session-seeding.mjs";
+
 /**
  * Browser verification for the petrol palette (ugcportal-rw9j), K1/K2.
  *
@@ -54,6 +56,19 @@ export default defineConfig({
      */
     reuseExistingServer: process.env["UGCPORTAL_E2E_REUSE_SERVER"] === "1",
     timeout: 60_000,
+    /**
+     * ugcportal-0wh6: the dev server this config starts permits exactly the
+     * identity e2e/signed-in-fixture.ts seeds, and no one else. The
+     * live-session check (src/lib/live-session.ts) re-judges every request
+     * against ALLOWED_SIGNIN_EMAILS, so without this a seeded session would
+     * be refused and its spec would see a signed-out page. Set here, on the
+     * spawned process, it outranks any value in the developer's `.env*`
+     * files for this server only; nothing else reads it. A REUSED server
+     * (above) does not get it, which is the safe direction to be wrong in:
+     * signed-in specs then fail rather than pass. playwright.config.test.ts
+     * asserts the value.
+     */
+    env: { ALLOWED_SIGNIN_EMAILS: E2E_SIGNED_IN_EMAIL },
   },
   projects: [
     { name: "chromium", use: { ...devices["Desktop Chrome"] } },

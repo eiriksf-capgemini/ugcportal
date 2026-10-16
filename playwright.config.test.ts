@@ -53,3 +53,27 @@ describe("playwright.config.ts: reuseExistingServer gate (ugcportal-6uxr K3)", (
     expect(await loadReuseExistingServer()).toBe(false);
   });
 });
+
+describe("playwright.config.ts: the seeded identity's allowlist (ugcportal-0wh6)", () => {
+  async function webServerEnv(specifier: string): Promise<Record<string, string> | undefined> {
+    vi.resetModules();
+    const mod = (await import(specifier)) as {
+      default: { webServer?: { env?: Record<string, string> } | Array<{ env?: Record<string, string> }> };
+    };
+    const { webServer } = mod.default;
+    return (Array.isArray(webServer) ? webServer[0] : webServer)?.env;
+  }
+
+  it("the root suite's dev server allowlists exactly the address e2e/signed-in-fixture.ts seeds", async () => {
+    const { E2E_SIGNED_IN_EMAIL } = await import("./scripts/lib/e2e-session-seeding.mjs");
+    expect(E2E_SIGNED_IN_EMAIL).toBe("e2e-signed-in@example.test");
+    expect((await webServerEnv("./playwright.config"))?.["ALLOWED_SIGNIN_EMAILS"]).toBe(E2E_SIGNED_IN_EMAIL);
+  });
+
+  it("the production-build suite (e2e/production) does not allowlist it", async () => {
+    const env = (await webServerEnv("./e2e/production/playwright.config")) ?? {};
+    // NODE_ENV read back first, so this is demonstrably that config's env.
+    expect(env["NODE_ENV"]).toBe("production");
+    expect(env).not.toHaveProperty("ALLOWED_SIGNIN_EMAILS");
+  });
+});

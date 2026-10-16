@@ -3,6 +3,7 @@ import { expect, test } from "@playwright/test";
 
 import { MD_BREAKPOINT_PX } from "../src/lib/breakpoints";
 import { hasHorizontalScroll } from "./has-horizontal-scroll";
+import { signedInTest } from "./signed-in-fixture";
 
 /**
  * K1/K2/K3 browser verification for the header (ugcportal-14k9).
@@ -254,3 +255,109 @@ test.describe("K3: no sales link in the navigation", () => {
     }
   });
 });
+
+/**
+ * ugcportal-0wh6 K1/K2: the same header, SIGNED IN. Everything above this
+ * block runs signed out; these tests request the `signedIn` fixture
+ * (e2e/signed-in-fixture.ts), which seeds a real database session and sets
+ * its cookie before the page loads.
+ *
+ * 320 and 390 are the widths ugcportal-i7lr K4 and ugcportal-ry6w ask about
+ * (390 is the signed-in view ry6w's wordmark report is about); 1440 is the
+ * desktop layout, where Upload sits in the inline nav instead of behind the
+ * menu toggle. The assertions that would read the same signed out ("Sign in"
+ * absent, "Sign out" and "Upload" present) are deliberately the ones a
+ * signed-out page fails: a fixture that quietly stopped signing the test in
+ * turns every one of these red, rather than leaving a page that has no
+ * signed-in content to check.
+ */
+const SIGNED_IN_VIEWPORTS = {
+  mobile320: { width: 320, height: 720 },
+  mobile390: { width: 390, height: 844 },
+  desktop1440: { width: 1440, height: 900 },
+} as const;
+
+for (const [name, viewport] of Object.entries(SIGNED_IN_VIEWPORTS)) {
+  signedInTest.describe(`signed-in header at ${name} (${viewport.width}px)`, () => {
+    signedInTest.use({ viewport });
+
+    signedInTest("K1: renders the signed-in header, including the Upload entry", async ({
+      page,
+      signedIn,
+    }) => {
+      expect(signedIn.userId).toMatch(/^e2e-0wh6-/);
+      await page.goto("/");
+
+      const banner = page.getByRole("banner");
+      await expect(banner.getByRole("button", { name: "Sign out" })).toBeVisible();
+      await expect(banner.getByRole("button", { name: /^Sign in/ })).toHaveCount(0);
+
+      if (viewport.width < MD_BREAKPOINT_PX) {
+        await banner.getByRole("button", { name: "Open menu" }).click();
+      }
+      const nav = page.getByRole("navigation", { name: "Main navigation" });
+      await expect(nav.getByRole("link", { name: "Upload" })).toBeVisible();
+      await expect(nav.getByRole("link", { name: "Upload" })).toHaveAttribute("href", "/upload");
+    });
+
+    if (viewport.width < MD_BREAKPOINT_PX) {
+      signedInTest("K2: axe scans the signed-in header, menu closed and open, with no violations", async ({
+        page,
+        signedIn,
+      }) => {
+        expect(signedIn.userId).toMatch(/^e2e-0wh6-/);
+        await page.goto("/");
+        const banner = page.getByRole("banner");
+        // Signed in BEFORE axe runs, so the scan below is of a signed-in page.
+        await expect(banner.getByRole("button", { name: "Sign out" })).toBeVisible();
+
+        const closed = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
+        expect(closed.violations, JSON.stringify(closed.violations, null, 2)).toEqual([]);
+
+        // Below md the Upload entry exists only inside the opened menu, so a
+        // closed-menu scan never sees it. Open it and scan again.
+        //
+        // EXCLUDED from that second scan: @base-ui/react/popover's own focus
+        // guards (`<span aria-hidden="true" tabindex="0"
+        // data-base-ui-focus-guard>`), which axe flags as aria-hidden-focus.
+        // That violation is not about being signed in — it reproduces signed
+        // out with the menu open at 390px — and is tracked as ugcportal-bmst,
+        // whose fix removes this exclude. Only those spans are excluded; every
+        // other node, the menu's links included, is still scanned.
+        await banner.getByRole("button", { name: "Open menu" }).click();
+        await expect(
+          page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: "Upload" }),
+        ).toBeVisible();
+        const open = await new AxeBuilder({ page })
+          .withTags(["wcag2a", "wcag2aa"])
+          .exclude("[data-base-ui-focus-guard]")
+          .analyze();
+        expect(open.violations, JSON.stringify(open.violations, null, 2)).toEqual([]);
+
+        // Evidence the second scan's TARGET included the signed-in entries,
+        // not just that it ran: axe reports the nodes each passing rule
+        // checked (by selector), and both the visible Upload link and the
+        // Sign out button must be among them. Resolved in the page rather
+        // than by matching axe's `html` strings: tried first, those did not
+        // carry the Sign out button's text, so that check failed on a page
+        // that was signed in. The Upload link must be the RENDERED one (the
+        // desktop nav's copy is in the DOM but not laid out below md).
+        const targets = open.passes.flatMap((rule) =>
+          rule.nodes.map((node) => String(node.target[0])),
+        );
+        const reached = await page.evaluate((selectors) => {
+          const elements = selectors.flatMap((selector) => [...document.querySelectorAll(selector)]);
+          return {
+            upload: elements.some(
+              (el) => el.matches('a[href="/upload"]') && el.getClientRects().length > 0,
+            ),
+            signOut: elements.some(
+              (el) => el.tagName === "BUTTON" && el.textContent?.trim() === "Sign out",
+            ),
+          };
+        }, targets);
+        expect(reached).toEqual({ upload: true, signOut: true });
+      });
+    }
+  });
+}
