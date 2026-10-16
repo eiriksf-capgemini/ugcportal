@@ -12,15 +12,28 @@
  *       the quoted-heredoc form -- the shell EXECUTES it. Use
  *       `"$(cat <<'EOF' ... EOF)"` or `--body-file`.
  *
- * Allowed: `--append-notes`, `--body-file`, single-quoted strings, heredoc
- * bodies fed on stdin, and the repo's blessed form `"$(cat <<'EOF' ... EOF)"`
+ * Allowed: `--append-notes`, `--body-file`, single-quoted strings, QUOTED
+ * heredoc bodies (`<<'EOF'`, `<<"EOF"`, `<<-'EOF'`, `<<-"EOF"`; the shell does
+ * not expand those), and the repo's blessed form `"$(cat <<'EOF' ... EOF)"`
  * (cut-release/SKILL.md, pr-review-merge/SKILL.md, review-standards/SKILL.md).
  * Non-bd commands pass through untouched. Only statements whose command word
- * is `bd` are inspected; statements are split on unquoted newline ; & |.
+ * is `bd` are inspected; statements are split on unquoted newline ; & | (a
+ * `&` that is part of `2>&1`, `>&` or `&>` does not split). Prefixes stripped
+ * before the command-word test: do then else elif if while until { ( ! time
+ * command exec sudo, `env` (and its flags and VAR=val), `xargs` (and its
+ * flags), VAR=val, a path ending in `/bd`; bd's own global value flags
+ * (--actor -C/--directory --db --database --dolt-auto-commit --mem-profile)
+ * are skipped when finding the subcommand.
  *
- * FAIL-OPEN, DELIBERATELY: malformed, empty or unreadable stdin exits 0 with a
+ * An UNQUOTED heredoc (`<<EOF`) body is expanded by the shell, so a backtick
+ * or `$(` in it is refused like one in double quotes.
+ *
+ * FAIL-OPEN, DELIBERATELY: malformed, empty or unreadable stdin, and parseable
+ * JSON whose `tool_input.command` is missing or not a string, exit 0 with a
  * stderr note. A broken guard must not block every Bash call in the session.
- * Nothing is ever written to stdout.
+ * Nothing is ever written to stdout. (scripts/bd-guard.sh, the hook entry
+ * point, is the opposite on purpose: no node found exits 2, so a missing
+ * runtime blocks loudly instead of the hook silently never running.)
  *
  * Also allowed inside double quotes: `$(cat <path>)` where the only argument
  * is one path token (double-quoted, single-quoted or bare, `$VAR` fine) with
@@ -39,10 +52,12 @@ export const MSG_NOTES =
   "bd-guard: refused `bd update --notes`, which replaces the whole notes field and its history; use --append-notes.";
 export const MSG_BACKTICK =
   "bd-guard: refused a backtick inside a double-quoted bd argument (the shell executes it); use a quoted heredoc \"$(cat <<'EOF' ... EOF)\" or --body-file.";
+export const MSG_HEREDOC =
+  "bd-guard: refused a backtick or `$(` in an unquoted heredoc body (the shell expands it); quote the delimiter (<<'EOF') or use --body-file.";
 export const MSG_SUBST =
   "bd-guard: refused `$(` inside a double-quoted bd argument that is not the quoted-heredoc form; use \"$(cat <<'EOF' ... EOF)\" or --body-file.";
 
-const HEREDOC_OPEN = /^\$\(cat <<'(\w+)'\n/;
+const HEREDOC_OPEN = /^\$\(cat <<(-?)(['"])(\w+)\2\n/;
 
 // $(cat <path>): one path token (double-quoted, single-quoted or bare; $VAR or
 // ${VAR} allowed), no nested $(, backtick, extra word, pipe or redirect. The
@@ -71,10 +86,11 @@ function scanDoubleQuoted(cmd, i) {
     if (c === "$" && cmd[j + 1] === "(") {
       const m = HEREDOC_OPEN.exec(cmd.slice(j));
       if (m) {
-        const close = `\n${m[1]}\n)`;
-        const at = cmd.indexOf(close, j + m[0].length - 1);
-        if (at !== -1) {
-          j = at + close.length;
+        const close = new RegExp(`\\n${m[1] ? "\\t*" : ""}${m[3]}\\n\\)`, "g");
+        close.lastIndex = j + m[0].length - 1;
+        const hit = close.exec(cmd);
+        if (hit) {
+          j = hit.index + hit[0].length;
           continue;
         }
       }
@@ -92,17 +108,35 @@ function scanDoubleQuoted(cmd, i) {
   return { end: cmd.length, problem };
 }
 
+/** True when text holds an unescaped backtick or `$(` (what an unquoted heredoc expands). */
+function expandsCommand(text) {
+  for (let k = 0; k < text.length; k += 1) {
+    if (text[k] === "\\") k += 1;
+    else if (text[k] === "`" || (text[k] === "$" && text[k + 1] === "(")) return true;
+  }
+  return false;
+}
+
+/** Skip heredoc bodies from i; an unquoted one that expands marks its statement. */
 function skipHeredocBodies(cmd, i, pending) {
   let j = i;
-  for (const { tag, dash } of pending) {
+  for (const { tag, dash, quoted, stmt } of pending) {
+    const start = j;
+    let end = j;
     while (j < cmd.length) {
       let nl = cmd.indexOf("\n", j);
       if (nl === -1) nl = cmd.length;
       let line = cmd.slice(j, nl);
+      const lineStart = j;
       j = Math.min(nl + 1, cmd.length);
       if (dash) line = line.replace(/^\t+/, "");
-      if (line === tag) break;
+      if (line === tag) {
+        end = lineStart;
+        break;
+      }
+      end = j;
     }
+    if (!quoted && expandsCommand(cmd.slice(start, end))) stmt.problem ??= MSG_HEREDOC;
   }
   return j;
 }
@@ -110,19 +144,17 @@ function skipHeredocBodies(cmd, i, pending) {
 /** Split into statements: { words, problem }. */
 function scanStatements(cmd) {
   const stmts = [];
-  let words = [];
+  let stmt = { words: [], problem: null };
   let cur = null;
-  let problem = null;
   let pending = [];
   const pushWord = () => {
-    if (cur !== null) words.push(cur);
+    if (cur !== null) stmt.words.push(cur);
     cur = null;
   };
   const endStmt = () => {
     pushWord();
-    if (words.length) stmts.push({ words, problem });
-    words = [];
-    problem = null;
+    if (stmt.words.length) stmts.push(stmt);
+    stmt = { words: [], problem: null };
   };
   let i = 0;
   while (i < cmd.length) {
@@ -141,13 +173,13 @@ function scanStatements(cmd) {
       i = stop + 1;
     } else if (c === '"') {
       const r = scanDoubleQuoted(cmd, i);
-      problem ??= r.problem;
+      stmt.problem ??= r.problem;
       cur = cur ?? "";
       i = r.end;
     } else if (c === "<" && cmd[i + 1] === "<" && cmd[i + 2] !== "<") {
-      const m = /^<<(-?)\s*(['"]?)([A-Za-z_]\w*)\2/.exec(cmd.slice(i));
+      const m = /^<<(-?)\s*(?:'([A-Za-z_]\w*)'|"([A-Za-z_]\w*)"|([A-Za-z_]\w*))/.exec(cmd.slice(i));
       if (m) {
-        pending.push({ tag: m[3], dash: m[1] === "-" });
+        pending.push({ tag: m[2] ?? m[3] ?? m[4], dash: m[1] === "-", quoted: m[4] === undefined, stmt });
         i += m[0].length;
       } else {
         cur = (cur ?? "") + c;
@@ -160,6 +192,9 @@ function scanStatements(cmd) {
         i = skipHeredocBodies(cmd, i, pending);
         pending = [];
       }
+    } else if (c === "&" && (cmd[i - 1] === ">" || cmd[i - 1] === "<" || cmd[i + 1] === ">")) {
+      cur = (cur ?? "") + c;
+      i += 1;
     } else if (c === ";" || c === "&" || c === "|") {
       endStmt();
       i += 1;
@@ -178,19 +213,50 @@ function scanStatements(cmd) {
   return stmts;
 }
 
+const KEYWORDS = new Set(["do", "then", "else", "elif", "if", "while", "until", "!", "time", "command", "exec", "sudo"]);
+const XARGS_VALUE_FLAGS = new Set(["-I", "-n", "-P", "-L", "-s", "-d", "-E", "-a"]);
+const BD_VALUE_FLAGS = new Set(["--actor", "-C", "--directory", "--db", "--database", "--dolt-auto-commit", "--mem-profile"]);
+
+/** Drop prefixes that sit before the command word; returns the words from it on. */
+function fromCommandWord(words) {
+  const w = words.map((x) => x.replace(/^[({]+/, ""));
+  let k = 0;
+  while (k < w.length) {
+    const x = w[k];
+    if (x === "" || KEYWORDS.has(x) || /^[A-Za-z_]\w*=/.test(x)) {
+      k += 1;
+    } else if (x === "env") {
+      k += 1;
+      while (k < w.length && (w[k].startsWith("-") || /^[A-Za-z_]\w*=/.test(w[k]))) k += 1;
+    } else if (x === "xargs") {
+      k += 1;
+      while (k < w.length && w[k].startsWith("-")) k += XARGS_VALUE_FLAGS.has(w[k]) ? 2 : 1;
+    } else {
+      break;
+    }
+  }
+  return w.slice(k);
+}
+
+/** The subcommand of `bd <rest>`, skipping global flags and their values. */
+function subcommand(rest) {
+  for (let k = 0; k < rest.length; k += 1) {
+    if (BD_VALUE_FLAGS.has(rest[k])) k += 1;
+    else if (!rest[k].startsWith("-")) return { sub: rest[k], args: rest.slice(k + 1) };
+  }
+  return { sub: undefined, args: [] };
+}
+
 /**
  * @param {string} cmd a Bash command line
  * @returns {string | null} the refusal reason, or null to allow
  */
 export function analyzeCommand(cmd) {
   for (const { words, problem } of scanStatements(cmd)) {
-    const w = words.map((x) => x.replace(/^[({]+/, ""));
-    let k = 0;
-    while (k < w.length && /^[A-Za-z_]\w*=/.test(w[k])) k += 1;
-    if (w[k] !== "bd") continue;
-    const rest = w.slice(k + 1);
-    const sub = rest.find((x) => !x.startsWith("-"));
-    if (sub === "update" && rest.some((x) => x === "--notes" || x.startsWith("--notes="))) {
+    const [word, ...rest] = fromCommandWord(words);
+    if (word !== "bd" && !word?.endsWith("/bd")) continue;
+    const { sub, args } = subcommand(rest);
+    if (sub === "update" && args.some((x) => x === "--notes" || x.startsWith("--notes="))) {
       return MSG_NOTES;
     }
     if (problem) return problem;
