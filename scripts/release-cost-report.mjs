@@ -62,6 +62,31 @@
  * the per-round column is the bead's QA figure / rounds, a crude mean, and
  * is labelled as such.
  *
+ * Controls table (ugcportal-md4c): with `--transcripts <dir>` (or alone with
+ * `--controls-only`), a section prices each process control in the fixed
+ * CONTROLS list below -- runs, cost in input-token equivalents (ITE), wall
+ * clock, the orchestrator's share, catches, and "files examined / files
+ * matched" -- by running agent-pass-cost.mjs's scanTool (the engine of its
+ * `--tool` mode, unedited) once per control with the command pattern
+ * docs/process/cost-performance-claims-v0.7.0-2026-10-16.md Appendix A used.
+ * Examined/matched come straight from scanTool's reach fields, not recomputed.
+ * A control whose pattern matched no call prints "0 of N files matched", never
+ * a bare 0 (review-standards section 6). Windowing: agent-pass-cost has an
+ * upper bound only, so `--before <iso>` ends the window and there is NO lower
+ * bound; the table says so. Orchestrator share = ITE of calls the parent
+ * sessions ran / ITE of all matching calls.
+ *
+ * Catches: the one convention is the bead metadata key `caught_by=<control>`,
+ * set on the bead of a finding the control surfaced (value from the fixed
+ * CONTROLS list; several controls comma-separated; optional `caught_by_note`
+ * free text). The table counts, per control, the beads carrying it among all
+ * beads read (not only the release's); a value outside the list is listed
+ * under the table, never dropped. Record one with
+ *   bd update <id> --set-metadata caught_by=<control>
+ *   node scripts/bd-verify-metadata.mjs <id> caught_by=<control>
+ * Controls with no command pattern (premise-audit: agents, not commands) show
+ * catches only.
+
  * Usage:
  *   node scripts/release-cost-report.mjs [options]
  *     --releases v0.4.0,v0.5.0   releases to compare (CHANGELOG headings)
@@ -72,7 +97,10 @@
  *     --offline                  never call gh/git/bd; fail if a cache entry is missing
  *     --write <report.md>        replace the block between the generated markers in that file
  *     --json <out.json>          also dump the computed dataset
- *     --allow-unmerged           report instead of exit 2 on an unmerged `prs` entry
+ *     --transcripts <dir>        add the controls table, pricing transcripts in <dir>
+     --controls-only            print only the controls table (needs bd, or --beads)
+     --before <iso>             end of the controls window (no lower bound exists)
+     --allow-unmerged           report instead of exit 2 on an unmerged `prs` entry
  *
  * Self-test: npm test -- runs scripts/release-cost-report.test.mjs (vitest)
  * against the pure functions exported below.
@@ -82,6 +110,9 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
+import os from "node:os";
+
+import { scanTool } from "./agent-pass-cost.mjs";
 import { isMainModule } from "./lib/is-main.mjs";
 
 // --- constants -------------------------------------------------------------
@@ -1600,6 +1631,12 @@ export function renderReport(ctx) {
     out.push(renderTopTable(rowsByRelease.get(version)));
     out.push("");
   }
+  if (ctx.controls) {
+    out.push("### Process controls: runs, cost, wall clock, orchestrator share, catches");
+    out.push("");
+    out.push(ctx.controls);
+    out.push("");
+  }
   out.push("### Membership cross-check (CHANGELOG section vs git tag range)");
   out.push("");
   out.push(renderMembershipChecks(membershipChecks));
@@ -1620,6 +1657,89 @@ export function spliceGenerated(existing, generated) {
   return existing.slice(0, start) + generated + existing.slice(end + GENERATED_END.length);
 }
 
+// --- controls table (ugcportal-md4c) ----------------------------------------
+
+/**
+ * The fixed control list. `pattern` is the regex agent-pass-cost's --tool mode
+ * is given (docs/process/cost-performance-claims-v0.7.0-2026-10-16.md
+ * Appendix A); null = a control with no command to match.
+ */
+export const CONTROLS = [
+  { name: "review-round-markers", pattern: String.raw`^\{"command":.*ugcportal-review-round` },
+  { name: "claims-audit", pattern: String.raw`^\{"command":.*node \S*scripts/claims-audit\.mjs` },
+  { name: "sweep-candidates", pattern: String.raw`^\{"command":.*node \S*scripts/sweep-candidates\.mjs` },
+  { name: "dispatch-gate", pattern: String.raw`^\{"command":.*node \S*scripts/check-bead-dispatch\.mjs` },
+  { name: "premise-audit", pattern: null },
+];
+export const CAUGHT_BY_KEY = "caught_by";
+
+export function defaultTranscriptDir() {
+  return path.join(os.homedir(), ".claude/projects/-Users-eiriksf-code-ugcportal");
+}
+
+/** Per control name, the beads whose caught_by names it; values outside the list are returned apart. */
+export function catchesByControl(beads, controls = CONTROLS) {
+  const counts = new Map(controls.map((c) => [c.name, []]));
+  const unrecognised = [];
+  for (const b of beads) {
+    const raw = b?.metadata?.[CAUGHT_BY_KEY];
+    if (raw === undefined || raw === null || String(raw).trim() === "") continue;
+    for (const v of String(raw).split(",").map((x) => x.trim().toLowerCase()).filter(Boolean)) {
+      if (counts.has(v)) counts.get(v).push(b.id);
+      else unrecognised.push({ id: b.id, value: v });
+    }
+  }
+  return { counts, unrecognised };
+}
+
+/** One control priced: scanTool's rows and reach, summed. `scan` is injectable for tests. */
+export function priceControl(control, dir, before = null, scan = scanTool) {
+  if (!control.pattern) return { control, priced: false };
+  const t = scan(dir, new RegExp(control.pattern), before);
+  const sumOf = (rows, k) => rows.reduce((a, r) => a + r[k], 0);
+  const orch = t.rows.filter((r) => r.who === "orchestrator");
+  return {
+    control, priced: true,
+    runs: sumOf(t.rows, "calls"), ite: sumOf(t.rows, "ite"), seconds: sumOf(t.rows, "seconds"),
+    orchRuns: sumOf(orch, "calls"), orchIte: sumOf(orch, "ite"),
+    examined: t.filesExamined, matched: t.rows.length,
+    lowerBound: t.badUsage > 0 || t.unpriced > 0 || t.unreadable > 0 || t.malformedLines > 0,
+  };
+}
+
+export function renderControlsTable(priced, catches, { dir, before } = {}) {
+  const headers = ["Control", "Runs", "Cost (ITE)", "Wall clock", "Orchestrator share", "Catches", "Files examined / matched"];
+  const rows = priced.map((p) => {
+    const nCatch = String(catches.counts.get(p.control.name)?.length ?? 0);
+    if (!p.priced) return [p.control.name, "n/a", "n/a", "n/a", "n/a", nCatch, "n/a (no command pattern; agents, not commands)"];
+    if (p.matched === 0) {
+      return [p.control.name, "0 (pattern matched nothing)", "— (nothing matched)", "—", "—", nCatch, `0 of ${p.examined} files matched`];
+    }
+    const lb = p.lowerBound ? ">=" : "";
+    return [
+      p.control.name, `${lb}${fmt(p.runs)}`, `${lb}${fmt(p.ite)}`, `${lb}${fmt(p.seconds)} s`,
+      p.ite > 0 ? `${pct(p.orchIte, p.ite)} of cost (${fmt(p.orchRuns)} of ${fmt(p.runs)} runs)` : `${fmt(p.orchRuns)} of ${fmt(p.runs)} runs`,
+      nCatch, `${fmt(p.examined)} examined / ${fmt(p.matched)} matched`,
+    ];
+  });
+  const out = [
+    `Transcripts: \`${dir ?? defaultTranscriptDir()}\`. Window: calls before ${before ?? "now"}, NO lower bound (agent-pass-cost offers none). Cost = input-token equivalents of the API turns that issued each call; Catches = beads carrying \`${CAUGHT_BY_KEY}=<control>\` (all beads read, not only the release's).`,
+    "",
+    mdTable(headers, rows),
+  ];
+  const lowers = priced.filter((p) => p.priced && p.lowerBound).map((p) => p.control.name);
+  if (lowers.length) out.push("", `LOWER BOUND (input was skipped or unpriced; \`>=\`): ${lowers.join(", ")}.`);
+  if (catches.unrecognised.length) {
+    out.push("", `\`${CAUGHT_BY_KEY}\` values not in the control list, not counted above: ${catches.unrecognised.map((u) => `${u.id}=${u.value}`).join(", ")}.`);
+  }
+  return out.join("\n");
+}
+
+export function controlsSection(beads, dir, before = null, controls = CONTROLS, scan = scanTool) {
+  const priced = controls.map((c) => priceControl(c, dir, before, scan));
+  return renderControlsTable(priced, catchesByControl(beads, controls), { dir, before });
+}
+
 // --- main ------------------------------------------------------------------
 
 function parseArgs(argv) {
@@ -1636,6 +1756,9 @@ function parseArgs(argv) {
     else if (a === "--write") opts.write = next();
     else if (a === "--json") opts.json = next();
     else if (a === "--reviewer") opts.reviewer = next();
+    else if (a === "--transcripts") opts.transcripts = next();
+    else if (a === "--controls-only") opts.controlsOnly = true;
+    else if (a === "--before") opts.before = next();
     else if (a === "--allow-unmerged") opts.allowUnmerged = true;
     else if (a === "--repo") opts.repo = next();
     else throw new Error(`unknown argument ${a}`);
@@ -1645,6 +1768,10 @@ function parseArgs(argv) {
 
 function main() {
   const opts = parseArgs(process.argv.slice(2));
+  if (opts.controlsOnly) {
+    console.log(controlsSection(loadBeads(opts), opts.transcripts ?? defaultTranscriptDir(), opts.before ?? null));
+    return;
+  }
   const changelog = parseChangelogMembership(fs.readFileSync(path.resolve(opts.repo, opts.changelog), "utf8"));
   for (const v of opts.releases) if (!changelog.has(v)) throw new Error(`CHANGELOG has no section for ${v}`);
 
@@ -1724,7 +1851,7 @@ function main() {
   for (const v of opts.releases) rowsByRelease.set(v, buildRows(changelog.get(v), beadsById, prAnalysesByNumber));
 
   const generatedAt = new Date().toISOString().slice(0, 10);
-  const report = renderReport({ releases: opts.releases, rowsByRelease, membershipChecks, unmerged, generatedAt, reviewer, prCount: prNumbers.size });
+  const report = renderReport({ releases: opts.releases, rowsByRelease, membershipChecks, unmerged, generatedAt, reviewer, prCount: prNumbers.size, controls: opts.transcripts ? controlsSection(beads, opts.transcripts, opts.before ?? null) : null });
 
   if (opts.json) {
     fs.writeFileSync(opts.json, JSON.stringify({ generatedAt, reviewer, rows: Object.fromEntries(rowsByRelease), prs: Object.fromEntries(prAnalysesByNumber), membershipChecks, tagDates: Object.fromEntries(tagDates) }, null, 2));
