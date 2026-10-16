@@ -173,6 +173,8 @@ Within every angle, check against `review-standards` section 2's four defect fam
 
 None of this produces a severity field on its own — assigning severity is still your job. For **every** finding, classify it against `review-standards` section 3 (medium-or-above = wrong behaviour a user or the data can reach; low = the correctness of the code's *description* rather than of the code), and **state the severity explicitly** in the comment you post and in your step 6 report. The entire round-4+ gate keys on that value. A finding whose severity nobody wrote down is the gate not running — if you cannot classify one, it counts as medium-or-above until someone does.
 
+A false claim that lives only in a review-thread comment (an issue or inline comment that is not a round marker) is not a finding for this step's gate: correct it in place and note it in the next round's comment, as `review-standards` section 3 ("A false claim in a review-thread comment") defines, which also lists the artefacts that still block.
+
 ### 4.1 Required recurring-family sweep
 
 This repo has four defect families that produced most of its historical review churn, and sweeping for the **class** costs one round while repeatedly replacing several. This section defines the four families; it is not a separate pass that runs after step 4 — step 4 already requires every one of its six finder angles to check against all four and name them in its report ("named per angle" in step 4's own text). Load the definitions once, before starting step 4:
@@ -711,6 +713,8 @@ First, the gates that apply at every round without exception. Approve and merge 
 - **Step 4.4's `<!-- ugcportal-measured: … -->` line is in the comment you are about to post**, on every round, whether or not the trigger fired — `deltas=0 absences=0 at=<headRefOid> baseline=n/a` is a complete answer and is what most rounds carry. A missing line is the step not having run. So is a line reporting `deltas=` above zero with `baseline=n/a`, or with `baseline=` equal to its own `at=`: that is a delta reported against no before-figure, which is the whole of what 4.4 exists to catch.
 
 Then apply the severity gate to the findings from steps 4 and 4.1, using the severities **you** assigned in step 4 and the round from step 4b. Definitions are in `review-standards` section 3; in short, **medium-or-above** is wrong behaviour a user or the data can reach (fail-open, authz gap, data loss, leaked credential, broken migration, a wrong figure a later bead builds on), and **low** is the correctness of the code's *description* rather than of the code (inaccurate comment, duplicate log lines, naming nit, an untidy test that still fails when the behaviour breaks). Note the one rule that is easy to get backwards: a **defective test inherits the severity of what it guards**, so a family-3 assertion-that-cannot-fail over a fresh fail-open fix is medium-or-above, not low.
+
+Findings about a false claim in a review-thread comment alone are not counted here and do not consume a round; `review-standards` section 3 owns that rule and the artefacts that still block.
 
 Exactly one row matches any given round.
 

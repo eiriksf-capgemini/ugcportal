@@ -163,6 +163,25 @@ That is deliberately stricter than the first draft of this rule, which let any u
 
 **Nothing above low is ever closed by the cap.** Only lows are ever deferred here, and each one becomes a bead with its severity written in it, so it is closed by a decision rather than by a timer. If anything medium-or-above is outstanding at round 6 — confirmed or unsettled — the PR does **not** merge; that is the escalate-to-a-human branch.
 
+### A false claim in a review-thread comment never blocks a merge and never consumes a round
+
+Decision: Eirik, 2026-10-16 (`ugcportal-n005`, option A).
+
+A **review-thread comment** is an issue comment or an inline review comment on the PR that is not a round-marker comment: a fix agent's reply, a reviewer's discussion, a status note. A false claim that lives only there ships nowhere: it is not in the diff, the squash-merge record, or any file a later reader or tool will open. So it **does not block the merge and does not consume a round** (a reviewer who finds a false thread claim and nothing else has no finding for the gate), but it is still **corrected, not ignored**:
+
+1. Correct it in place, by editing the comment that holds it rather than posting a second comment that contradicts the first:
+   - issue comment: `gh api -X PATCH repos/:owner/:repo/issues/comments/<id> -f body="<corrected text>"`
+   - inline review comment: `gh api -X PATCH repos/:owner/:repo/pulls/comments/<id> -f body="<corrected text>"`
+2. Record it with one line in the next round's comment (the comment id, what was false, what it now says).
+
+**These artefacts keep blocking, under the gate above, exactly as before:** the PR body (it persists and feeds the squash-merge record), source comments, test names and bodies, bead notes and fields, commit messages, and the round-marker comments themselves (they are the chain's record, and step 4b treats an edited marker as a broken chain).
+
+**A false claim that reaches a persistent artefact is never waved through under this rule.** Moving a claim out of a thread into the PR body, a commit message, a source comment, a test name, or a bead note puts it back under the gate at whatever severity it has there. The exemption belongs to where the claim lives, not to the sentence, so it cannot be used to park a false claim where it ships.
+
+Worked example 1, PR #201 round 4 (facts checked on 2026-10-16 against the PR's comments with `gh api repos/:owner/:repo/issues/201/comments` and `issues/comments/<id>`): the round-4 fix comment (issue comment 6071314440) said a mutation "failed exactly the SPACE non-terminator test ... and nothing else". The round-4 review comment (6071439514) re-ran the mutation and found five tests fail, not one, and was blocked on that alone. The round-5 correction was a PATCH to comment 6071314440; its reply (6075595580) records that `git diff --stat` for the round was empty, and a grep of the PR body for the claim text finds nothing. Under this rule that finding costs no round and does not block: the PATCH is the whole fix, and one line in the next round's comment records it. Not verified here: the round-5 fix agent's own grep of the worktree for the claim, which is reported by it, not re-run.
+
+Worked example 2, the same claim moved: had the fix agent also copied "exactly one test fails" into the PR body's test section (or into a source comment above the mutated regex), that copy is a persistent artefact. It blocks at the round's row of the table above (a low blocks at rounds 1-3, and is filed as a bead from round 4), and editing the thread comment does not clear it: the PR body must be corrected too.
+
 ## 4. This is not licence to review less carefully early
 
 The gate only changes what happens **to** findings from round 4 on. It does not change how hard anything is looked for, and it does not apply to rounds 1-3 at all. Reviews on this repo were finding real defects at round 7 and round 9; making them shallower is explicitly not the goal.
