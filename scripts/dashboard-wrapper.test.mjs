@@ -118,7 +118,8 @@ describe("scripts/dashboard.sh", () => {
 
   it("with no npx and no nvm install it names the problem and exits 127", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "ugc-dash-"));
-    expect(spawnSync("/bin/sh", ["-c", "command -v npx"], { env: { PATH: "/usr/bin:/bin" } }).status).toBe(1);
+    // `command -v` exits 1 (bash) or 127 (dash) when nothing is found; either way, not 0.
+    expect(spawnSync("/bin/sh", ["-c", "command -v npx"], { env: { PATH: "/usr/bin:/bin" } }).status).not.toBe(0);
     const r = run([SPEC], { cache: path.join(dir, "cache"), home: dir, pathDirs: ["/usr/bin", "/bin"] });
     expect(r.status).toBe(127);
     expect(r.stderr).toMatch(/^bead-dashboard: npx is not on PATH and no nvm install was found under /);
