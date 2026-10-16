@@ -42,6 +42,8 @@ import {
   addendumRound,
   agentCostFromPasses,
   aggregate,
+  keyedConflicts,
+  orphanFindingsKeys,
   CONTROLS,
   buildRows,
   catchesByControl,
@@ -1297,7 +1299,7 @@ describe("findings_rN keys (ugcportal-2jvh)", () => {
     const c = { id: "ugcportal-kkk9", title: "x", metadata: { prs: "gh-901", findings_r3: "f1:0 f2:0 f3:0 f4:0 med:1 low:0" } };
     const rel = { version: "v9.9.9", ids: [b.id, c.id], entries: new Map([[b.id, { title: "x", type: "Features" }], [c.id, { title: "x", type: "Features" }]]) };
     const rs = buildRows(rel, new Map([[b.id, b], [c.id, c]]), analyses());
-    expect(rs[0].keyFallbacks).toEqual(["r1 multi-pr", "r1 multi-pr"]);
+    expect(rs[0].keyFallbacks).toEqual(["findings_r1 multi-pr"]); // L4: one key, one entry, not once per PR
     expect(rs[1].keyFallbacks).toEqual(["r3 no-such-round"]);
   });
 
@@ -1312,6 +1314,59 @@ describe("findings_rN keys (ugcportal-2jvh)", () => {
     const r = row("ugcportal-kkk1");
     expect(r.families).toEqual({ f1: 2, f2: 0, f3: 3, f4: 0 });
     expect(r.roundDetail[0]).toMatchObject({ pr: 901, n: 1, source: "keys", medium: 3, low: 2, families: { f1: 2, f2: 0, f3: 3, f4: 0 } });
+  });
+
+  it("N1: a clean round that mentions earlier rounds' findings reads from its all-zero key, not as inconsistent", () => {
+    const clean = classifySeverity("Review round 3 (chain exact). Both round-2 findings are fixed, and the sweep is clean.\n\nNo findings this round.");
+    expect(clean).toMatchObject({ findings: null, stated: true, clean: true });
+    expect(classifySeverity("Both round 2 findings are fixed.").findings).toBeNull();
+    const out = withFindingsKeys(pr(1, [{ ...round(1, 0, 0), ...clean }]), { findings_r1: "f1:0 f2:0 f3:0 f4:0 med:0 low:0" });
+    expect(out.rounds[0]).toMatchObject({ source: "keys", stated: true, medium: 0, low: 0 });
+    expect(out.rounds[0].fallbackReason).toBeUndefined();
+  });
+
+  it("N1: an explicit clean statement outranks a bare findings count, but not labelled severities, and a real bare count still blocks", () => {
+    const zero = { findings_r1: "f1:0 f2:0 f3:0 f4:0 med:0 low:0" };
+    const bareClean = { ...round(1, 0, 0), findings: 2, clean: true };
+    expect(withFindingsKeys(pr(1, [bareClean]), zero).rounds[0].source).toBe("keys");
+    const labelled = { ...round(1, 1, 0), findings: 2, clean: true };
+    expect(withFindingsKeys(pr(1, [labelled]), zero).rounds[0].fallbackReason).toBe("inconsistent");
+    const real = classifySeverity("Blocking: three findings.");
+    expect(real.findings).toBe(3);
+    expect(withFindingsKeys(pr(1, [{ ...round(1, 0, 0), ...real }]), zero).rounds[0].fallbackReason).toBe("inconsistent");
+  });
+
+  it("N2: findings_unstamped is counted and listed under Data gaps, and is never matched to a marker", () => {
+    const b = { id: "ugcportal-kkk11", title: "x", metadata: { prs: "gh-901", findings_unstamped: "f1:0 f2:0 f3:0 f4:0 med:3 low:0,f1:0 f2:0 f3:0 f4:0 med:1 low:0", findings_r2: "f1:0 f2:0 f3:0 f4:0 med:0 low:0" } };
+    const rel = { version: "v9.9.9", ids: [b.id], entries: new Map([[b.id, { title: "x", type: "Features" }]]) };
+    const rs = buildRows(rel, new Map([[b.id, b]]), analyses());
+    expect(rs[0]).toMatchObject({ unstampedPasses: 2, roundsFromKeys: 1, mediums: 1, keyFallbacks: [] });
+    const report = renderReport({ releases: ["v9.9.9"], rowsByRelease: new Map([["v9.9.9", rs]]), membershipChecks: [], unmerged: [], generatedAt: "2026-10-16", reviewer: "x", prCount: 0 });
+    expect(report).toContain("unstamped review passes (`findings_unstamped`, not matched to a marker): kkk11 (2)");
+  });
+
+  it("L1: two keyed beads on one PR that disagree are listed as keyed-conflict, and the larger figure is kept in either order", () => {
+    const a = { id: "ugcportal-kkk12", title: "a", metadata: { prs: "gh-906", findings_r1: "f1:0 f2:0 f3:3 f4:0 med:3 low:0" } };
+    const c = { id: "ugcportal-kkk13", title: "c", metadata: { prs: "gh-906", findings_r1: "f1:0 f2:0 f3:0 f4:0 med:0 low:1" } };
+    const d = { id: "ugcportal-kkk14", title: "d", metadata: { prs: "gh-906", findings_r1: "f1:0 f2:0 f3:3 f4:0 med:3 low:0" } };
+    const mk = (ids) => {
+      const rel = { version: "v9.9.9", ids, entries: new Map(ids.map((i) => [i, { title: "x", type: "Features" }])) };
+      return buildRows(rel, new Map([[a.id, a], [c.id, c], [d.id, d]]), new Map([[906, pr(906, [round(1, 1, 0)])]]));
+    };
+    expect(aggregate(mk([a.id, c.id])).mediums).toBe(3);
+    expect(aggregate(mk([c.id, a.id])).mediums).toBe(3);
+    expect(keyedConflicts(mk([a.id, c.id]))).toEqual(["gh-906 (kkk12 3 vs kkk13 0; larger kept)"]);
+    expect(keyedConflicts(mk([a.id, d.id]))).toEqual([]); // agreeing keys are not a conflict
+    const report = renderReport({ releases: ["v9.9.9"], rowsByRelease: new Map([["v9.9.9", mk([a.id, c.id])]]), membershipChecks: [], unmerged: [], generatedAt: "2026-10-16", reviewer: "x", prCount: 0 });
+    expect(report).toContain("keyed-conflict");
+    expect(report).toContain("gh-906 (kkk12 3 vs kkk13 0; larger kept)");
+  });
+
+  it("L2: a findings_pr<n>_r<N> key for a PR not in prs, or a round the PR lacks, is listed as no-such-round", () => {
+    const b = { id: "ugcportal-kkk15", title: "x", metadata: { prs: "gh-901", findings_pr999_r1: "f1:0 f2:0 f3:0 f4:0 med:1 low:0", findings_pr901_r7: "f1:0 f2:0 f3:0 f4:0 med:1 low:0", findings_pr901_r1: "f1:0 f2:0 f3:0 f4:0 med:2 low:0" } };
+    expect(orphanFindingsKeys(b.metadata, [pr(901, [round(1, 0, 0)])])).toEqual(["pr901 r7", "pr999 r1"]);
+    const rel = { version: "v9.9.9", ids: [b.id], entries: new Map([[b.id, { title: "x", type: "Features" }]]) };
+    expect(buildRows(rel, new Map([[b.id, b]]), analyses())[0].keyFallbacks).toEqual(["pr901 r7 no-such-round", "pr999 r1 no-such-round"]);
   });
 
   it("a bead with two PRs that both have rounds cannot be keyed by round number, so it stays on prose", () => {
