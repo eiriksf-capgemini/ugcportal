@@ -252,6 +252,10 @@ describe("scripts/bd-guard.sh wrapper (F4)", () => {
     const bin = path.join(home, ".nvm", "versions", "node", "v9.9.9", "bin");
     fs.mkdirSync(bin, { recursive: true });
     fs.symlinkSync(process.execPath, path.join(bin, "node"));
+    // A decoy that the any-nvm-version fallback would pick (it sorts last) and that fails.
+    const decoy = path.join(home, ".nvm", "versions", "node", "v99.0.0", "bin");
+    fs.mkdirSync(decoy, { recursive: true });
+    fs.writeFileSync(path.join(decoy, "node"), "#!/bin/sh\nexit 7\n", { mode: 0o755 });
     fs.mkdirSync(path.join(home, ".nvm", "alias"), { recursive: true });
     fs.writeFileSync(path.join(home, ".nvm", "alias", "default"), "v9.9.9\n");
     const r = sh({ PATH: tmp(), HOME: home, BD_GUARD_FALLBACK_DIRS: tmp() });
