@@ -231,3 +231,63 @@ before dispatch, or its own bead — not a note.
 Three implementer agents at a time in practice, and never two on the same
 `cc_scope`. Claim the bead (`bd update <id> --claim`) and hand over the
 brief.
+
+## 5. Sending a fix round back: resume or fresh (ugcportal-8r06)
+
+A review round that blocks needs a fix. The implementer that built the PR can
+be resumed (`SendMessage`), or a fresh agent can be dispatched. Choose on two
+figures, not on how many passes the implementer has already had:
+
+- **Carried context**: the `subagent_tokens` of the implementer's *last*
+  completion notification. That is context size, not cost (CLAUDE.md, "Token
+  cost metadata"), and it approximates what a resume carries into its first call.
+- **Idle time**: minutes since that agent's last pass ended. The prompt cache
+  lives five minutes.
+
+**Rule.** Resume only when carried context is **under 150k tokens AND the
+agent has been idle under five minutes**. In every other case, including when
+either figure is unknown, dispatch a **fresh agent with a digested brief**:
+the findings (verbatim, with their severities), the PR URL and head sha (or the
+diff), the files to read, and the setup block of section 2. Do not forward the
+old agent's history.
+
+Case K1, quoted from the bead: an implementer whose last context was 300k
+tokens and who has been idle twenty minutes gets a **fresh agent with a
+digested brief, not a resume**. Both figures fail the rule independently.
+
+**Where the threshold comes from, stated honestly.**
+`docs/process/cost-performance-claims-v0.7.0-2026-10-16.md` section 3 (374
+resumed implementer passes, 85 fresh fix agents, 2026-09-17 to 2026-10-15)
+puts the crossover between **150k and 250k** of carried context: resumed passes
+that started under 150k cost a median 199k ITE, those at 150-250k cost 1,003k,
+against a median 612k for a fresh fix agent. 150k is the **conservative edge**
+of that band, not a measured optimum. 84% of second passes began with the
+cache expired (median idle 888 s), which is why idle time is the second test.
+The comparison is observational (fresh fix agents cluster on 2026-10-08 to
+10-14, and which rounds got one was not random) and says nothing about whether
+a fresh agent's fix needed more review rounds afterwards.
+
+**Worked case.** ugcportal-l6t5, 2026-10-16: implementer `ab608c13f79bda3dd`
+ended its one pass with a last notification of 352,596 tokens (the transcript's
+last call: 349,162), so the pass-2 fix on PR #255 went to a fresh agent,
+`a0b5576299a5578a3`, which began at 29,081 tokens of context and its fix pass
+cost 183,843 ITE. Reproduce with `node scripts/agent-pass-cost.mjs --json
+/tmp/passes.json` and select those two agent ids.
+
+**Record one line per fix round (K2).** Append it to the bead, in the same
+turn as the dispatch:
+
+```bash
+bd update <id> --append-notes "Fix round <N> <date>: <resume|fresh>, carried context <tokens>k, idle <minutes> min, agent <id>"
+```
+
+Filled in: `Fix round 2 2026-10-16: fresh, carried context 353k, idle 20 min, agent a0b5576299a5578a3`.
+Write `unknown` for a figure you could not read; that is itself a reason for
+`fresh`. `<id>` is the agent that takes the round, the new one when fresh.
+
+**Changing the threshold.** Any change to the 150k or five-minute figure
+requires the n per arm and the rounds-after-fix comparison beside it, never
+one release's median alone. That re-measurement is `ugcportal-hw97`; until it
+reports, the figures above stand. The cost unit the figures are in is
+`ugcportal-cii0`; reviewer agents are outside this rule, since their late
+passes are short and cheap in the same data.

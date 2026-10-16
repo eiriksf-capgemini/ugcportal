@@ -185,6 +185,16 @@ than leaving it parked mid-task. If a gap is unavoidable, the 1-hour cache
 tier is frequently the *correct* choice at high context sizes, not a cost to
 economize away.
 
+### Fix rounds: resume or fresh
+
+The same cache arithmetic governs a resumed implementer: resume for a fix
+round only while its carried context is under 150k tokens and it has been idle
+under five minutes; otherwise dispatch a fresh agent with a digested brief.
+The rule, its threshold derivation, the one-line per-round record and the
+condition for changing the threshold are owned by
+`.claude/skills/dispatch-bead/SKILL.md` section 5 (ugcportal-8r06); this file
+only points at it so the two cannot drift. Edit the figures there, not here.
+
 ## 4. Re-running the measurement
 
 `scripts/claude-usage-report.py` (in the second-brain vault, not this repo —
