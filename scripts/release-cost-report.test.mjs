@@ -31,7 +31,8 @@
  */
 import fs from "node:fs";
 import os from "node:os";
-import { describe, expect, it } from "vitest";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   CONTEXT_LABEL,
@@ -41,7 +42,12 @@ import {
   addendumRound,
   agentCostFromPasses,
   aggregate,
+  CONTROLS,
   buildRows,
+  catchesByControl,
+  controlsSection,
+  priceControl,
+  renderControlsTable,
   costUnitOf,
   fmt,
   formatAgentCost,
@@ -604,6 +610,7 @@ describe("classifySeverity (severity is read from the reviewer's words, never gu
         ].join("\n");
         const mutatedSrc = src
           .replace('from "./lib/is-main.mjs"', `from ${JSON.stringify(new URL("./lib/is-main.mjs", import.meta.url).href)}`)
+          .replace('from "./agent-pass-cost.mjs"', `from ${JSON.stringify(new URL("./agent-pass-cost.mjs", import.meta.url).href)}`)
           .replace(SPAN_GATE, PROXIMITY_GATE);
         expect(mutatedSrc).not.toContain(SPAN_GATE);
         const mutant = await import(`data:text/javascript;base64,${Buffer.from(mutatedSrc, "utf8").toString("base64")}`);
@@ -1048,5 +1055,129 @@ describe("agentCostFromPasses (ugcportal-cii0): the recording rule CLAUDE.md's o
 
   it("a complete result prints every figure", () => {
     expect(formatAgentCost(agentCostFromPasses([pass("a1", 1, 5, [7], 12, 3)], ["a1"]))).toBe("ite=12 calls=3 ctx=7 agents=1 passes=1 missing=none uncovered=none");
+  });
+});
+
+// ugcportal-md4c: the controls table, over a fixture transcript directory that
+// does not depend on this machine's transcripts.
+describe("controls table (ugcportal-md4c)", () => {
+  const dirs = [];
+  afterEach(() => { for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true }); });
+  const usage = (input) => ({ input_tokens: input, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 0 });
+  const turn = (id, ts, input, command) => ({ type: "assistant", timestamp: ts, message: { id, usage: usage(input), content: [{ type: "tool_use", id: `u-${id}`, input: { command } }] } });
+  const result = (id, ts) => ({ type: "user", timestamp: ts, message: { content: [{ type: "tool_result", tool_use_id: `u-${id}` }] } });
+  const jsonl = (...es) => es.map((e) => JSON.stringify(e)).join("\n");
+  /** 4 files: an orchestrator with 1 claims-audit + 1 dispatch-gate call, a subagent with 2 claims-audit calls, an empty session, and one more orchestrator file with nothing. */
+  function fixture() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "controls-test-"));
+    dirs.push(dir);
+    fs.writeFileSync(path.join(dir, "s1.jsonl"), jsonl(
+      turn("m1", "2026-10-10T10:00:00Z", 1000, "node scripts/claims-audit.mjs --pr 5"), result("m1", "2026-10-10T10:00:10Z"),
+      turn("m2", "2026-10-10T10:01:00Z", 2000, "node scripts/check-bead-dispatch.mjs ugcportal-x"), result("m2", "2026-10-10T10:01:04Z"),
+    ));
+    fs.mkdirSync(path.join(dir, "s1", "subagents"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "s1", "subagents", "agent-a1.jsonl"), jsonl(
+      turn("n1", "2026-10-10T11:00:00Z", 3000, "node scripts/claims-audit.mjs --base origin/main"), result("n1", "2026-10-10T11:00:20Z"),
+      turn("n2", "2026-10-10T11:05:00Z", 5000, "node /tmp/wt/scripts/claims-audit.mjs"), result("n2", "2026-10-10T11:05:30Z"),
+    ));
+    fs.writeFileSync(path.join(dir, "s2.jsonl"), jsonl(turn("k1", "2026-10-10T12:00:00Z", 7, "ls")));
+    fs.writeFileSync(path.join(dir, "s3.jsonl"), jsonl(turn("k2", "2026-10-10T12:00:00Z", 7, "git status")));
+    return dir;
+  }
+  const controls = [
+    { name: "claims-audit", pattern: CONTROLS.find((c) => c.name === "claims-audit").pattern },
+    { name: "dispatch-gate", pattern: CONTROLS.find((c) => c.name === "dispatch-gate").pattern },
+    { name: "sweep-candidates", pattern: CONTROLS.find((c) => c.name === "sweep-candidates").pattern },
+  ];
+  const beads = [
+    { id: "ugcportal-a1", metadata: { caught_by: "claims-audit" } },
+    { id: "ugcportal-a2", metadata: { caught_by: "claims-audit, dispatch-gate", caught_by_note: "x" } },
+    { id: "ugcportal-a3", metadata: { caught_by: "bogus-control" } },
+    { id: "ugcportal-a4", metadata: { cc_type: "fix" } },
+    { id: "ugcportal-a5" },
+    { id: "ugcportal-a6", metadata: { caught_by: "claims-audit,claims-audit" } },
+    { id: "ugcportal-a7", metadata: { caught_by: "Dispatch-Gate" } },
+  ];
+
+  it("K1: each control's runs, cost, wall clock, orchestrator share and examined/matched pair", () => {
+    const dir = fixture();
+    const [ca, dg] = controls.map((c) => priceControl(c, dir));
+    expect(ca).toMatchObject({ runs: 3, ite: 9000, seconds: 60, orchRuns: 1, orchIte: 1000, examined: 4, matched: 2, lowerBound: false });
+    expect(dg).toMatchObject({ runs: 1, ite: 2000, seconds: 4, orchRuns: 1, orchIte: 2000, examined: 4, matched: 1 });
+    const out = controlsSection(beads, dir, null, controls);
+    expect(out).toContain("| claims-audit | 3 | 9,000 | 60 s | 11% of cost (1 of 3 runs) | 3 | 4 examined / 2 matched |");
+    expect(out).toContain("| dispatch-gate | 1 | 2,000 | 4 s | 100% of cost (1 of 1 runs) | 2 | 4 examined / 1 matched |");
+  });
+
+  it("the --before window ends the control's window", () => {
+    const c = priceControl(controls[0], fixture(), "2026-10-10T10:30:00Z");
+    expect(c).toMatchObject({ runs: 1, ite: 1000, matched: 1 });
+  });
+
+  it("K2: catches are counted per control from caught_by, several values allowed, unknown values reported", () => {
+    const { counts, unrecognised } = catchesByControl(beads, controls);
+    expect(counts.get("claims-audit")).toEqual(["ugcportal-a1", "ugcportal-a2", "ugcportal-a6"]); // a6 names it twice, counted once
+    expect(counts.get("dispatch-gate")).toEqual(["ugcportal-a2", "ugcportal-a7"]); // a7 is written Dispatch-Gate
+    expect(counts.get("sweep-candidates")).toEqual([]);
+    expect(unrecognised).toEqual([{ id: "ugcportal-a3", value: "bogus-control" }]);
+    const out = controlsSection(beads, fixture(), null, controls);
+    expect(out).toContain("values not in the control list, not counted above: ugcportal-a3=bogus-control");
+  });
+
+  it("guardrail: a control whose pattern matches no call prints '0 of N files matched', not a bare 0", () => {
+    const out = controlsSection(beads, fixture(), null, controls);
+    const row = out.split("\n").find((l) => l.startsWith("| sweep-candidates"));
+    expect(row).toBe("| sweep-candidates | 0 (pattern matched nothing) | — (nothing matched) | — | — | 0 | 0 of 4 files matched |");
+  });
+
+  it("a control with no command pattern shows catches only and says why", () => {
+    const out = controlsSection([{ id: "ugcportal-p", metadata: { caught_by: "premise-audit" } }], fixture(), null, [{ name: "premise-audit", pattern: null }]);
+    expect(out).toContain("| premise-audit | n/a | n/a | n/a | n/a | 1 | n/a (no command pattern; agents, not commands) |");
+  });
+
+  it("skipped input marks the row a lower bound and the table says so", () => {
+    const dir = fixture();
+    fs.writeFileSync(path.join(dir, "s4.jsonl"), `${jsonl(turn("z1", "2026-10-10T13:00:00Z", 10, "node scripts/claims-audit.mjs"))}\n{"type":"assis`);
+    const out = controlsSection([], dir, null, controls.slice(0, 1));
+    expect(out).toMatch(/\| claims-audit \| >=4 \| >=9,010 \|/);
+    expect(out).toContain("LOWER BOUND");
+  });
+
+  it("a matching call with missing usage is counted as bad usage and marks every control scanned over that input a lower bound", () => {
+    const dir = fixture();
+    fs.writeFileSync(path.join(dir, "s5.jsonl"), jsonl({ type: "assistant", timestamp: "2026-10-10T13:00:00Z", message: { id: "b1", usage: {}, content: [{ type: "tool_use", id: "u-b1", input: { command: "node scripts/claims-audit.mjs" } }] } }));
+    const c = priceControl(controls[0], dir);
+    expect(c).toMatchObject({ lowerBound: true, runs: 4, ite: 9000, skipped: { badUsage: 1, unpriced: 1, unreadable: 0, malformedLines: 0 } });
+    const out = controlsSection([], dir, null, controls);
+    expect(out).toMatch(/\| claims-audit \| >=4 \| >=9,000 \| >=60 s \|/);
+    expect(out).toContain("LOWER BOUND (input was skipped or unpriced; `>=`): claims-audit, dispatch-gate, sweep-candidates.");
+    expect(out).toMatch(/\| dispatch-gate \| >=1 \| >=2,000 \|/);
+  });
+
+  it("a matching call whose turn has no message id is unpriced, and that alone marks the lower bound", () => {
+    // scanTool counts an id-less entry as bad usage too; the unpriced branch is tested directly with an injected scan result
+    const scan = () => ({ rows: [{ who: "a1", calls: 1, ite: 0, seconds: 0 }], filesExamined: 2, unreadable: 0, malformedLines: 0, badUsage: 0, unpriced: 1 });
+    const c = priceControl(controls[0], "/unused", null, scan);
+    expect(c.lowerBound).toBe(true);
+    const out = renderControlsTable([c], catchesByControl([], controls));
+    expect(out).toMatch(/\| claims-audit \| >=1 \| >=0 \| >=0 s \|/);
+    expect(out).toContain("LOWER BOUND");
+    const bad = priceControl(controls[0], "/unused", null, () => ({ rows: [{ who: "a1", calls: 1, ite: 5, seconds: 0 }], filesExamined: 2, unreadable: 0, malformedLines: 0, badUsage: 1, unpriced: 0 }));
+    expect(bad.lowerBound).toBe(true);
+  });
+
+  it("a zero-match row with skipped input prints the skipped counts, not only a boolean", () => {
+    const dir = fixture();
+    fs.writeFileSync(path.join(dir, "s6.jsonl"), `${jsonl(turn("z", "2026-10-10T13:00:00Z", 1, "ls"))}\n{"type":"assis`);
+    const out = controlsSection([], dir, null, controls.slice(2));
+    expect(out).toContain("0 of 5 files matched (0 files skipped unreadable, 1 malformed lines, 0 entries with bad usage, 0 calls unpriced)");
+    expect(out).toContain("LOWER BOUND");
+  });
+
+  it("every control in the fixed list is named in renderControlsTable's input order", () => {
+    const priced = CONTROLS.map((c) => ({ control: c, priced: false }));
+    const out = renderControlsTable(priced, catchesByControl([]), { dir: "/d" });
+    expect(CONTROLS.map((c) => c.name)).toEqual(["review-round-markers", "claims-audit", "sweep-candidates", "dispatch-gate", "premise-audit"]);
+    for (const c of CONTROLS) expect(out).toContain(`| ${c.name} |`);
   });
 });
