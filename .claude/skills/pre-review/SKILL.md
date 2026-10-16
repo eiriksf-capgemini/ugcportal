@@ -137,6 +137,7 @@ Expect tens of lines on a code PR and hundreds on a PR that adds documentation (
 - a **TEMPORAL** sentence is either true at this head (and will be true at merge) or deleted — "remains to be switched" in the PR that is the switch cost #82 a round;
 - **HISTORY** is deleted from code and test titles; it belongs in the PR body and the bead;
 - a **REFERENCE not found** is fixed or named as a dependency file.
+- a **SCOPE-LIMITING** line is read and confirmed to state a limit of an instrument, not a guarantee; if it is a guarantee, reword it so claims-audit flags it as ABSOLUTE and treat it as one.
 
 Measured on the v0.5.0 PRs, this step alone would have removed: #86 round 1 (three of four lows: two measurements of one scenario in `schema.prisma`, a type guard the comment said constrained), #102 round 1 (three of four lows: a dedupe mechanism described backwards), #100 rounds 1-2 (three of five lows), #98 round 1 (a comment citing a file that does not exist; "runs once per sign-in" — twice), #97 round 1 (a contrast entry that does not exist; a reference to a heading #94 was removing), #101 round 1 (seven comment items), #95 round 5 (six family-1 lows, including a `.mtsx` extension TypeScript does not have). It would not have caught a claim that is wrong but contains none of the trigger words — #94 round 5's "no listeners attached" was found by reading the component; keep reading.
 
