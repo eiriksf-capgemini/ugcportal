@@ -246,6 +246,16 @@ The delimiter is `BD_EOF` rather than `EOF` because a recommendation quoting a s
 
 **6. Report.** Step 10 states the document read, how many recommendations it held, how many were already converted, every bead id filed, and every recommendation deliberately not filed with its reason. If the step was skipped, name which branch of 1 or 2 caused it.
 
+## 7b. Fresh-machine compose gate
+
+Run this before step 8; it is the gate "validate `docker compose up` before closing" (Eirik, 2026-10-14), whose first run caught `401 UNAUTHORIZED` on the MinIO images (ugcportal-s2qp). A warm local image cache hides exactly that failure, so do not trust a `docker compose up` on your usual machine.
+
+1. Run `node scripts/check-compose-images.mjs`. It resolves every registry image in `docker-compose.yml` over HTTP with an anonymous token, prints each locally built or `${VAR}` image it excluded by name, and exits non-zero on any non-200 or if it checked nothing. A non-zero exit blocks the release.
+2. On a machine with Docker, clear the image cache for this project's images (`docker compose down --rmi all --volumes`, then `docker image prune -af` only if the machine is yours to prune), run `docker compose up --wait`, and probe `/` and `/api/public/media` on the app port; both must answer without a 5xx.
+3. Record the outcome of both in the release PR body (script exit and the registry-images-checked line, and the two probe statuses). If there was no Docker machine, say so in the body rather than omitting the line.
+
+The scheduled `compose-images.yml` workflow runs item 1 weekly between releases; it does not replace this step.
+
 ## 8. Ship it
 
 This step commits and pushes — defer to CLAUDE.md's "Agent Context Profiles" for whether you may do that unprompted (Conservative default: report the generated changes and wait for explicit approval before committing/pushing; only proceed straight to branch/commit/push/PR if the user's request or the active profile already grants that authority).
