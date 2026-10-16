@@ -187,13 +187,11 @@ economize away.
 
 ### Fix rounds: resume or fresh
 
-The same cache arithmetic governs a resumed implementer: resume for a fix
-round only while its carried context is under 150k tokens and it has been idle
-under five minutes; otherwise dispatch a fresh agent with a digested brief.
-The rule, its threshold derivation, the one-line per-round record and the
-condition for changing the threshold are owned by
-`.claude/skills/dispatch-bead/SKILL.md` section 5 (ugcportal-8r06); this file
-only points at it so the two cannot drift. Edit the figures there, not here.
+Whether a fix round resumes the implementer or goes to a fresh agent is
+decided by the context it carries and how long it has been idle. The rule, its
+figures, the one-line per-round record and the condition for changing it are
+in `.claude/skills/dispatch-bead/SKILL.md` section 5 (ugcportal-8r06); this
+subsection holds none of them, so there is one place to edit.
 
 ## 4. Re-running the measurement
 

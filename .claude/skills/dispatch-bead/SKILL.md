@@ -248,8 +248,14 @@ figures, not on how many passes the implementer has already had:
 agent has been idle under five minutes**. In every other case, including when
 either figure is unknown, dispatch a **fresh agent with a digested brief**:
 the findings (verbatim, with their severities), the PR URL and head sha (or the
-diff), the files to read, and the setup block of section 2. Do not forward the
-old agent's history.
+diff), the files to read, and the setup items of section 2 (prisma generate,
+capped vitest workers, the bot identity, a named model, the long-command rule).
+Do not use section 2's worktree item: it cuts a new branch off `origin/main`,
+and a fix must land on the PR's existing head branch. Name that branch and the
+implementer's existing worktree (`/tmp/wt-<short>`) in the brief and tell the
+fresh agent to work there; if that worktree is gone, it re-adds one on the
+existing branch (`git worktree add /tmp/wt-<short> <branch>`, no `-b`). Do not
+forward the old agent's history.
 
 Case K1, quoted from the bead: an implementer whose last context was 300k
 tokens and who has been idle twenty minutes gets a **fresh agent with a
@@ -269,20 +275,27 @@ a fresh agent's fix needed more review rounds afterwards.
 
 **Worked case.** ugcportal-l6t5, 2026-10-16: implementer `ab608c13f79bda3dd`
 ended its one pass with a last notification of 352,596 tokens (the transcript's
-last call: 349,162), so the pass-2 fix on PR #255 went to a fresh agent,
+last call: 349,162), so the first fix round on PR #255 went to a fresh agent,
 `a0b5576299a5578a3`, which began at 29,081 tokens of context and its fix pass
-cost 183,843 ITE. Reproduce with `node scripts/agent-pass-cost.mjs --json
+cost at least 183,843 ITE (a lower bound: `a0b5576299a5578a3` ran on
+`claude-sonnet-5-5`, whose transcripts under-record output, document section 1.2;
+it recorded 109 output tokens over 17 calls). Reproduce with `node scripts/agent-pass-cost.mjs --json
 /tmp/passes.json` and select those two agent ids.
 
 **Record one line per fix round (K2).** Append it to the bead, in the same
 turn as the dispatch:
 
 ```bash
-bd update <id> --append-notes "Fix round <N> <date>: <resume|fresh>, carried context <tokens>k, idle <minutes> min, agent <id>"
+bd update <id> --append-notes "Fix round <N> <date>: <resume|fresh>, carried context <tokens>k|unknown, idle <minutes> min, agent <id>"
 ```
 
-Filled in: `Fix round 2 2026-10-16: fresh, carried context 353k, idle 20 min, agent a0b5576299a5578a3`.
-Write `unknown` for a figure you could not read; that is itself a reason for
+`<N>` is the review round whose findings the fix answers, so the first fix
+round after a round-1 review is 1 (PR #255 carries one round marker, and the
+worked case's fix answered it).
+
+Filled in: `Fix round 1 2026-10-16: fresh, carried context 353k, idle 20 min, agent a0b5576299a5578a3`.
+Write `unknown` in place of a figure you could not read, with no `k`
+(`carried context unknown`, `idle unknown min`); that is itself a reason for
 `fresh`. `<id>` is the agent that takes the round, the new one when fresh.
 
 **Changing the threshold.** Any change to the 150k or five-minute figure
