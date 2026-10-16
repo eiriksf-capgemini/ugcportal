@@ -102,6 +102,14 @@ If the changed files (`gh pr view --json files`) touch any of the following, thi
 
 If any of these are touched, still run the review (step 4) and post it as a normal comment, but explicitly state in the comment that this PR requires human approval/merge because it touches a sensitive path, and do not call `gh pr review --approve` or `gh pr merge`.
 
+**Mark the PR as waiting on a human (ugcportal-ub7y).** A comment alone leaves the PR findable only in chat. At this stop, once the review has reached a clean verdict (no blocking finding), do two things, in this order: put the line `<!-- ugcportal-needs-human-merge -->` in the comment, which says that a human must merge and **names the sensitive paths** that triggered the stop, and apply the GitHub label (it already exists on the repo; `gh label list` shows it):
+
+```bash
+gh pr edit <n> --add-label needs-human-merge
+```
+
+The reviewer run applies this GitHub label. The bead label `stalled-on-human` is set by the **orchestrator**, not the reviewer run, because a reviewer's `bd` access is limited; step 6 carries that instruction. A PR that also has blocking findings is not "reviewed clean": it gets the normal blocking comment and no label until a later round is clean. The same label and the same two orchestrator instructions apply wherever else a reviewed-clean PR is left for a human to merge (for example the round-6 escalation stop in step 5).
+
 ## 3. CI gate
 
 `gh pr checks <n>` reports only the **latest run per check name**. `.github/workflows/ci.yml` deliberately skips the "Lint, test, typecheck, build" job on a title/body-only `edited` event (`ugcportal-0an4`) — correct on its own — but that means any `gh pr edit --title`/`--body` after a green run creates a later run in which that job is `skipped`, and being latest, is the only thing `gh pr checks` shows. The failure that matters is not "a reviewer stops on a PR that actually passed" (safe, just wasteful); it's the inverse: a reviewer who sees `skipping` and reasons "that's the edited-event skip, by design, proceed" cannot tell that reading apart from a PR whose quality job **never ran at all** at this head. **Do not gate on `gh pr checks` or on any single `conclusion` read in isolation.** Gate on every run recorded against the current head instead:
@@ -1076,6 +1084,21 @@ State plainly:
 - Findings with **the severity you assigned each one** (step 4's angles don't produce one on their own — see step 4's closing paragraph), and which were fixed versus deferred.
 - Bead ids filed in step 5a, if any — **each with the `discovered-from` edge you read back beside it**, in the direction it points, not just the id.
 - The `tokens_qa` figure and the `cost_ite_qa`/`cost_calls_qa` figures recorded in step 4a (or note that they were skipped, and why), and whether `bd-verify-metadata` confirmed they landed. "Recorded" without a read-back behind it is the claim, not the evidence.
+
+**If the PR was left for a human (sensitive path, step 2, or an escalation stop), say so and give the orchestrator the bead instruction (ugcportal-ub7y):** the GitHub label `needs-human-merge` is on the PR (you applied it, quote the `gh pr edit` output or `gh pr view <n> --json labels`), and the orchestrator runs, from the main checkout:
+
+```bash
+bd label add <bead-id> stalled-on-human
+```
+
+When that PR later merges and the bead closes, the orchestrator removes both labels (a merged PR keeps its labels otherwise, and the bead would stay on the "needs you" lists):
+
+```bash
+gh pr edit <n> --remove-label needs-human-merge
+bd label remove <bead-id> stalled-on-human
+```
+
+`node scripts/check-human-merge-labels.mjs` is the check that catches a PR left in chat only: it lists open PRs whose comment carries the `<!-- ugcportal-needs-human-merge -->` marker but that lack the label, and prints its counts (PRs examined, PRs with a verdict comment, unlabelled among those) before any zero is trusted. Read the counts, not only the absence of a list.
 
 If merged, confirm the merge actually happened (`gh pr view <n> --json state,mergedAt`) and confirm the result of the scoped sweep above — removed and the final `git ls-remote` check confirms it gone, or kept (naming the reason the script printed) and still present.
 

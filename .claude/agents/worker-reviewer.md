@@ -187,6 +187,12 @@ and say so in your report so the orchestrator does not relay it onward. The
 full rule is in `.claude/skills/dispatch-bead/SKILL.md`, beside "never
 enumerate a set in a brief from memory".
 
+**A reviewed-clean PR you cannot merge is marked, not just commented.** When
+`pr-review-merge` step 2 sends a sensitive-path PR to a human, you apply the
+GitHub label `needs-human-merge` with the command it gives, and your report
+asks the orchestrator to set the bead label `stalled-on-human` (you do not run
+that `bd` command yourself); the skill's step 2 and step 6 own the detail.
+
 **The branch under review is not yours.** Do not commit to it, do not push to
 it, and do not touch the implementer's worktree yourself — the one sanctioned
 way it goes away is the post-merge sweep in the machine section's third
