@@ -26,8 +26,8 @@
  * THE IDENTITY. The live-session check re-judges every request against
  * ALLOWED_SIGNIN_EMAILS, using the address recorded on the session row
  * (`signInEmail`). The seeded row records E2E_SIGNED_IN_EMAIL, and the root
- * playwright.config.ts adds exactly that address to the allowlist of the dev
- * server it starts. A server it did not start (UGCPORTAL_E2E_REUSE_SERVER=1)
+ * playwright.config.ts sets the ALLOWED_SIGNIN_EMAILS of the dev server it
+ * starts to exactly that address. A server it did not start (UGCPORTAL_E2E_REUSE_SERVER=1)
  * will not have it, and refuses the seeded session: the signed-in specs then
  * fail on a signed-out page rather than passing on one.
  *
@@ -41,7 +41,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 
 /** The address the seeded session records as its sign-in identity. A
- * reserved `.test` domain (RFC 2606), so it can never be a real person. */
+ * reserved `.test` domain (RFC 2606), so it is not a real mailbox. */
 export const E2E_SIGNED_IN_EMAIL = "e2e-signed-in@example.test";
 
 /** Every row this module writes carries this id prefix, and cleanup only

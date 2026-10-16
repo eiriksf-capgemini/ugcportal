@@ -265,11 +265,10 @@ test.describe("K3: no sales link in the navigation", () => {
  * 320 and 390 are the widths ugcportal-i7lr K4 and ugcportal-ry6w ask about
  * (390 is the signed-in view ry6w's wordmark report is about); 1440 is the
  * desktop layout, where Upload sits in the inline nav instead of behind the
- * menu toggle. The assertions that would read the same signed out ("Sign in"
- * absent, "Sign out" and "Upload" present) are deliberately the ones a
- * signed-out page fails: a fixture that quietly stopped signing the test in
- * turns every one of these red, rather than leaving a page that has no
- * signed-in content to check.
+ * menu toggle. Each assertion below ("Sign in" absent, "Sign out" and
+ * "Upload" present) is one a signed-out page fails, so a fixture that quietly
+ * stopped signing the test in turns these red instead of passing them on a
+ * signed-out page.
  */
 const SIGNED_IN_VIEWPORTS = {
   mobile320: { width: 320, height: 720 },
@@ -314,8 +313,10 @@ for (const [name, viewport] of Object.entries(SIGNED_IN_VIEWPORTS)) {
         const closed = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
         expect(closed.violations, JSON.stringify(closed.violations, null, 2)).toEqual([]);
 
-        // Below md the Upload entry exists only inside the opened menu, so a
-        // closed-menu scan never sees it. Open it and scan again.
+        // Below md the Upload entry is laid out only inside the opened menu
+        // (the desktop nav's copy is in the DOM but hidden at this width, and
+        // axe skips hidden elements), so a closed-menu scan does not check
+        // it. Open the menu and scan again.
         //
         // EXCLUDED from that second scan: @base-ui/react/popover's own focus
         // guards (`<span aria-hidden="true" tabindex="0"
