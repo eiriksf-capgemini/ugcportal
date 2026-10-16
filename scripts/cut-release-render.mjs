@@ -165,7 +165,7 @@ export function format(result) {
   const lines = [
     `closed beads returned: ${result.A}`,
     `of those, without released_in: ${result.B}`,
-    `of those, every gh-N MERGED: ${result.C}`,
+    `of those, verified (every gh-N MERGED, or no prs): ${result.C}`,
     `rendered entries: ${result.rendered}`,
     `version bump (shipped beads only): ${result.bump}`,
   ];
@@ -175,6 +175,16 @@ export function format(result) {
   }
   lines.push("", "report:", ...(result.report.length ? result.report.map((r) => `- ${r}`) : ["- (none)"]));
   return lines.join("\n");
+}
+
+/**
+ * 1: never-drop violated (rendered != C). 3: the run is incomplete because a
+ * bead with a malformed prs token was excluded. 0 otherwise.
+ */
+export function exitCode(result) {
+  if (result.rendered !== result.C) return 1;
+  if (result.malformed.length > 0) return 3;
+  return 0;
 }
 
 if (isMainModule(import.meta.url)) {
@@ -191,6 +201,9 @@ if (isMainModule(import.meta.url)) {
   console.log(format(result));
   if (result.rendered !== result.C) {
     console.error(`never-drop violated: rendered ${result.rendered} != C ${result.C}`);
-    process.exit(1);
   }
+  if (result.malformed.length > 0) {
+    console.error(`INCOMPLETE: ${result.malformed.length} bead(s) with malformed prs excluded (${result.malformed.map((m) => m.id).join(", ")}); fix them before steps 6-8`);
+  }
+  process.exit(exitCode(result));
 }

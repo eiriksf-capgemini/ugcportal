@@ -21,7 +21,7 @@ bd list --status=closed --json
 
 Filter to issues where `metadata.released_in` is **not** set — those are candidates. (A small Python/jq filter over the JSON is the easiest way; there's no CLI flag for "metadata key absent".)
 
-**Before including a candidate, verify it actually shipped.** `bd status=closed` only means the bead's work is done, not that its PR landed on `main`. For every `gh-N` token in the bead's `metadata.prs`, check `gh pr view N --json state,mergedAt` — if any PR isn't `MERGED`, drop that bead from this release (leave its `released_in` unset so a later run picks it up once it actually merges) and note it in your final report rather than silently skipping it. A bead with no `prs` at all has no PR to check and is not dropped here; the resolution rule below decides which section it renders under. Every token in `prs` must match `gh-<digits>` exactly (`GH-12`, `12`, `gh-12a` and an empty token from a stray comma do not): a bead with any malformed token is excluded from this release and from `C`, left without `released_in`, and named in the step-10 report; fix the bead's `prs` and re-run. Do not skip this check — a bead closed with an unmerged PR in `prs` has already happened once in this repo's history and produced a changelog entry for work that wasn't on `main`.
+**Before including a candidate, verify it actually shipped.** `bd status=closed` only means the bead's work is done, not that its PR landed on `main`. For every `gh-N` token in the bead's `metadata.prs`, check `gh pr view N --json state,mergedAt` — if any PR isn't `MERGED`, drop that bead from this release (leave its `released_in` unset so a later run picks it up once it actually merges) and note it in your final report rather than silently skipping it. A bead with no `prs` at all has no PR to check and is not dropped here; the resolution rule below decides which section it renders under. Every token in `prs` must match `gh-<digits>` exactly (`GH-12`, `12`, `gh-12a` and an empty token from a stray comma do not): a bead with any malformed token is excluded from this release and from `C`, left without `released_in`, and named in the step-10 report; fix the bead's `prs` and re-run. **The run is INCOMPLETE while any malformed bead exists**: it may be the only `feat` or `breaking` bead, and the step-3 bump is computed without it. Do not proceed to steps 6-8 until the bead is fixed, or the human has accepted its exclusion by name. `scripts/cut-release-render.mjs` exits 3 in that case. Do not skip this check — a bead closed with an unmerged PR in `prs` has already happened once in this repo's history and produced a changelog entry for work that wasn't on `main`.
 
 **Classify every surviving candidate by `metadata.resolution`.** `bd status=closed` also covers work closed without shipping anything (found cutting v0.7.0: beads closed as already implemented, not reproducible, or decided against were listed as Features and Fixes). The key `resolution` takes one of: `shipped` | `not-reproducible` | `wont-fix` | `duplicate` | `superseded`.
 
@@ -41,7 +41,7 @@ one as a failure of this step rather than as an empty backlog**
 ```
 closed beads returned by `bd list --status=closed --json`: <A>
 of those, without `metadata.released_in`:                  <B>
-of those, every `gh-N` in `metadata.prs` MERGED:           <C>
+of those, verified (every `gh-N` MERGED, or no prs): <C>
 ```
 
 `A = 0` is not a release with nothing in it — this repo has hundreds of
@@ -55,8 +55,9 @@ figure on that report was plausible.
 `C` counts every candidate that passed the PR check, "Closed without a change" candidates included: step 5 must render exactly `C` entries.
 
 `B = 0` or `C = 0` with a healthy `A` **is** a real answer — everything
-closed has already shipped — and is reported as `A` closed, `B` unreleased,
-`C` verified-shipped, not as a bare "nothing to release". Say so with all
+closed is already released, or has an unmerged or malformed PR link that
+kept it out — and is reported as `A` closed, `B` unreleased, `C` verified
+candidates (PR-merged, or closed without a change), not as a bare "nothing to release". Say so with all
 three numbers and stop.
 
 ## 2. Read the current version
@@ -283,6 +284,6 @@ Do this only after confirming the release PR from step 8 is merged (`gh pr view 
 
 ## 10. Report back
 
-State the computed version, the bump reason (which issue(s) triggered feat/major), step 1's three narrowing figures (`A` closed / `B` unreleased / `C` verified-shipped), how many entries step 5 rendered under "Closed without a change" and the total rendered (which must equal `C`), the report lines `scripts/cut-release-render.mjs` prints, verbatim in form: `PR #<n> (<bead-id>) is already linked in an earlier release section: <versions>` (scan the `pull/<n>` links of every existing `## v` section, exact number match; the entry stays rendered rather than being silently re-announced or dropped), `<bead-id>: unrecognised resolution "<value>"`, `<bead-id>: malformed prs "<raw>" -- excluded from this release; fix the bead, then re-run`, and `<bead-id> dropped from this release: PR(s) not MERGED: <numbers>`, step 7's read-back fraction, how many issues were included, whether step 5a's Cost Summary was included or skipped (and why, if skipped, or note any malformed `tokens_impl`/`tokens_qa` value it ignored), the PR URL, and the GitHub Release URL (or why it was skipped/deferred).
+Start with any malformed-`prs` beads (the run is incomplete while they exist; see step 1), then state the computed version, the bump reason (which issue(s) triggered feat/major), step 1's three narrowing figures (`A` closed / `B` unreleased / `C` verified candidates: PR-merged or closed without a change), how many entries step 5 rendered under "Closed without a change" and the total rendered (which must equal `C`), the report lines `scripts/cut-release-render.mjs` prints, verbatim in form: `PR #<n> (<bead-id>) is already linked in an earlier release section: <versions>` (scan the `pull/<n>` links of every existing `## v` section, exact number match; the entry stays rendered rather than being silently re-announced or dropped), `<bead-id>: unrecognised resolution "<value>"`, `<bead-id>: malformed prs "<raw>" -- excluded from this release; fix the bead, then re-run`, and `<bead-id> dropped from this release: PR(s) not MERGED: <numbers>`, step 7's read-back fraction, how many issues were included, whether step 5a's Cost Summary was included or skipped (and why, if skipped, or note any malformed `tokens_impl`/`tokens_qa` value it ignored), the PR URL, and the GitHub Release URL (or why it was skipped/deferred).
 
 Then step 7a's result, which is reported whether or not it filed anything: the retrospective document read and how many recommendations it held, how many were already converted, every bead id filed, and every recommendation deliberately not filed with its reason. If 7a was skipped or stopped, say which branch of its steps 1 or 2 caused it — a retrospective silently going unread is the failure this step exists to prevent, so "nothing to report" is never an acceptable rendering of it.

@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
-import { render, classify, format, computeBump, WITHOUT_CHANGE } from "./cut-release-render.mjs";
+import { readFileSync, writeFileSync, mkdtempSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { render, classify, format, computeBump, exitCode, WITHOUT_CHANGE } from "./cut-release-render.mjs";
 
 const changelog = readFileSync(new URL("../CHANGELOG.md", import.meta.url), "utf8");
 
@@ -102,6 +105,21 @@ describe("cut-release render (ugcportal-xb68)", () => {
     const log2 = log + "- c — https://github.com/o/r/pull/155\n";
     expect(render([bead("a", { prs: "gh-155" })], log2, st).repeatedPrs).toHaveLength(1);
     expect(render([bead("a", { prs: "gh-1550" })], log2, st).repeatedPrs).toHaveLength(1);
+  });
+
+  it("N1: a malformed-prs bead makes the run exit non-zero, a clean run exits 0", () => {
+    expect(exitCode(r)).toBe(0);
+    expect(exitCode(render([...fixture, bead("ugcportal-bad", { cc_type: "feat", prs: "GH-12" })], changelog, states))).toBe(3);
+    const dir = mkdtempSync(join(tmpdir(), "xb68-"));
+    const run = (beads) => {
+      writeFileSync(join(dir, "b.json"), JSON.stringify(beads));
+      writeFileSync(join(dir, "s.json"), JSON.stringify(states));
+      return spawnSync("node", [new URL("./cut-release-render.mjs", import.meta.url).pathname, join(dir, "b.json"), new URL("../CHANGELOG.md", import.meta.url).pathname, join(dir, "s.json")], { encoding: "utf8" });
+    };
+    expect(run(fixture).status).toBe(0);
+    const bad = run([...fixture, bead("ugcportal-bad", { cc_type: "feat", prs: "GH-12" })]);
+    expect(bad.status).toBe(3);
+    expect(bad.stderr).toMatch(/INCOMPLETE: 1 bead.*ugcportal-bad/);
   });
 
   it("format prints the figures and the report", () => {
