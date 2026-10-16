@@ -246,11 +246,28 @@ The delimiter is `BD_EOF` rather than `EOF` because a recommendation quoting a s
 
 **6. Report.** Step 10 states the document read, how many recommendations it held, how many were already converted, every bead id filed, and every recommendation deliberately not filed with its reason. If the step was skipped, name which branch of 1 or 2 caused it.
 
+## 7b. Fresh-machine compose gate
+
+Run this before step 8; it is the gate "validate `docker compose up` before closing" (Eirik, 2026-10-14), whose first run caught `401 UNAUTHORIZED` on the MinIO images (ugcportal-s2qp). A warm local image cache hides exactly that failure, so do not trust a `docker compose up` on your usual machine.
+
+1. Run `node scripts/check-compose-images.mjs`. It resolves every registry image in `docker-compose.yml` over HTTP with an anonymous token, prints each locally built or `${VAR}` image it excluded by name, and exits non-zero on any non-200 or if it checked nothing. A non-zero exit blocks the release.
+2. On a machine with Docker, run the stack from a cold registry-image cache. `ugcportal:<tag>` and `ugcportal-migrate:<tag>` are built locally and exist in no registry, so never remove them with `--rmi all`; remove only the registry images and rebuild the local two:
+   ```bash
+   docker compose down                                     # keeps the minio-data and app-data volumes
+   docker compose config --images | grep -v '^ugcportal' | xargs docker image rm -f   # the registry images only (the minio pair)
+   export $(npm run --silent docker:qa:build | tail -1)    # builds both local images, exports UGCPORTAL_IMAGE_TAG
+   docker compose up --wait
+   ```
+   Then probe `/` and `/api/public/media` on the app port; both must answer without a 5xx. For a cold-volume run too, add `--volumes` to `docker compose down`, which **deletes** `minio-data` and `app-data` (uploaded media and the app database); do that only on a throwaway machine.
+3. Record the outcome of both in the release PR body (script exit and the registry-images-checked line, and the two probe statuses). If there was no Docker machine, say so in the body rather than omitting the line.
+
+The scheduled `compose-images.yml` workflow runs item 1 weekly between releases; it does not replace this step. A scheduled failure reaches a human only through GitHub's scheduled-workflow failure email, so this step is the backstop.
+
 ## 8. Ship it
 
 This step commits and pushes — defer to CLAUDE.md's "Agent Context Profiles" for whether you may do that unprompted (Conservative default: report the generated changes and wait for explicit approval before committing/pushing; only proceed straight to branch/commit/push/PR if the user's request or the active profile already grants that authority).
 
-Once authorized: branch, commit (`chore(release): v<version>` — a release commit legitimately isn't tied to a single bead, so it's fine without a bead-id suffix), push, open a PR via `gh pr create` with the release notes (steps 5–5a) as the PR body, ending with the repo's usual Claude Code attribution footer.
+Once authorized: branch, commit (`chore(release): v<version>` — a release commit legitimately isn't tied to a single bead, so it's fine without a bead-id suffix), push, open a PR via `gh pr create` with the release notes (steps 5–5a) plus step 7b's result line (script exit, registry-images-checked line, probe statuses, or "no Docker machine") as the PR body, ending with the repo's usual Claude Code attribution footer.
 
 A release PR only ever touches `CHANGELOG.md`, `package.json`, and `package-lock.json`, so it isn't a sensitive path under `pr-review-merge`'s gate. If the active profile grants merge authority, run that skill against the PR you just opened; otherwise report the PR URL and wait for a human to merge it. Either way, do not proceed to step 9 until the PR has actually merged.
 
@@ -269,5 +286,7 @@ Do this only after confirming the release PR from step 8 is merged (`gh pr view 
 ## 10. Report back
 
 State the computed version, the bump reason (which issue(s) triggered feat/major), step 1's three narrowing figures (`A` closed / `B` unreleased / `C` verified-shipped), step 7's read-back fraction, how many issues were included, whether step 5a's Cost Summary was included or skipped (and why, if skipped, or note any malformed `tokens_impl`/`tokens_qa` value it ignored), the PR URL, and the GitHub Release URL (or why it was skipped/deferred).
+
+Then step 7b's result next to 7a's: the script's exit and its registry-images-checked line, the two probe statuses (or that there was no Docker machine), and what the release PR body recorded.
 
 Then step 7a's result, which is reported whether or not it filed anything: the retrospective document read and how many recommendations it held, how many were already converted, every bead id filed, and every recommendation deliberately not filed with its reason. If 7a was skipped or stopped, say which branch of its steps 1 or 2 caused it — a retrospective silently going unread is the failure this step exists to prevent, so "nothing to report" is never an acceptable rendering of it.
