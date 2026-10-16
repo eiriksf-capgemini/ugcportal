@@ -13,5 +13,5 @@
   "cmuxConfig": ".cmux/cmux.json",
   "cmuxWorkspace": "ugcportal dashboard",
   "cmuxAction": "ugcportal-dashboard",
-  "command": "sh scripts/dashboard.sh github:eiriksf-capgemini/bead-dashboard#fbce8249ef5c50dcef27d7954f9924541c49960c"
+  "command": "sh scripts/dashboard.sh github:eiriksf-capgemini/bead-dashboard#26549cef52cd07c1d22cdde57d811af8aecaf351"
 }
