@@ -169,7 +169,8 @@ whether you reproduced it. A brief that words such a sentence as fact (the
 inverted privacy rationale of `ugcportal-fbng` A14, the token format of PR
 #252 / `ugcportal-qzfu`) has dropped the attribution: treat it as unverified,
 and say so in your report so the orchestrator does not relay it onward. The
-full rule is in `.claude/skills/dispatch-bead/SKILL.md`, beside "never enumerate a set in a brief from memory".
+full rule is in `.claude/skills/dispatch-bead/SKILL.md`, beside "never
+enumerate a set in a brief from memory".
 
 **The branch under review is not yours.** Do not commit to it, do not push to
 it, and do not touch the implementer's worktree yourself — the one sanctioned

@@ -114,7 +114,7 @@ Two shapes, each with its own wording:
   installation-token format as fact, the format was wrong, and a defect
   shipped.
 
-A review brief asks the reviewer to test the claim, do not confirm it. A
+A review brief asks the reviewer to test it, do not confirm it. A
 report to the user that carries a figure from an agent says whether it was
 reproduced and by whom ("reproduced by the reviewer on PR #n", "reproduced by
 me with `<command>`", or "not reproduced"). **Never relay an unverified claim,
