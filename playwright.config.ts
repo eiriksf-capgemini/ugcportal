@@ -61,8 +61,8 @@ export default defineConfig({
     timeout: 60_000,
     /**
      * ugcportal-0wh6: the dev server this config starts gets an
-     * ALLOWED_SIGNIN_EMAILS of exactly the identity e2e/signed-in-fixture.ts
-     * seeds (ADMIN_BOOTSTRAP_EMAILS and src/config/users.ts still apply as
+     * ALLOWED_SIGNIN_EMAILS of exactly the identity e2e/signed-in-setup.ts
+     * seeds once per run (ADMIN_BOOTSTRAP_EMAILS and src/config/users.ts still apply as
      * they always do). The
      * live-session check (src/lib/live-session.ts) re-judges every request
      * against ALLOWED_SIGNIN_EMAILS, so without this a seeded session would

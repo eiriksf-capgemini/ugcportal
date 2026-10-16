@@ -24,11 +24,22 @@ import {
  * the mechanism could reach something real:
  *
  *   1. Through the build. scripts/lib/e2e-session-seeding.mjs has no HTTP
- *      surface; it could only ship if application code imported it (or
- *      anything under e2e/). The scan below walks every module under src/ —
- *      the tree `next build` compiles — and fails on such an import.
- *   2. Through the seeding call itself, pointed at a production process, a
- *      remote database or a non-loopback site. `seedSession` must refuse
+ *      surface, so it can only run in production if application code
+ *      imports it (or anything under e2e/). The scan below walks every
+ *      module under src/ — the tree `next build` compiles — and fails on
+ *      such an import. Its SOURCE does land in the build directory:
+ *      next.config.ts's `output: "standalone"` file tracing copies it, the
+ *      setup, the fixture and the Playwright configs into .next/standalone
+ *      and lists them in *.nft.json manifests. What keeps those copies out
+ *      of the deployed image is the Dockerfile runner stage's named COPY
+ *      list (server.js, .next, node_modules, package.json, public, prisma;
+ *      ugcportal-6jcq), not this scan.
+ *   2. Through the seeding call itself, run from a process whose own
+ *      NODE_ENV is production, or pointed at a remote database or a
+ *      non-loopback site. (NODE_ENV is the seeding process's, not the
+ *      server's: seeding against the e2e/production `next start` server on
+ *      http://localhost:3100 is permitted, since that is a local build on a
+ *      local file database.) `seedSession` must refuse
  *      BEFORE its first write; the fake database below records every
  *      statement, so "refused" means "executed nothing", not "threw at some
  *      point".

@@ -259,8 +259,9 @@ test.describe("K3: no sales link in the navigation", () => {
 /**
  * ugcportal-0wh6 K1/K2: the same header, SIGNED IN. Everything above this
  * block runs signed out; these tests request the `signedIn` fixture
- * (e2e/signed-in-fixture.ts), which seeds a real database session and sets
- * its cookie before the page loads.
+ * (e2e/signed-in-fixture.ts), which sets the cookie of the one real database
+ * session the root config's globalSetup (e2e/signed-in-setup.ts) seeds per
+ * run, before the page loads.
  *
  * 320 and 390 are the widths ugcportal-i7lr K4 and ugcportal-ry6w ask about
  * (390 is the signed-in view ry6w's wordmark report is about); 1440 is the
@@ -337,8 +338,12 @@ for (const [name, viewport] of Object.entries(SIGNED_IN_VIEWPORTS)) {
 
         // Evidence the second scan's TARGET included the signed-in entries,
         // not just that it ran: axe reports the nodes each passing rule
-        // checked (by selector), and both the visible Upload link and the
-        // Sign out button must be among them. Resolved in the page rather
+        // checked (by selector), and both the visible Upload link INSIDE the
+        // Main navigation and the Sign out button INSIDE the header must be
+        // among them. Scoped by container because the signed-in front page
+        // also renders an a[href="/upload"] in its body, which would satisfy
+        // an unscoped check even with the whole nav excluded from the scan.
+        // Resolved in the page rather
         // than by matching axe's `html` strings: tried first, those did not
         // carry the Sign out button's text, so that check failed on a page
         // that was signed in. The Upload link must be the RENDERED one (the
@@ -350,10 +355,13 @@ for (const [name, viewport] of Object.entries(SIGNED_IN_VIEWPORTS)) {
           const elements = selectors.flatMap((selector) => [...document.querySelectorAll(selector)]);
           return {
             upload: elements.some(
-              (el) => el.matches('a[href="/upload"]') && el.getClientRects().length > 0,
+              (el) =>
+                el.matches('nav[aria-label="Main navigation"] a[href="/upload"]') &&
+                el.getClientRects().length > 0,
             ),
             signOut: elements.some(
-              (el) => el.tagName === "BUTTON" && el.textContent?.trim() === "Sign out",
+              (el) =>
+                el.matches("header button") && el.textContent?.trim() === "Sign out",
             ),
           };
         }, targets);

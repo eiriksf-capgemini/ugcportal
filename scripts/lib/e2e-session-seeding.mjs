@@ -104,8 +104,8 @@ export function assertSessionSeedingPermitted({ env, baseURL }) {
 }
 
 /**
- * Write a User and a Session for one test and return the cookie that carries
- * it. Refuses (throws, having written nothing) unless
+ * Write a User and a Session and return the cookie that carries it. The root
+ * suite calls this once per run, from e2e/signed-in-setup.ts. Refuses (throws, having written nothing) unless
  * `assertSessionSeedingPermitted` allows it.
  *
  * @param {{
@@ -138,8 +138,9 @@ export async function seedSession({ db, env, baseURL, name = "E2E Signed In", no
   // has not allowlisted it" cases).
   const expires = new Date(now.getTime() + SESSION_MAX_AGE_MS).toISOString();
 
-  // `email` left NULL on the User: User.email is unique, and specs run in
-  // parallel, each with its own user. The identity the live-session check
+  // `email` left NULL on the User: User.email is unique, so a fixed address
+  // there would collide with a row an earlier crashed run left behind (each
+  // call mints a fresh user id). The identity the live-session check
   // judges is the session row's `signInEmail`, which it prefers over
   // User.email (src/lib/live-session.ts, `recorded.email ?? user.email`).
   await db.execute({

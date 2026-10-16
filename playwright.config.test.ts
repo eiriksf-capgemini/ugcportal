@@ -64,7 +64,7 @@ describe("playwright.config.ts: the seeded identity's allowlist (ugcportal-0wh6)
     return (Array.isArray(webServer) ? webServer[0] : webServer)?.env;
   }
 
-  it("the root suite's dev server allowlists exactly the address e2e/signed-in-fixture.ts seeds", async () => {
+  it("the root suite's dev server allowlists exactly the address e2e/signed-in-setup.ts seeds once per run", async () => {
     const { E2E_SIGNED_IN_EMAIL } = await import("./scripts/lib/e2e-session-seeding.mjs");
     expect(E2E_SIGNED_IN_EMAIL).toBe("e2e-signed-in@example.test");
     expect((await webServerEnv("./playwright.config"))?.["ALLOWED_SIGNIN_EMAILS"]).toBe(E2E_SIGNED_IN_EMAIL);
