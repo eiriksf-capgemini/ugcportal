@@ -1,8 +1,8 @@
 /**
  * Fixture loader for scripts/bd-guard.test.mjs (ugcportal-ucnf). Finds the
  * blessed-form examples in the skill files by content anchor, never by line
- * number, so an edit above them cannot move a pin. Every failure to find
- * exactly one block throws, naming the file and the anchor (review-standards
+ * number, so an edit above them cannot move a pin (bd-guard.test.mjs K1). Every
+ * failure to find exactly one block throws (K2), naming the file and the anchor (review-standards
  * section 6): a loader that returned the first of several matches, or an empty
  * slice, would let the guard tests pass on text that is not a blessed form.
  */
