@@ -1266,6 +1266,54 @@ describe("findings_rN keys (ugcportal-2jvh)", () => {
     expect(out.rounds[0]).toMatchObject({ source: "keys", medium: 0, low: 0, stated: true });
   });
 
+  it("M1: an all-zero key on a round whose prose states a bare findings count (no severity words) is inconsistent", () => {
+    const unlabelled = { ...round(1, 0, 0, false), findings: 3 };
+    const out = withFindingsKeys(pr(1, [unlabelled]), { findings_r1: "f1:0 f2:0 f3:0 f4:0 med:0 low:0" });
+    expect(out.rounds[0]).toMatchObject({ source: "prose", fallbackReason: "inconsistent", stated: false });
+  });
+
+  it("M2: a key with unstated:1 counts that finding as medium-or-above in the row and exposes it", () => {
+    const b = { id: "ugcportal-kkk5", title: "x", metadata: { prs: "gh-905", findings_r1: "f1:1 f2:0 f3:0 f4:0 med:0 low:0 unstated:1" } };
+    const rel = { version: "v9.9.9", ids: [b.id], entries: new Map([[b.id, { title: "x", type: "Features" }]]) };
+    const rs = buildRows(rel, new Map([[b.id, b]]), new Map([[905, pr(905, [round(1, 0, 0)])]]));
+    expect(rs[0]).toMatchObject({ mediums: 1, mediumsByRound: "r1:1", unstatedFindings: 1, roundsFromKeys: 1 });
+    const report = renderReport({ releases: ["v9.9.9"], rowsByRelease: new Map([["v9.9.9", rs]]), membershipChecks: [], unmerged: [], generatedAt: "2026-10-16", reviewer: "x", prCount: 0 });
+    expect(report).toContain("counted as medium-or-above: kkk5 (1)");
+  });
+
+  it("M3: two beads on one PR, one keyed (med:3) and one not, give the same mediums in either order", () => {
+    const a = { id: "ugcportal-kkk6", title: "a", metadata: { prs: "gh-906", findings_r1: "f1:0 f2:0 f3:3 f4:0 med:3 low:0" } };
+    const c = { id: "ugcportal-kkk7", title: "c", metadata: { prs: "gh-906" } };
+    const mk = (ids) => {
+      const rel = { version: "v9.9.9", ids, entries: new Map(ids.map((i) => [i, { title: "x", type: "Features" }])) };
+      return aggregate(buildRows(rel, new Map([[a.id, a], [c.id, c]]), new Map([[906, pr(906, [round(1, 1, 0)])]]))).mediums;
+    };
+    expect(mk([a.id, c.id])).toBe(3);
+    expect(mk([c.id, a.id])).toBe(3);
+  });
+
+  it("L3: keys discarded for a second PR (multi-pr) and keys for a round the chain lacks are listed as not used", () => {
+    const b = { id: "ugcportal-kkk8", title: "x", metadata: { prs: "gh-901,gh-902", findings_r1: "f1:0 f2:0 f3:0 f4:0 med:9 low:0" } };
+    const c = { id: "ugcportal-kkk9", title: "x", metadata: { prs: "gh-901", findings_r3: "f1:0 f2:0 f3:0 f4:0 med:1 low:0" } };
+    const rel = { version: "v9.9.9", ids: [b.id, c.id], entries: new Map([[b.id, { title: "x", type: "Features" }], [c.id, { title: "x", type: "Features" }]]) };
+    const rs = buildRows(rel, new Map([[b.id, b], [c.id, c]]), analyses());
+    expect(rs[0].keyFallbacks).toEqual(["r1 multi-pr", "r1 multi-pr"]);
+    expect(rs[1].keyFallbacks).toEqual(["r3 no-such-round"]);
+  });
+
+  it("L4: a PR-specific findings_pr<n>_r<N> key is read on a bead with two reviewed PRs", () => {
+    const b = { id: "ugcportal-kkk10", title: "x", metadata: { prs: "gh-901,gh-902", findings_pr901_r1: "f1:1 f2:0 f3:0 f4:0 med:4 low:0", findings_pr902_r1: "f1:0 f2:1 f3:0 f4:0 med:1 low:0" } };
+    const rel = { version: "v9.9.9", ids: [b.id], entries: new Map([[b.id, { title: "x", type: "Features" }]]) };
+    const rs = buildRows(rel, new Map([[b.id, b]]), analyses());
+    expect(rs[0]).toMatchObject({ mediums: 5, mediumsByRound: "r1:4 r1:1", roundsFromKeys: 2 });
+  });
+
+  it("L5: row carries keyed severity and family counts per round for the --json export", () => {
+    const r = row("ugcportal-kkk1");
+    expect(r.families).toEqual({ f1: 2, f2: 0, f3: 3, f4: 0 });
+    expect(r.roundDetail[0]).toMatchObject({ pr: 901, n: 1, source: "keys", medium: 3, low: 2, families: { f1: 2, f2: 0, f3: 3, f4: 0 } });
+  });
+
   it("a bead with two PRs that both have rounds cannot be keyed by round number, so it stays on prose", () => {
     const b = { id: "ugcportal-kkk4", title: "x", metadata: { prs: "gh-901,gh-902", findings_r1: "f1:0 f2:0 f3:0 f4:0 med:9 low:0" } };
     const rel = { version: "v9.9.9", ids: [b.id], entries: new Map([[b.id, { title: "x", type: "Features" }]]) };

@@ -962,13 +962,21 @@ export function parseFindingsKey(value) {
  * not mutated: a PR can be shared by several beads.
  *
  * Inconsistent: the key records no findings at all (all counts zero) while
- * the verdict's own prose states findings. A round that blocked on findings
- * recorded as all zeros is exactly the shape that would make a zero look
- * measured, so the prose figure is kept and the round is flagged.
+ * the verdict's own prose states findings -- labelled severities, or a bare
+ * findings count ("three findings") with no severity words. A round that
+ * blocked on findings recorded as all zeros is exactly the shape that would
+ * make a zero look measured, so the prose figure is kept and the round is
+ * flagged.
  *
- * `findings_rN` is keyed by round number alone, so it can only be assigned to
- * a round when the bead has one PR with marker rounds; with more, every round
- * stays on the prose parse (and is counted as such).
+ * A finding recorded as `unstated:<n>` counts as medium-or-above in the
+ * round (pr-review-merge step 4: an unclassified finding counts as medium
+ * until someone classifies it) and is carried separately as
+ * `unstatedFindings`.
+ *
+ * Which key a round reads (L4): `findings_pr<number>_r<N>` always applies to
+ * that PR; the bare `findings_r<N>` applies only when `keysApply` (the bead
+ * has one PR with marker rounds). A bare key skipped for that reason is
+ * reported as `multi-pr`.
  *
  * @param {ReturnType<typeof analysePr>} pr
  * @param {Record<string, unknown>} meta
@@ -976,15 +984,39 @@ export function parseFindingsKey(value) {
  */
 export function withFindingsKeys(pr, meta, keysApply = true) {
   const rounds = pr.rounds.map((r) => {
-    const raw = meta?.[`findings_r${r.n}`];
-    if (!keysApply || raw === undefined || raw === null) return { ...r, source: "prose" };
+    const specific = meta?.[`findings_pr${pr.number}_r${r.n}`];
+    const bare = meta?.[`findings_r${r.n}`];
+    const raw = specific !== undefined && specific !== null ? specific : keysApply ? bare : undefined;
+    if (raw === undefined || raw === null) {
+      if (!keysApply && bare !== undefined && bare !== null) return { ...r, source: "prose", fallbackReason: "multi-pr" };
+      return { ...r, source: "prose" };
+    }
     const k = parseFindingsKey(raw);
     if (!k) return { ...r, source: "prose", fallbackReason: "malformed" };
     const empty = k.f1 + k.f2 + k.f3 + k.f4 + k.med + k.low + k.unstated === 0;
-    if (empty && r.medium + r.low > 0) return { ...r, source: "prose", fallbackReason: "inconsistent" };
-    return { ...r, medium: k.med, low: k.low, stated: true, source: "keys", findings: k };
+    if (empty && (r.medium + r.low > 0 || (r.findings ?? 0) > 0)) return { ...r, source: "prose", fallbackReason: "inconsistent" };
+    return { ...r, medium: k.med + k.unstated, low: k.low, stated: true, source: "keys", keyed: k };
   });
   return { ...pr, rounds };
+}
+
+/**
+ * Keys on a bead that no round used because the round does not exist in the
+ * chain (`findings_r3` on a PR with rounds 1-2, or a `findings_pr<n>_r<N>`
+ * for a PR not in the bead's `prs`). Returns `["r3", "pr901 r2"]`.
+ */
+export function orphanFindingsKeys(meta, prAnalyses) {
+  const out = [];
+  for (const key of Object.keys(meta ?? {})) {
+    const bare = /^findings_r(\d+)$/.exec(key);
+    if (bare && !prAnalyses.some((p) => p.rounds.some((r) => r.n === Number(bare[1])))) out.push(`r${bare[1]}`);
+    const spec = /^findings_pr(\d+)_r(\d+)$/.exec(key);
+    if (spec) {
+      const p = prAnalyses.find((x) => x.number === Number(spec[1]));
+      if (!p || !p.rounds.some((r) => r.n === Number(spec[2]))) out.push(`pr${spec[1]} r${spec[2]}`);
+    }
+  }
+  return out.sort();
 }
 
 // --- bead rows -------------------------------------------------------------
@@ -1366,12 +1398,24 @@ export function buildRows(release, beadsById, prAnalysesByNumber) {
       mediums: allRounds.reduce((a, r) => a + (r.stated ? r.medium : 0), 0),
       // Per PR, so aggregates can count a PR shared by several beads once.
       prMediums: Object.fromEntries(prAnalyses.map((p) => [p.number, p.rounds.reduce((a, r) => a + (r.stated ? r.medium : 0), 0)])),
+      prKeyed: Object.fromEntries(prAnalyses.map((p) => [p.number, p.rounds.some((r) => r.source === "keys")])),
       prRounds: Object.fromEntries(prAnalyses.map((p) => [p.number, p.chain.status === "broken" ? p.chain.highest : p.chain.ns.length])),
       lowsLabelled: allRounds.reduce((a, r) => a + (r.stated ? r.low : 0), 0),
       unstatedRounds: allRounds.filter((r) => !r.stated).length,
       roundsFromKeys: allRounds.filter((r) => r.source === "keys").length,
       roundsFromProse: allRounds.filter((r) => r.source !== "keys").length,
-      keyFallbacks: allRounds.filter((r) => r.fallbackReason).map((r) => `r${r.n} ${r.fallbackReason}`),
+      keyFallbacks: [
+        ...allRounds.filter((r) => r.fallbackReason).map((r) => `r${r.n} ${r.fallbackReason}`),
+        ...orphanFindingsKeys(meta, prAnalyses).map((k) => `${k} no-such-round`),
+      ],
+      // Findings a key recorded with no severity; counted in `mediums` above.
+      unstatedFindings: allRounds.reduce((a, r) => a + (r.keyed?.unstated ?? 0), 0),
+      // Keyed severity and family counts per round, for the --json export
+      // (the raw `prs` export is the prose parse only).
+      roundDetail: prAnalyses.flatMap((p) =>
+        p.rounds.map((r) => ({ pr: p.number, n: r.n, source: r.source, medium: r.medium, low: r.low, stated: r.stated, fallbackReason: r.fallbackReason ?? null, families: r.keyed ? { f1: r.keyed.f1, f2: r.keyed.f2, f3: r.keyed.f3, f4: r.keyed.f4 } : null, unstated: r.keyed?.unstated ?? 0 })),
+      ),
+      families: allRounds.reduce((a, r) => (r.keyed ? { f1: a.f1 + r.keyed.f1, f2: a.f2 + r.keyed.f2, f3: a.f3 + r.keyed.f3, f4: a.f4 + r.keyed.f4 } : a), { f1: 0, f2: 0, f3: 0, f4: 0 }),
       tail: markerRounds.length ? tailRounds(allRounds) : null,
       inline: prAnalyses.reduce((a, p) => a + p.inlineCount, 0),
       inlineLabelled: prAnalyses.reduce(
@@ -1394,11 +1438,20 @@ export function aggregate(rows) {
   const impl = rows.map((r) => r.impl).filter((v) => v !== null);
   const qa = rows.map((r) => r.qa).filter((v) => v !== null);
   const total = rows.map((r) => r.total).filter((v) => v !== null);
-  // Mediums are a PR property; count each PR once even when several beads
-  // share it (gh-59, gh-60, gh-101). The rounds median stays per bead, since
-  // a bead is the unit the budget applies to.
+  // Count each PR once even when several beads share it (gh-59, gh-60,
+  // gh-101). Beads on one PR read the same prose but may carry different
+  // keys, so the figure is chosen without regard to row order: a keyed
+  // reading beats a prose one, and among readings of the same kind the
+  // larger wins. The rounds median stays per bead, since a bead is the unit
+  // the budget applies to.
   const prMediums = new Map();
-  for (const r of rows) for (const [n, m] of Object.entries(r.prMediums ?? {})) prMediums.set(n, m);
+  for (const r of rows) {
+    for (const [n, m] of Object.entries(r.prMediums ?? {})) {
+      const keyed = Boolean(r.prKeyed?.[n]);
+      const cur = prMediums.get(n);
+      if (!cur || (keyed && !cur.keyed) || (keyed === cur.keyed && m > cur.m)) prMediums.set(n, { m, keyed });
+    }
+  }
   const rounds = rows.map((r) => r.rounds).filter((v) => v !== null);
   return {
     n: rows.length,
@@ -1424,7 +1477,7 @@ export function aggregate(rows) {
     capCount: rows.filter((r) => r.rounds !== null && r.rounds >= 6 && r.prs.length).length,
     estImpl: rows.filter((r) => r.impl !== null && r.implEstimated).length,
     estQa: rows.filter((r) => r.qa !== null && r.qaEstimated).length,
-    mediums: sum([...prMediums.values()]),
+    mediums: sum([...prMediums.values()].map((v) => v.m)),
     unstated: sum(rows.map((r) => r.unstatedRounds)),
     roundsFromKeys: sum(rows.map((r) => r.roundsFromKeys)),
     roundsFromProse: sum(rows.map((r) => r.roundsFromProse)),
@@ -1629,6 +1682,8 @@ function renderDataGaps(rowsByRelease, prAnalysesByNumber, unmerged) {
     lines.push(`  - rounds whose severity came from \`findings_rN\` keys: ${fromKeys}; rounds that fell back to the prose parse: ${fromProse}${fellBack.length ? ` -- ${fellBack.join(", ")}` : ""}`);
     const keyProblems = rows.filter((r) => r.keyFallbacks.length).map((r) => `${r.id.replace("ugcportal-", "")} (${r.keyFallbacks.join(", ")})`);
     if (keyProblems.length) lines.push(`  - \`findings_rN\` present but not used, prose kept (${keyProblems.length}): ${keyProblems.join("; ")}`);
+    const unstatedF = rows.filter((r) => r.unstatedFindings > 0).map((r) => `${r.id.replace("ugcportal-", "")} (${r.unstatedFindings})`);
+    if (unstatedF.length) lines.push(`  - findings recorded \`unstated:<n>\`, counted as medium-or-above: ${unstatedF.join(", ")}`);
     if (broken.length) lines.push(`  - marker chains reading \`broken\` under step 4b: ${broken.join("; ")}`);
     if (missing.length) lines.push(`  - bead ids in the CHANGELOG that \`bd\` could not return: ${missing.join(", ")}`);
   }
