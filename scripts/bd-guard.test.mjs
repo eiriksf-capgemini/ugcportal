@@ -1,9 +1,9 @@
 /**
  * Tests for scripts/bd-guard.mjs (ugcportal-vu49). Every case runs the real CLI
- * with hook JSON on stdin. The blessed-form fixtures are loaded from two skill
- * files (cut-release and review-standards) plus a separate pr-review-merge 5a
- * extraction test at test time by content anchor (scripts/bd-guard-fixtures.mjs),
- * never by line number.
+ * with hook JSON on stdin. The two BLESSED skill-file fixtures (cut-release and
+ * review-standards) are loaded by content anchor (scripts/bd-guard-fixtures.mjs);
+ * the pr-review-merge 5a block is sliced directly from the skill file by its
+ * heading in the test itself, never by line number.
  */
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
