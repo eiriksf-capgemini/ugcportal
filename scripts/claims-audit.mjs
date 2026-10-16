@@ -42,10 +42,22 @@
  * ADDED relative to the base:
  *
  *   ABSOLUTE     never / always / cannot / only / exactly / guarantee(s) /
- *                ensure(s) / impossible / unreachable / by construction.
+ *                ensure(s) / impossible / unreachable / by construction,
+ *                plus an instrument verb directly followed by every/all
+ *                ("catches every", "covers all"; COVERAGE_UNIVERSAL_RE).
  *                The check: is that true on every path, and which test
  *                proves it? If no test does, either write one or weaken
  *                the sentence to what the code actually does.
+ *   SCOPE-LIMITING  an ABSOLUTE-shaped line whose every absolute word sits
+ *                in a narrowing form ("this guard only covers named
+ *                imports; it cannot see a namespace import") -- reported
+ *                INSTEAD of ABSOLUTE, never alongside it (ugcportal-fgcb;
+ *                the forms, and the cases they miss, are in the comment
+ *                above findScopeLimitingSpans). Still listed, since the
+ *                limitation it states can itself be wrong, but not
+ *                counted as an unsupported guarantee. Its count is
+ *                printed on its own line under the candidate total, 0
+ *                included.
  *   MEASUREMENT  a number with a unit (85px, 3.18:1, ~46x, 2588 tests,
  *                12,266 B). The rule (review-standards section 5): a
  *                measurement belongs in a test that fails when it drifts;
@@ -67,8 +79,8 @@
  *                ends with, that token -- a stale pointer, or a dependency
  *                file the comment should name as one.
  *
- * PR BODY MODE (`--pr <n>` / `--body`, ugcportal-bn94): the five categories
- * above plus one more, over the PR's DESCRIPTION rather than its diff. The
+ * PR BODY MODE (`--pr <n>` / `--body`, ugcportal-bn94): the categories
+ * above (SCOPE-LIMITING included, ugcportal-fgcb) plus one more, over the PR's DESCRIPTION rather than its diff. The
  * bead's own evidence is why this exists: on PR #125 five of six round 1-3
  * findings were Family 1 claims sitting in the body, not a comment; #107's
  * round-3 low and #117's F3 were body-only; #112 round 4's stale figures
@@ -250,6 +262,266 @@ const SLASH_COMMENT_RE = /\.prisma$/;
 
 const ABSOLUTE_RE =
   /\b(never|always|cannot|can['’]t|can not|only|exactly|guarantees?d?|ensures?d?|impossible|unreachable|by construction|in every case|on every path|nothing else|no other)\b/i;
+// ugcportal-fgcb: a universal-coverage claim about an instrument ("this
+// guard catches every reader", "the scan sees all of them") is the overclaim
+// that sits opposite a scope-limiting sentence, and ABSOLUTE_RE's word list
+// has no entry for it. It is scored as ABSOLUTE, never as SCOPE-LIMITING. It
+// matches these seven verbs directly followed by "every" or "all" and
+// nothing more: "catches any", "reports each" ("see each call site" is a
+// pointer, not a claim, so "each" is left out), a word between verb and
+// quantifier, and the wording of PR #200's round-1 findings 3 and 4 ("fails
+// this file by existing", issue comment 6069779392) are not matched.
+const COVERAGE_UNIVERSAL_RE = /\b(?:catch(?:es)?|sees?|covers?|detects?|flags?|finds?|reports?)\s+(?:every|all)\b/i;
+
+// --- scope-limiting recategorisation (ugcportal-fgcb) ---------------------
+//
+// PR #200's round-1 fix raised its own ABSOLUTE count 81 -> 93 while making
+// its prose MORE accurate. The round-2 reviewer (issue comment 6070699194)
+// read the added lines and found them to be mostly statements of what a
+// guard does not catch, citations of review findings, and explanations of
+// fixture mutations -- the first written in the same words (only / cannot /
+// never / nothing else / no other) that ABSOLUTE_RE scores as a guarantee.
+// An ABSOLUTE line is therefore moved to SCOPE-LIMITING when EVERY one of
+// its absolute-word matches sits inside one of the narrowing forms below.
+// One absolute word outside every form keeps the whole line ABSOLUTE, so a
+// sentence that limits one claim and makes another is still scored as
+// making it.
+//
+// What the forms match -- none of it is a judgement of truth; a
+// SCOPE-LIMITING line is still listed for a human, just not counted as an
+// unsupported guarantee:
+//
+//   N1  instrument subject + cannot / can't / can not + a narrowing verb
+//         ("that scan cannot see a namespace import").
+//   N2  instrument subject + only (optionally "only ever") + a narrowing
+//       verb ("this guard only covers named imports"), and the window
+//       (below) also has limitation evidence.
+//   N3  nothing else + a narrowing verb ("Nothing else catches that
+//       shape"), when the window also has limitation evidence; no other +
+//       up to two words + an instrument noun + a narrowing verb ("no other
+//       guard sees it"); or an instrument subject + a narrowing verb + no
+//       other ("the scan sees no other shape").
+//   N4  never: either instrument subject + never + a narrowing verb ("the
+//       scan never sees ...") or a relative clause "that/which never" +
+//       mentions / names / references / spells ("blind to a reader that
+//       never mentions it"), and in both cases the window also has
+//       limitation evidence other than this match. The
+//       relative clause's own subject is the reader out of reach, so it is
+//       the evidence that has to name the instrument. "who" and the
+//       narrowing verbs are left out of the relative form: "a visitor who
+//       never sees a draft row" is an access guarantee.
+//
+// Narrowing verbs are catch / detect / notice / recognise / see / cover /
+// inspect / look at, plus, after "only", check / scan / read / match / find.
+// Any of them can be about a person or a request instead ("an anonymous
+// visitor cannot see an unpublished row", "an attacker cannot detect
+// whether an account exists"), so the subject must be an instrument: the
+// word directly before the absolute word (before the verb, for "<verb> no
+// other"), skipping at most one adverb such as "also" or "deliberately",
+// must be an instrument noun (guard, check, scan, test, regex, script ...
+// INSTRUMENT_NOUN_RE), a test matcher (toEqual, expect), or one of the
+// pronouns it / which / that / this. A relative "that" or "which" counts
+// only when the word directly before it is an instrument noun ("a scanner
+// that cannot see server actions"; "an anonymous visitor that cannot see a
+// draft row" stays ABSOLUTE). An "it" or "this" counts only when an
+// instrument noun appears in the window BEFORE it ("The public projection
+// strips previewKey, so it cannot see the draft row (see the test)" stays
+// ABSOLUTE), and not at all directly after "that": in "the test asserts
+// that it cannot see the draft" it is what the test asserts about, not the
+// test.
+//
+// Limitation evidence has to be phrased as a limitation of an instrument,
+// so that a guarantee phrased negatively ("a NaN date does not reach the
+// sellable branch") does not count. It is: does not / is not / won't (and
+// their siblings) + a narrowing verb or reach / report / flag, "blind to"
+// (one is / are / was / were / be / stays / remains before it skipped) and
+// "still passes", each with an instrument subject by the rule above; "not
+// covered / reported / caught / seen / detected by" + up to three words +
+// an instrument noun; or an N1 or N3 match elsewhere in the window whose
+// own conditions hold.
+//
+// The window is the line itself plus the comment or prose line directly
+// above and below it in the same file or body, when there is one
+// (auditContent / auditBodyText supply them; a blank line is not a
+// neighbour), because comments wrap: "... still passes. Nothing else" /
+// "catches that shape either" is one sentence over two lines. A caller that
+// passes no neighbours gets a window of the line alone.
+//
+// Cases this does not handle, each left as ABSOLUTE: a narrowing verb
+// outside the set ("it only binds a query routed through listMedia", PR
+// #200's own body); a subject more than one adverb away from the absolute
+// word, or one that names an instrument in words outside INSTRUMENT_NOUN_RE
+// ("a captured string cannot notice that changing"); "never" with no other
+// limitation in the window ("the scan never sees a namespace import"
+// alone); an instrument named only outside the window (PR #200's table row
+// "nothing else catches it either", whose instrument is in the table's
+// header four lines up); and "covers X and no other", which is how a
+// clearance's guarantee is phrased in PR #199. And two reverse errors it
+// still makes. An "it" or "this" counts as an instrument whenever an
+// instrument noun appears anywhere before it in the window, whether or not
+// that noun is what the pronoun means ("the test passed, and it cannot see the draft
+// row" is SCOPE-LIMITING). And INSTRUMENT_NOUN_RE also names runtime
+// components (guard, check, rule, filter, hook), so a guarantee about one
+// reads as an instrument's limit ("the tenant filter cannot see another
+// tenant's rows" is SCOPE-LIMITING); they stay in the list because the
+// limitation prose this rule exists for uses them ("this guard only covers
+// named imports"). Each of these is pinned in scripts/claims-audit.test.mjs.
+const DETECTION_VERB = String.raw`(?:catch(?:es)?|detects?|notices?|recogni[sz]es?)`;
+const AMBIGUOUS_VERB = String.raw`(?:sees?|covers?|inspects?|looks? at)`;
+const ONLY_EXTRA_VERB = String.raw`(?:checks?|scans?|reads?|match(?:es)?|finds?)`;
+const NARROWING_VERB = String.raw`(?:${DETECTION_VERB}|${AMBIGUOUS_VERB})`;
+// How a relative clause says a reader stays out of an instrument's reach.
+const MENTION_VERB = String.raw`(?:mentions?|names?|references?|spells?)`;
+const INSTRUMENT_NOUN_RE =
+  /\b(?:guards?|checks?|checkers?|scans?|scanners?|sweeps?|audits?|regex(?:es|p)?|patterns?|matchers?|tests?|suites?|assertions?|lint(?:er)?s?|rules?|scripts?|tools?|grep|walkers?|filters?|parsers?|probes?|hooks?)\b/i;
+const INSTRUMENT_SUBJECT_RE = new RegExp(`^${INSTRUMENT_NOUN_RE.source}$`, "i");
+// A test-runner matcher named as the subject ("`toEqual` therefore still
+// passes"). Case-sensitive on purpose: "to" + a capital, not "together".
+const MATCHER_SUBJECT_RE = /^(?:to[A-Z]\w*|expect)$/;
+const SUBJECT_PRONOUN_RE = /^(?:it|which|that|this)$/i;
+const SUBJECT_ADVERB_RE = /^(?:\w+ly|also|still|therefore|now|so)$/i;
+const COPULA_RE = /^(?:is|are|was|were|be|stays?|remains?)$/i;
+const WORD_RE = /[\w'’-]+/g;
+// Limitation evidence, each form with the subject condition
+// findLimitationEvidence applies to it.
+const NEGATED_VERB_RE = new RegExp(
+  String.raw`\b(?:does not|doesn['’]t|do not|don['’]t|did not|is not|isn['’]t|are not|aren['’]t|will not|won['’]t)\s+(?:${NARROWING_VERB}|reach(?:es)?|report(?:s|ed)?|flag(?:s|ged)?)\b`,
+  "gi",
+);
+const BLIND_TO_RE = /\bblind to\b/gi;
+const STILL_PASSES_RE = /\bstill pass(?:es)?\b/gi;
+const PASSIVE_BY_INSTRUMENT_RE = new RegExp(
+  String.raw`\bnot (?:covered|reported|caught|seen|detected)\s+by\s+(?:[\w\`'’.-]+\s+){0,3}?${INSTRUMENT_NOUN_RE.source.slice(2, -2)}\b`,
+  "gi",
+);
+const N1_RE = new RegExp(String.raw`\b(cannot|can['’]t|can not)\s+${NARROWING_VERB}\b`, "gi");
+const N2_RE = new RegExp(String.raw`\b(only)\s+(?:ever\s+)?(?:${NARROWING_VERB}|${ONLY_EXTRA_VERB})\b`, "gi");
+const N3_NOTHING_ELSE_RE = new RegExp(String.raw`\b(nothing else)\s+${NARROWING_VERB}\b`, "gi");
+const N3_NO_OTHER_SUBJECT_RE = new RegExp(String.raw`\b(no other)\s+(?:[\w-]+\s+){0,2}?${INSTRUMENT_NOUN_RE.source.slice(2, -2)}\s+${NARROWING_VERB}\b`, "gi");
+const N3_VERB_NO_OTHER_RE = new RegExp(String.raw`\b${NARROWING_VERB}\s+(no other)\b`, "gi");
+const N4_NEVER_VERB_RE = new RegExp(String.raw`\b(never)\s+${NARROWING_VERB}\b`, "gi");
+const N4_RELATIVE_RE = new RegExp(String.raw`\b(?:that|which)\s+(never)\s+${MENTION_VERB}\b`, "gi");
+const ABSOLUTE_GLOBAL_RE = new RegExp(ABSOLUTE_RE.source, "gi");
+
+/**
+ * Whether the word(s) directly before `index` in `window` are an instrument
+ * subject, per the rule in the comment above. With `skipCopula`, one
+ * "is"/"are"/... directly before `index` is skipped first ("it is blind to").
+ */
+function hasInstrumentSubject(window, index, { skipCopula = false } = {}) {
+  const words = [...window.slice(0, index).matchAll(WORD_RE)];
+  let subject = words.pop();
+  if (skipCopula && subject !== undefined && COPULA_RE.test(subject[0])) subject = words.pop();
+  if (subject !== undefined && SUBJECT_ADVERB_RE.test(subject[0]) && !INSTRUMENT_NOUN_RE.test(subject[0])) subject = words.pop();
+  if (subject === undefined) return false;
+  if (INSTRUMENT_SUBJECT_RE.test(subject[0]) || MATCHER_SUBJECT_RE.test(subject[0])) return true;
+  if (!SUBJECT_PRONOUN_RE.test(subject[0])) return false;
+  // "the test asserts that it cannot see the draft": an "it"/"this" opening a
+  // "that" clause is what the clause is about, not the instrument before it.
+  const previous = words.at(-1);
+  // A relative "that"/"which" refers to the word right before it ("a scanner
+  // that cannot see"), not to any instrument earlier in the window.
+  if (/^(?:that|which)$/i.test(subject[0])) return previous !== undefined && INSTRUMENT_SUBJECT_RE.test(previous[0]);
+  if (/^(?:it|this)$/i.test(subject[0]) && previous !== undefined && /^that$/i.test(previous[0])) return false;
+  // The antecedent must come before the pronoun, not anywhere in the window.
+  return INSTRUMENT_NOUN_RE.test(window.slice(0, subject.index));
+}
+
+/**
+ * Every limitation-evidence match in `window` whose subject is an
+ * instrument, as `{ formStart, formEnd }` ranges.
+ */
+function findLimitationEvidence(window) {
+  const out = [];
+  const range = (m) => ({ formStart: m.index, formEnd: m.index + m[0].length });
+  for (const m of window.matchAll(NEGATED_VERB_RE)) if (hasInstrumentSubject(window, m.index)) out.push(range(m));
+  for (const m of window.matchAll(BLIND_TO_RE)) if (hasInstrumentSubject(window, m.index, { skipCopula: true })) out.push(range(m));
+  for (const m of window.matchAll(STILL_PASSES_RE)) if (hasInstrumentSubject(window, m.index)) out.push(range(m));
+  for (const m of window.matchAll(PASSIVE_BY_INSTRUMENT_RE)) out.push(range(m));
+  return out;
+}
+
+/**
+ * Every narrowing-form span in `window` whose own conditions hold, as
+ * `{ start, end }` ranges over the absolute word each form narrows.
+ *
+ * @param {string} window
+ * @returns {{ start: number, end: number }[]}
+ */
+export function findScopeLimitingSpans(window) {
+  const spans = [];
+  const spanOf = (m, group) => {
+    const start = m.index + m[0].toLowerCase().indexOf(m[group].toLowerCase());
+    return { start, end: start + m[group].length, formStart: m.index, formEnd: m.index + m[0].length };
+  };
+  // Instrument limitations: evidence for the forms below that need it.
+  const evidence = findLimitationEvidence(window);
+  const hasEvidenceBesides = (s) => evidence.some((e) => e.formEnd <= s.formStart || e.formStart >= s.formEnd);
+  const accept = (s, { isEvidence = false } = {}) => {
+    spans.push(s);
+    if (isEvidence) evidence.push(s);
+  };
+
+  // N1 and N3's "no other" forms carry their own instrument subject, so they
+  // are limitation evidence in their own right.
+  for (const m of window.matchAll(N1_RE)) {
+    const s = spanOf(m, 1);
+    if (hasInstrumentSubject(window, s.start)) accept(s, { isEvidence: true });
+  }
+  for (const m of window.matchAll(N3_NO_OTHER_SUBJECT_RE)) accept(spanOf(m, 1), { isEvidence: true });
+  for (const m of window.matchAll(N3_VERB_NO_OTHER_RE)) {
+    const s = spanOf(m, 1);
+    if (hasInstrumentSubject(window, s.formStart)) accept(s, { isEvidence: true });
+  }
+  // "nothing else" has no subject of its own, so it needs an instrument
+  // limitation elsewhere in the window; once it has one, it is evidence too.
+  for (const m of window.matchAll(N3_NOTHING_ELSE_RE)) {
+    const s = spanOf(m, 1);
+    if (hasEvidenceBesides(s)) accept(s, { isEvidence: true });
+  }
+  for (const m of window.matchAll(N2_RE)) {
+    const s = spanOf(m, 1);
+    if (hasInstrumentSubject(window, s.start) && hasEvidenceBesides(s)) accept(s);
+  }
+  for (const m of window.matchAll(N4_NEVER_VERB_RE)) {
+    const s = spanOf(m, 1);
+    if (hasInstrumentSubject(window, s.start) && hasEvidenceBesides(s)) accept(s);
+  }
+  // The relative clause's own subject is the thing out of reach ("a reader
+  // that never mentions it"), so it gets no subject check; the instrument
+  // limitation has to come from the evidence.
+  for (const m of window.matchAll(N4_RELATIVE_RE)) {
+    const s = spanOf(m, 1);
+    if (hasEvidenceBesides(s)) accept(s);
+  }
+  return spans.map(({ start, end }) => ({ start, end }));
+}
+
+/**
+ * Whether `text` is an ABSOLUTE line whose every absolute-word match is a
+ * narrowing form (findScopeLimitingSpans), read in the window of its
+ * neighbouring lines. False for a line with no absolute word at all, and
+ * for one carrying a universal-coverage claim (COVERAGE_UNIVERSAL_RE).
+ *
+ * @param {string} text
+ * @param {{ before?: string, after?: string }} [context]
+ * @returns {boolean}
+ */
+export function isScopeLimiting(text, { before = "", after = "" } = {}) {
+  if (COVERAGE_UNIVERSAL_RE.test(text)) return false;
+  const matches = [...text.matchAll(ABSOLUTE_GLOBAL_RE)];
+  if (matches.length === 0) return false;
+  const prefix = before.trim() === "" ? "" : `${before.trim()} `;
+  const window = `${prefix}${text}${after.trim() === "" ? "" : ` ${after.trim()}`}`;
+  const offset = prefix.length;
+  const spans = findScopeLimitingSpans(window);
+  return matches.every((m) => {
+    const start = offset + m.index;
+    const end = start + m[0].length;
+    return spans.some((s) => s.start <= start && end <= s.end);
+  });
+}
+
 const TEMPORAL_RE =
   /\b(still|not yet|currently|today|for now|once (?:#\d+|PR|this|that|it)\b|will (?:be|do|read|run|become)|remains? to be|until|TODO|FIXME)\b/i;
 const HISTORY_RE = /\b(review )?round \d\b|\bPR #\d+\b|\bfinding \d\b|\bround-\d\b/i;
@@ -502,12 +774,21 @@ const QUOTED_SPAN_RE = /"([^"\n]{2,200})"|`([^`\n]{2,200})`/g;
 /**
  * Which claim categories a single comment line triggers.
  *
+ * An absolute-shaped line (ABSOLUTE_RE or COVERAGE_UNIVERSAL_RE) is
+ * ABSOLUTE, or SCOPE-LIMITING instead when isScopeLimiting holds for it in
+ * the window `context` supplies (ugcportal-fgcb) -- never both.
+ *
  * @param {string} text one line of comment or prose, markers stripped
- * @returns {string[]} zero or more of ABSOLUTE, MEASUREMENT, TEMPORAL, HISTORY
+ * @param {{ before?: string, after?: string }} [context] the lines directly
+ *   above and below, for the scope-limiting window; omitted means none
+ * @returns {string[]} zero or more of ABSOLUTE or SCOPE-LIMITING,
+ *   MEASUREMENT, TEMPORAL, HISTORY
  */
-export function classifyClaimLine(text) {
+export function classifyClaimLine(text, context = {}) {
   const categories = [];
-  if (ABSOLUTE_RE.test(text)) categories.push("ABSOLUTE");
+  if (ABSOLUTE_RE.test(text) || COVERAGE_UNIVERSAL_RE.test(text)) {
+    categories.push(isScopeLimiting(text, context) ? "SCOPE-LIMITING" : "ABSOLUTE");
+  }
   if (MEASUREMENT_RE.test(text)) categories.push("MEASUREMENT");
   if (TEMPORAL_RE.test(text)) categories.push("TEMPORAL");
   if (HISTORY_RE.test(text)) categories.push("HISTORY");
@@ -609,10 +890,13 @@ export function tokenStillInDiff(token, diffText) {
 // claims-audit's original mode (below, in main()) only ever read files the
 // diff touched -- a PR's own DESCRIPTION, where most late-round Family 1
 // findings now land (the bead's own evidence: PR #125 round 3, #107 round 3,
-// #112 round 4), was invisible to it. This section runs the SAME claim
-// vocabulary (ABSOLUTE/MEASUREMENT/TEMPORAL/HISTORY/REFERENCE -- none of it
-// changed, per the bead's explicit "out of scope") over the PR body's own
-// text, plus one new category that only makes sense for a body: a "done"
+// #112 round 4), was invisible to it. This section runs the same claim
+// vocabulary file mode uses (ABSOLUTE or SCOPE-LIMITING, MEASUREMENT,
+// TEMPORAL and HISTORY via classifyClaimLine, plus REFERENCE) over the PR
+// body's own text. ugcportal-bn94 left that vocabulary as it was;
+// ugcportal-fgcb later changed it for both modes at once, adding
+// SCOPE-LIMITING and the "catches every" / "covers all" ABSOLUTE form. On
+// top of it comes one category that only makes sense for a body: a "done"
 // claim (classifyDoneVerb above) that the diff itself can, for two of its
 // three verb classes, contradict.
 //
@@ -651,8 +935,10 @@ export function extractBodyLines(bodyText) {
 
 /**
  * Audits a PR body's text with the same categories auditContent uses for a
- * comment (ABSOLUTE/MEASUREMENT/TEMPORAL/HISTORY via classifyClaimLine,
- * REFERENCE via findPathReferences/referenceExists), plus DONE: a line with
+ * comment (ABSOLUTE or SCOPE-LIMITING, MEASUREMENT, TEMPORAL, HISTORY via
+ * classifyClaimLine, each body line read with its neighbouring lines as the
+ * scope-limiting window; REFERENCE via findPathReferences/referenceExists),
+ * plus DONE: a line with
  * any DONE-verb occurrence (findDoneVerbOccurrences) is reported with
  * category "DONE", and EACH of its quoted spans (findQuotedSpans) is first
  * scoped to its OWN sentence (splitIntoSentences/findSentenceContaining),
@@ -689,8 +975,12 @@ export function extractBodyLines(bodyText) {
  */
 export function auditBodyText(bodyText, { diffText = null, existingFiles = [] } = {}) {
   const candidates = [];
-  for (const { line, text } of extractBodyLines(bodyText)) {
-    const categories = classifyClaimLine(text);
+  const bodyLines = extractBodyLines(bodyText);
+  const bodyTextByLine = new Map(bodyLines.map(({ line, text }) => [line, text]));
+  for (const { line, text } of bodyLines) {
+    // Neighbouring lines are the scope-limiting window (ugcportal-fgcb), as
+    // in auditContent.
+    const categories = classifyClaimLine(text, { before: bodyTextByLine.get(line - 1), after: bodyTextByLine.get(line + 1) });
     const missingReferences = findPathReferences(text)
       .filter((ref) => !referenceExists(ref.token, "", existingFiles))
       .map((ref) => ref.token);
@@ -871,6 +1161,17 @@ export function auditContent(content, filePath, changedLines, { existingFiles })
       ? extractProseLines(content, filePath)
       : [];
 
+  // Every comment/prose line of the file by source line number, whether or
+  // not it is in scope, so a scope-limiting sentence wrapped over two lines
+  // is read in the window of its neighbours (ugcportal-fgcb). A blank line
+  // is a paragraph break and is not a neighbour.
+  const textByLine = new Map();
+  for (const block of blocks) {
+    (block.lines ?? block.text.split("\n")).forEach((text, offset) => {
+      if (text.trim() !== "") textByLine.set(block.line + offset, text.trim());
+    });
+  }
+
   const candidates = [];
   for (const block of blocks) {
     if (changedLines !== null) {
@@ -886,7 +1187,8 @@ export function auditContent(content, filePath, changedLines, { existingFiles })
     const lines = block.lines ?? block.text.split("\n");
     lines.forEach((text, offset) => {
       if (text.trim() === "") return;
-      const categories = classifyClaimLine(text);
+      const lineNumber = block.line + offset;
+      const categories = classifyClaimLine(text, { before: textByLine.get(lineNumber - 1), after: textByLine.get(lineNumber + 1) });
       const missingReferences = findPathReferences(text)
         .filter((ref) => !referenceExists(ref.token, filePath, existingFiles))
         .map((ref) => ref.token);
@@ -1100,9 +1402,11 @@ function runBodyMode({ prNumber, base: explicitBase }) {
     "REFERENCE not found": 0,
     "DONE contradicted": 0,
     "DONE to verify": 0,
+    "SCOPE-LIMITING": 0,
   };
   console.log(`--- claims-audit: PR BODY claims (source: ${source}${diffText === null ? ", no diff available" : ""}) ---`);
   console.log(`body candidates found: ${candidates.length}`);
+  console.log(scopeLimitingReachLine(candidates));
   for (const c of candidates) {
     for (const cat of c.categories) counts[cat]++;
     if (c.missingReferences.length > 0) counts["REFERENCE not found"]++;
@@ -1130,6 +1434,22 @@ function runBodyMode({ prNumber, base: explicitBase }) {
   console.log(
     "(advisory only -- does not affect exit status; printed and counted separately from file-mode's candidates, never merged into that count (K2); a DONE contradicted by the diff is strong evidence that specific claim is false, in whichever direction its verb implied -- a DONE to verify is NOT a verdict, just a span worth a human's own look, since \"fixed\"/\"corrected\" alone implies neither direction)",
   );
+}
+
+/**
+ * The reach line for the scope-limiting recategorisation (ugcportal-fgcb
+ * K2), printed directly under the candidate count in both modes. It always
+ * prints, with an explicit 0 when no line was recategorised, so a zero is a
+ * printed number rather than a missing line. "SCOPE-LIMITING" is also the
+ * last entry of the "by category:" line, appended after the existing
+ * entries so their order is unchanged.
+ *
+ * @param {{ categories: string[] }[]} candidates
+ * @returns {string}
+ */
+export function scopeLimitingReachLine(candidates) {
+  const n = candidates.filter((c) => c.categories.includes("SCOPE-LIMITING")).length;
+  return `recategorised from ABSOLUTE to SCOPE-LIMITING (listed below, not counted under ABSOLUTE): ${n}`;
 }
 
 function main() {
@@ -1256,9 +1576,10 @@ function main() {
     process.exit(1);
   }
 
-  const counts = { ABSOLUTE: 0, MEASUREMENT: 0, TEMPORAL: 0, HISTORY: 0, "REFERENCE not found": 0 };
+  const counts = { ABSOLUTE: 0, MEASUREMENT: 0, TEMPORAL: 0, HISTORY: 0, "REFERENCE not found": 0, "SCOPE-LIMITING": 0 };
   console.log(`--- claims-audit: comment and prose claims on ${allLines ? "every" : "added"} lines (base ${reportedBase}) ---`);
   console.log(`candidates found: ${candidates.length}`);
+  console.log(scopeLimitingReachLine(candidates));
   for (const c of candidates) {
     for (const cat of c.categories) counts[cat]++;
     if (c.missingReferences.length > 0) counts["REFERENCE not found"]++;
