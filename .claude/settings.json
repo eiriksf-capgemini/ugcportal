@@ -29,5 +29,6 @@
         "matcher": ""
       }
     ]
-  }
+  },
+  "promptCacheTtl": "1h"
 }
