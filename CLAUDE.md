@@ -328,7 +328,7 @@ node scripts/bd-verify-metadata.mjs <id> tokens_impl=<figure> cost_coverage_impl
 
 **How the two are read.** A bead carrying a `cost_ite_*` key that is a
 positive integer, on a side not marked incomplete, is reported in ITE and its `tokens_*` are not read; a bead
-with no accepted `cost_ite_*` figure (none, or only a 0 or malformed one) is
+with no accepted `cost_ite_*` figure (absent, 0, malformed, or on a side marked incomplete) is
 reported from its `tokens_*` as "context-size, not cost". `scripts/release-cost-report.mjs`
 (`costUnitOf`) and `cut-release` step 5a both keep the two in separate totals.
 Whoever records them: the implementer's figures are written by the
