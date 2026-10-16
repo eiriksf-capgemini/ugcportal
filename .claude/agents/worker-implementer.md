@@ -109,12 +109,25 @@ and correct pushes are refused (`bd memories cap-vitest-workers-when-many-agents
 which measured the cap at 3; 2 is the same rule with more headroom, and capping
 lower is not the failure mode).
 
-Run the suite in the **foreground** with `timeout: 600000`. The default Bash
-timeout is two minutes, which the suite has repeatedly exceeded — and inventing
-a recovery for that is how agents end up backgrounding it. **Never end a turn
-waiting on a background task** — the task finishing does not re-invoke you, so the turn ends
-having done no work and the task sits unfinished until someone nudges it
-(`bd memories never-end-an-agent-turn-waiting-on-a-background-task`).
+**Long commands: a foreground call carries an explicit timeout, and anything
+that may outrun one runs in the background and is polled in-turn.** Give every
+foreground Bash call its own `timeout` — the default is two minutes, which the
+suite has repeatedly exceeded, and the ceiling is `600000`. A command expected
+to run longer than about eight minutes (the full suite on a cold worktree or a
+loaded machine, Playwright, a cold build or image build) starts with
+`run_in_background`, its output redirected to a file, and you poll that file
+from this same turn: a bounded `until` loop in a foreground call, or the
+Monitor tool, repeated until the command has exited. A turn that stops while a
+background task runs loses the result — the task finishing does not re-invoke
+a dispatched worker, so the run ends having done no work (`bd memories
+never-end-an-agent-turn-waiting-on-a-background-task`; `ugcportal-fbng`, the
+2026-10-09 B-side entry). Silence is not progress either: when a foreground
+call hits its timeout, or a poll's bound runs out with the output file no
+longer growing, report a stall — the command, the elapsed time and the last
+lines of its output — rather than waiting it out or re-running it blind
+(`ugcportal-fbng` entry A19 of 2026-10-14: four reviewer runs on #244/#245 sat
+with no output for ten minutes inside foreground calls). The two command forms
+are written out in `.claude/skills/dispatch-bead/SKILL.md` section 2.
 
 Do not spawn subagents or forks of your own. The memory behind this
 (`bd memories nested-fork-reports-go-to-the-top-session`) says a nested fork's
