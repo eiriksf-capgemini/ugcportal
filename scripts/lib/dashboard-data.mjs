@@ -269,10 +269,10 @@ export function humanWaitLabel(x, wanted) {
 }
 
 /**
- * Open (not closed) beads from the in-progress, ready and blocked lists,
- * each once. These are the beads the dashboard can see; a bead outside all
- * three (deferred, say) is not fetched and so not checked; the printed
- * sentence names the lists it covers (humanWaitChecked).
+ * Open (not closed) beads from the in-progress, ready, blocked and
+ * labelled-bead lists, each once (first list wins by id). The labelled list
+ * is the only one that carries deferred beads; the printed sentence names
+ * the lists it covers (humanWaitChecked).
  * @param {any[][]} lists
  */
 export function uniqueOpenBeads(...lists) {
@@ -287,8 +287,14 @@ export function uniqueOpenBeads(...lists) {
  * unavailable instead of counted as 0 (dev-dashboard.test.mjs, K3 test).
  * @param {{ prs: any[], beads: any[], prsUp: boolean, beadsUp: boolean }} a
  */
-export function humanWaitChecked({ prs, beads, prsUp, beadsUp }) {
-  const where = "beads from the in_progress, ready and blocked lists";
+export function humanWaitChecked({ prs, beads, prsUp, beadsUp, labelledUp = true, labelled = 0 }) {
+  const lists = "beads from the in_progress, ready and blocked lists";
+  // The labelled-bead source (bd list --all --label-any ...) is the only one
+  // that sees deferred beads. Down, the sentence says so and still counts what
+  // the three lists gave; the page never then reads as a complete check.
+  const where = labelledUp
+    ? `${lists} plus ${plural(labelled, "labelled bead")} of any non-closed status`
+    : `${lists}; labelled-bead source unavailable (bd down), so deferred beads were not checked`;
   if (prsUp && beadsUp) return `${plural(prs.length, "PR")} and ${plural(beads.length, "bead")} checked for human-wait labels (${where})`;
   if (prsUp) return `${plural(prs.length, "PR")} checked for human-wait labels; beads unavailable (bd down)`;
   if (beadsUp) return `PRs unavailable (gh down); ${plural(beads.length, "bead")} checked for human-wait labels (${where})`;
@@ -421,7 +427,10 @@ export function buildAttention({
   // "Source down" item above, and its beads are simply absent here.
   for (const bead of beads) {
     const label = humanWaitLabel(bead, humanWaitBeadLabels);
-    if (label) add("Waiting on you", `${bead.id} \u2014 ${bead.title} (${label})`, { anchor: `bead-${bead.id}` });
+    // A deferred bead has no row on the page, so no anchor: a link to it would be dead.
+    const deferred = bead.status === "deferred";
+    if (label)
+      add("Waiting on you", `${bead.id} \u2014 ${bead.title}${deferred ? " (deferred)" : ""} (${label})`, deferred ? {} : { anchor: `bead-${bead.id}` });
   }
   for (const wt of up("inProgress") && up("prs") ? joined.orphanWorktrees : []) {
     add("Orphan worktree", `${wt.path} on ${wt.branch} has no in_progress bead and no open PR`);

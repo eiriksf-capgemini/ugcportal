@@ -62,6 +62,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
+import { HUMAN_WAIT_BEAD_LABELS } from "./lib/dashboard-data.mjs";
 import { renderHtml } from "./lib/dashboard-html.mjs";
 import { isMainModule } from "./lib/is-main.mjs";
 
@@ -198,7 +199,7 @@ const PR_FIELDS = [
  * @param {{ runJson?: typeof runJsonDefault, runText?: typeof runTextDefault }} [runners]
  */
 export async function gatherSources(repo, { runJson = runJsonDefault, runText = runTextDefault } = {}) {
-  const [inProgress, ready, blocked, status, release, prs, merged, current, worktrees, mainLog] =
+  const [inProgress, ready, blocked, status, release, labelled, prs, merged, current, worktrees, mainLog] =
     await Promise.all([
       // Every list below that the page shows in full passes a limit no real
       // queue reaches, because a truncated list renders as a complete one,
@@ -212,6 +213,9 @@ export async function gatherSources(repo, { runJson = runJsonDefault, runText = 
       runJson("bd", ["status", "--json"], repo),
       // Every bead, closed included, that carries a semver release label.
       runJson("bd", ["list", "--all", "--label-pattern", "v*.*.*", "--limit", "0", "--json"], repo),
+      // Beads waiting on a human, of any status: deferred beads are in none of
+      // the lists above. Closed ones are dropped by uniqueOpenBeads.
+      runJson("bd", ["list", "--all", "--label-any", HUMAN_WAIT_BEAD_LABELS.join(","), "--limit", "0", "--json"], repo),
       // gh has no unlimited value; 200 open PRs is far past anything this
       // repo has had open at once. The default would be 30.
       runJson("gh", ["pr", "list", "--state", "open", "--limit", "200", "--json", PR_FIELDS], repo),
@@ -228,7 +232,7 @@ export async function gatherSources(repo, { runJson = runJsonDefault, runText = 
       runText("git", ["worktree", "list", "--porcelain"], repo),
       runText("git", ["log", "-1", "--format=%h %cr", "origin/main"], repo),
     ]);
-  return { inProgress, ready, blocked, status, release, prs, merged, current, worktrees, mainLog };
+  return { inProgress, ready, blocked, status, release, labelled, prs, merged, current, worktrees, mainLog };
 }
 
 // ---------------------------------------------------------------------------
