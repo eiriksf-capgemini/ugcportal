@@ -1,5 +1,90 @@
 # Changelog
 
+## v0.8.1 - 2026-10-16
+
+### 💰 Cost Summary
+
+**Transcript cost (input-token equivalents)**
+
+| Type | Impl | QA | Total | Beads with data |
+|---|---:|---:|---:|:---:|
+| 🐛 Fixes | 926,776 | 3,785,982 | 4,712,758 | 1/14 |
+| 📝 Documentation | 2,257,927 | 9,035,828 | 11,293,755 | 4/11 |
+| ♻️ Refactoring | — | — | — | 0/1 |
+| 🧪 Tests | — | — | — | 0/1 |
+| 🏗️ Build & CI | — | — | — | 0/2 |
+| 🔧 Chores | 1,924,701 | 7,989,401 | 9,914,102 | 2/8 |
+| **Total** | **5,109,404** | **20,811,211** | **25,920,615** | **7/37** |
+
+**Context-size, not cost** (beads with no accepted `cost_ite_*` figure (absent, 0, malformed, or on a side marked incomplete))
+
+| Type | Impl | QA | Total | Beads with data |
+|---|---:|---:|---:|:---:|
+| 🐛 Fixes | 732,735 | 956,944 | 1,689,679 | 8/14 |
+| 📝 Documentation | 1,168,257 | 852,140 | 2,020,397 | 7/11 |
+| ♻️ Refactoring | — | 997,779 | 997,779 | 1/1 |
+| 🧪 Tests | 227,644 | 228,733 | 456,377 | 1/1 |
+| 🏗️ Build & CI | 170,510 | 250,667 | 421,177 | 2/2 |
+| 🔧 Chores | 1,345,217 | 1,442,624 | 2,787,841 | 5/8 |
+| **Total** | **3,644,363** | **4,728,887** | **8,373,250** | **24/37** |
+
+*Transcript cost is priced from local agent transcripts by `scripts/agent-pass-cost.mjs` in input-token equivalents: proportional to price only for a model priced at the standard ratios (two models whose cache read is cheaper are the exceptions), and a relative measure across models; it omits work done inline in an orchestrator session. The context-size table is each agent's final context window, not what it cost, and is not comparable with the first table or summable with it. A bead's figures can keep growing later from review on a follow-up fix without retroactively updating a past release — treat both as a lower bound, not the release's full or final cost.*
+
+### 🐛 Fixes
+
+- **Dashboard: Needs you lists PRs waiting for a human merge and beads labelled stalled-on-human / human-only** (`ugcportal-a2fl`, scope: dashboard) — https://github.com/eiriksf-capgemini/ugcportal/pull/268
+- **fix(tooling): gh-app-token rejects every real installation token (dots in the token)** (`ugcportal-qzfu`, scope: tooling) — https://github.com/eiriksf-capgemini/ugcportal/pull/254
+- **pr-review-merge's deferral step must file beads in the bead-template form, not as a finding paste** (`ugcportal-nr72`, scope: process) — https://github.com/eiriksf-capgemini/ugcportal/pull/281
+- **agent-pass-cost parser silently zero-fills skipped files, bad lines and missing usage (PR #255 round-1 findings merged past review)** (`ugcportal-iir8`, scope: tooling) — https://github.com/eiriksf-capgemini/ugcportal/pull/256
+- **bead-dashboard pin check loads an ANSI-C or locale-quoted git spec unpinned (npx $'github:o/r' read as $github:o/r, typed directory)** (`ugcportal-73jt`, scope: dashboard) — https://github.com/eiriksf-capgemini/ugcportal/pull/274
+- **bead-dashboard comments still describe the release query as a bd --label-pattern glob after it moved to --label-regex** (`ugcportal-qtua`, scope: dashboard) — https://github.com/eiriksf-capgemini/ugcportal/pull/274
+- **bead-dashboard says "No bead carries a release label (v*.*.*)" when bd returned beads whose labels match that glob but not the derived x.y.z regex** (`ugcportal-3ffk`, scope: dashboard) — https://github.com/eiriksf-capgemini/ugcportal/pull/274
+- **bead-dashboard pin check loads an unpinned git spec placed after a value-taking npm flag it does not list (npx --omit dev owner/repo)** (`ugcportal-pae2`, scope: dashboard) — https://github.com/eiriksf-capgemini/ugcportal/pull/274
+- **Dashboard: deferred beads labelled stalled-on-human / human-only are invisible to Waiting on you** (`ugcportal-uu8p`, scope: dashboard) — https://github.com/eiriksf-capgemini/ugcportal/pull/273
+- **bd-guard.test.mjs pins skill-file fixtures by line number, so unrelated skill edits break the guard's tests** (`ugcportal-ucnf`, scope: tooling) — https://github.com/eiriksf-capgemini/ugcportal/pull/276
+- **Compose image gate: resolve ${VAR:-default} registry images with their default instead of excluding them** (`ugcportal-jgh2`, scope: release) — https://github.com/eiriksf-capgemini/ugcportal/pull/271
+- **scripts/lib/is-main.mjs isMainModule misfires through a symlinked path** (`ugcportal-zrvz`, scope: tooling) — https://github.com/eiriksf-capgemini/ugcportal/pull/258
+- **cut-release lists beads closed without shipping anything as shipped work, and re-announces PRs an earlier release already listed** (`ugcportal-xb68`, scope: release-tooling) — https://github.com/eiriksf-capgemini/ugcportal/pull/265
+- **bead-dashboard classifyGitSpec npm: alias branch is unreachable for git sources and its test labels a named spec as an alias** (`ugcportal-7779`, scope: dashboard) — https://github.com/eiriksf-capgemini/ugcportal/pull/274
+
+### 📝 Documentation
+
+- **A sold item whose clearance lapses: fulfilment issues download URLs without re-evaluating sellability** (`ugcportal-dabx`, scope: fulfillment) — https://github.com/eiriksf-capgemini/ugcportal/pull/227, https://github.com/eiriksf-capgemini/ugcportal/pull/267
+- **pr-review-merge marks a sensitive-path PR as waiting on a human (GitHub label + bead label) instead of leaving it only in a comment** (`ugcportal-ub7y`, scope: process) — https://github.com/eiriksf-capgemini/ugcportal/pull/284
+- **Choose resume or fresh agent for a fix round by carried context and idle time, not by pass count** (`ugcportal-8r06`, scope: process) — https://github.com/eiriksf-capgemini/ugcportal/pull/280
+- **Cost and performance analysis: test the seven v0.7.0 claims against the data and propose process changes** (`ugcportal-l6t5`, scope: process) — https://github.com/eiriksf-capgemini/ugcportal/pull/255
+- **An implementer's self-assessment stays attributed and unverified in review briefs and in reports to Eirik until a reviewer has measured it** (`ugcportal-4bok`, scope: process) — https://github.com/eiriksf-capgemini/ugcportal/pull/264
+- **Long commands in worker briefs: hybrid rule (explicit foreground timeout; over ~8 minutes backgrounded and polled in-turn; a stall reported, not waited out)** (`ugcportal-9u80`, scope: process) — https://github.com/eiriksf-capgemini/ugcportal/pull/272
+- **pr-review-merge says main has no branch protection; a ruleset now requires branches be up to date** (`ugcportal-li65`, scope: process) — https://github.com/eiriksf-capgemini/ugcportal/pull/282
+- **pr-review-merge step 4b still calls the approving reviewer "future" after implementers began authoring as the bot** (`ugcportal-srz2`, scope: process) — https://github.com/eiriksf-capgemini/ugcportal/pull/286
+- **review-standards quotes a five-bead cost figure built on summed context snapshots corrected by ugcportal-cii0** (`ugcportal-bhvk`, scope: process) — https://github.com/eiriksf-capgemini/ugcportal/pull/279
+- **pre-review checklist lines 4 and 8 have no SCOPE-LIMITING slot for claims-audit's new category** (`ugcportal-lsvf`, scope: process) — https://github.com/eiriksf-capgemini/ugcportal/pull/269
+- **roles.ts docstring still claims a transaction read 'can't be read stale', a claim lu7's own review flagged as unmeasured** (`ugcportal-5bkn`, scope: auth) — https://github.com/eiriksf-capgemini/ugcportal/pull/257
+
+### ♻️ Refactoring
+
+- **Extract the bead dashboard to its own repo (eiriksf-capgemini/bead-dashboard), run via npx with per-repo config, README as the persistent note** (`ugcportal-zc8s`, scope: dashboard) — https://github.com/eiriksf-capgemini/ugcportal/pull/274
+
+### 🧪 Tests
+
+- **e2e cannot authenticate: no session seeding, so every signed-in acceptance criterion is unverifiable** (`ugcportal-0wh6`, scope: e2e) — https://github.com/eiriksf-capgemini/ugcportal/pull/260
+
+### 🏗️ Build & CI
+
+- **GitHub App token helper so subagents act as hal9000-agent[bot]** (`ugcportal-3ssw`, scope: tooling) — https://github.com/eiriksf-capgemini/ugcportal/pull/252
+- **Make the fresh-machine compose gate a written cut-release step and a scheduled anonymous-pull CI check** (`ugcportal-vtgz`, scope: release) — https://github.com/eiriksf-capgemini/ugcportal/pull/263
+
+### 🔧 Chores
+
+- **tokens_impl and tokens_qa record end-of-run context size, not cost, and resumed agents are recorded under two incompatible conventions** (`ugcportal-cii0`, scope: process) — https://github.com/eiriksf-capgemini/ugcportal/pull/261, https://github.com/eiriksf-capgemini/ugcportal/pull/262
+- **Request the one-hour prompt cache TTL for the main conversation in .claude/settings.json** (`ugcportal-gn8u`, scope: settings) — https://github.com/eiriksf-capgemini/ugcportal/pull/270
+- **Stop bd update --notes and backticks in double-quoted bd strings with a check before the command runs** (`ugcportal-vu49`, scope: tooling) — https://github.com/eiriksf-capgemini/ugcportal/pull/259
+- **Record review findings per round by family and severity (findings_rN) so the mechanism behind rounds can be measured** (`ugcportal-2jvh`, scope: review) — https://github.com/eiriksf-capgemini/ugcportal/pull/285
+- **Implementers author PRs as hal9000-agent-bot so reviewer and author differ and an exact chain is reachable again** (`ugcportal-62b6`, scope: process) — https://github.com/eiriksf-capgemini/ugcportal/pull/277
+- **Release cost report prices each process control: runs, cost, wall clock, orchestrator share and catches** (`ugcportal-md4c`, scope: process) — https://github.com/eiriksf-capgemini/ugcportal/pull/278
+- **review-standards: a false claim in a review-thread comment is corrected in place and never blocks or consumes a round** (`ugcportal-n005`, scope: process) — https://github.com/eiriksf-capgemini/ugcportal/pull/287
+- **claims-audit penalises the vocabulary that scopes a claim down, pushing authors toward vaguer comments** (`ugcportal-fgcb`, scope: process) — https://github.com/eiriksf-capgemini/ugcportal/pull/266
+
 ## v0.8.0 - 2026-10-16
 
 ### 💰 Cost Summary
