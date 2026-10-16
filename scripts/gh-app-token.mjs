@@ -29,6 +29,13 @@ const EXPIRY_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
 
 const b64url = (buf) => Buffer.from(buf).toString("base64url");
 
+// Only a non-empty string token is redacted: replaceAll("") would interleave
+// the marker between every character.
+const redact = (text, token) =>
+  typeof token === "string" && token !== ""
+    ? text.replaceAll(token, "[redacted]")
+    : text;
+
 export function mintJwt(pem, clientId, nowMs = Date.now()) {
   const now = Math.floor(nowMs / 1000);
   const header = b64url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
@@ -91,7 +98,7 @@ export async function main({
       // Never print the raw body: a non-2xx body may still carry a token.
       const msg =
         typeof body.message === "string"
-          ? `: ${body.message.split("\n")[0].replaceAll(String(body.token ?? "\0"), "[redacted]")}`
+          ? `: ${redact(body.message.split("\n")[0], body.token)}`
           : "";
       return fail(`GitHub returned ${res.status}${msg}`);
     }

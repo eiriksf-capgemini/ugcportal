@@ -144,6 +144,16 @@ describe("main", () => {
     expect(r.stderr + r.stdout).not.toContain("ghs_TESTTOKEN123");
   });
 
+  it("a 403 with an empty-string token keeps its message intact", async () => {
+    const r = await main({
+      fetch: stubFetch(403, { message: "Nope", token: "" }),
+      argv: [],
+      env: envOf(),
+    });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toBe("gh-app-token: GitHub returned 403: Nope\n");
+  });
+
   it("a 403 whose message echoes the token never prints it", async () => {
     const r = await main({
       fetch: stubFetch(403, {
@@ -245,9 +255,20 @@ describe("K4: no private key is ever tracked", () => {
     { timeout: 30_000 },
     () => {
       const repo = mkdtempSync(join(tmpdir(), "gh-app-token-repo-"));
-      execFileSync("git", ["init", "-q"], { cwd: repo, timeout: 20_000 });
+      // Isolate from the machine: no global config or excludes (a global
+      // gitignore listing *.pem would otherwise hide the file).
+      const opts = {
+        cwd: repo,
+        timeout: 20_000,
+        env: {
+          ...process.env,
+          GIT_CONFIG_GLOBAL: "/dev/null",
+          GIT_CONFIG_SYSTEM: "/dev/null",
+        },
+      };
+      execFileSync("git", ["init", "-q"], opts);
       writeFileSync(join(repo, "ø-key.pem"), "x");
-      execFileSync("git", ["add", "."], { cwd: repo, timeout: 20_000 });
+      execFileSync("git", ["add", "-f", "."], opts);
       expect(pemFiles(trackedFiles(repo))).toEqual(["ø-key.pem"]);
     },
   );
