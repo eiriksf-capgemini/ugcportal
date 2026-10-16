@@ -7,10 +7,10 @@ the sale, stopped passing `evaluateSellability` in `src/lib/resale-rights.ts`
 **Code:** none yet. The rule lands in `ugcportal-f3a` (the `Order` row) and
 `ugcportal-5d6` (the signed download URL), neither of which is built.
 **Date:** 2026-10-12, prepared against `origin/main` `0a9e051`
-**Status:** **undecided.** This document prepares the decision for the product
-owner; it does not take it. §9 is a recommendation and is labelled as one.
-§11 is the blank the decision goes into. This document is not legal advice
-and its author is not a lawyer.
+**Status:** **decided 2026-10-16, option C with manual A** (§11). Sections 0
+to 10 prepared the decision for the product owner and are left as written;
+§9 is a recommendation and is labelled as one. §11 records the decision. This
+document is not legal advice and its author is not a lawyer.
 
 ---
 
@@ -468,15 +468,15 @@ view and D should not be chosen in its place.
 
 ## 11. Decision
 
-Blank until the product owner fills it. Once filled, `ugcportal-5d6`'s
-description cites this section, `ugcportal-f3a` gains the snapshot criterion
-from §7, and the beads §8 names for the chosen option are updated.
+Filled 2026-10-16. `ugcportal-5d6`'s description cites this section,
+`ugcportal-f3a` gains the snapshot criterion from §7, and the beads §8 names
+for the chosen option are updated; the bead edits are listed in the Notes row.
 
 | Field | Entry |
 |---|---|
-| Option chosen (A / A-manual / B / C / D) | |
-| Reasons, in the decider's words | |
-| What changes in `/licence` before the first sale | |
-| Decider (name, role) | |
-| Date | |
-| Notes | |
+| Option chosen (A / A-manual / B / C / D) | **C with manual A.** Fulfilment honours the sale on the order's recorded snapshot (`sellabilityVerifiedAt`, `reviewId`, `checklistVersion`, `termsShown`) and a per-order admin hold flag (`Order.fulfilmentHoldReason` null). The live gate is not consulted at download time. |
+| Reasons, in the decider's words | The decision as recorded on `ugcportal-dabx`'s 2026-10-16 note: "fulfilment honours the sale on the order's recorded snapshot (sellabilityVerifiedAt, reviewId, checklistVersion, termsShown) and a per-order admin hold flag (Order.fulfilmentHoldReason null); the live gate is not consulted at download time; a lapse stops new sales (already shipped) and changes nothing for existing buyers until an admin sets the hold, which lists affected orders and offers refund as a separate action." No reasons beyond that wording were recorded by the decider. It is the option §9 recommends. |
+| What changes in `/licence` before the first sale | Nothing is required by this document. §4-C lists `/licence`'s promise "as written" among the things C agrees with, and §5 says the promise has to change before the first sale only "if the decision is anything other than C". §5 also names, as operator-answerable and not required, writing the chosen rule into `/licence` and the per-item terms (`74w.1`); that would put `/licence` back in draft until re-signed, and the buyer-facing terms text is outside what this document decides (§10). |
+| Decider (name, role) | Eirik Sander-Fjeld, product owner |
+| Date | 2026-10-16 |
+| Notes | **Beads updated for this decision:** `ugcportal-5d6` (K4 added from §7's option-C text; description cites this section), `ugcportal-f3a` (the §7 snapshot criterion), `ugcportal-74w.1` (snapshot requirement), and one new bead for the admin hold action and the affected-orders admin surface, which §7 and §9 make "its own bead" (discovered-from `ugcportal-dabx`, related to `ugcportal-5d6`). **§8-C, as applied here:** the sentence distinguishing an act from a completed act is already written in this document: §3 puts a completed sale on `mqh8`'s side of the line, and §4-C says "those re-evaluate whether the site may *act*; a sale is an act completed". §9 cost 2 says it also has to be written where `5d6`'s gate lives, which is code, not a file under `docs/`, so it is carried as a note on `5d6` and not edited here. **Follow-up, not done here:** `manual-upload-rights-review.md` §2's E.3 "Revocation cascades" replacement text should regain the buyer sentence before `ugcportal-fw5` applies it. §3 quotes the original E.3 sentence but this document does not specify the replacement wording, so the edit is left to `ugcportal-fw5`. **Still unowned after this decision (§9 costs 3 and 4):** the buyer-notification sentence and buyer e-mail on the order, and refund mechanics (`f3a` excludes refunds). |
