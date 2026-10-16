@@ -27,7 +27,7 @@ const skill = (name) => path.join(root, ".claude", "skills", name, "SKILL.md");
 const ACC_ANCHOR = '--acceptance="$(cat "$scratch/acc.md")"';
 const BLESSED = [
   ["cut-release", skill("cut-release"), "bd create \"$(cat <<'BD_EOF'"],
-  ["pr-review-merge", skill("pr-review-merge"), "Use quoted heredocs (`<<'EOF'`)"],
+  ["pr-review-merge", skill("pr-review-merge"), "Use quoted heredocs (`<<'BD_EOF'`)"],
   ["review-standards", skill("review-standards"), "so use quoted heredocs, which expand nothing"],
 ];
 
