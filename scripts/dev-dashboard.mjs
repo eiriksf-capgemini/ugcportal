@@ -6,7 +6,9 @@
  *
  *   bd    in_progress / ready / blocked beads, the database totals, and
  *         every bead carrying a semver release label (v0.7.0), closed
- *         included, for the "Remaining in <release>" section
+ *         included, for the "Remaining in <release>" section, and every
+ *         bead labelled stalled-on-human or human-only of any status
+ *         (deferred included), for the "Waiting on you" rule
  *   gh    open pull requests, their checks, review state and mergeability
  *   cmux  `cmux current --json`: which workspaces have an agent, and whether
  *         any agent is waiting on a human

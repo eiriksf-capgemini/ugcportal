@@ -288,13 +288,21 @@ export function uniqueOpenBeads(...lists) {
  * unavailable instead of counted as 0 (dev-dashboard.test.mjs, K3 test).
  * @param {{ prs: any[], beads: any[], prsUp: boolean, beadsUp: boolean }} a
  */
-export function humanWaitChecked({ prs, beads, prsUp, beadsUp, labelledUp = true, labelled = 0 }) {
-  const lists = "beads from the in_progress, ready and blocked lists";
+export function humanWaitChecked({ prs, beads, prsUp, beadsUp, labelledUp, labelled, labelledOutside }) {
+  // No default for the labelled-bead arguments: an omitted one would print a
+  // count for a source nobody read (test: "uu8p F3").
+  if (typeof labelledUp !== "boolean") throw new TypeError("humanWaitChecked: labelledUp is required (boolean)");
+  if (labelledUp && !(Number.isInteger(labelled) && Number.isInteger(labelledOutside)))
+    throw new TypeError("humanWaitChecked: labelled and labelledOutside are required integers when labelledUp");
+  // `beads` already includes every labelled bead, so the labelled source is
+  // described as a source, with how many of its beads the three lists lacked,
+  // never as a number to add to `beads`.
+  const lists = "the in_progress, ready and blocked lists";
   // The labelled-bead source (bd list --all --label-any ...) is the one asked
   // for deferred beads. When it is down the sentence says so, and counts what
   // the three lists gave (test: "uu8p K2").
   const where = labelledUp
-    ? `${lists} plus ${plural(labelled, "labelled bead")} of any non-closed status`
+    ? `${lists}, and the labelled-bead source, which returned ${labelled} of any non-closed status; ${labelledOutside} of those outside the three lists`
     : `${lists}; labelled-bead source unavailable (bd down), so deferred beads were not checked`;
   if (prsUp && beadsUp) return `${plural(prs.length, "PR")} and ${plural(beads.length, "bead")} checked for human-wait labels (${where})`;
   if (prsUp) return `${plural(prs.length, "PR")} checked for human-wait labels; beads unavailable (bd down)`;
