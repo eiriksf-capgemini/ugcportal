@@ -240,11 +240,11 @@ cd <worktree>
 node scripts/release-cost-report.mjs --releases v0.5.0,v0.6.0,v0.7.0 --beads /tmp/l6t5/beads.json \
   --cache /tmp/l6t5/ghcache --json /tmp/l6t5/costreport.json --allow-unmerged > /tmp/l6t5/costreport.md
 node scripts/agent-pass-cost.mjs --before 2026-10-16T00:00:00Z --json /tmp/l6t5/passes.json
-#   reach: 16 sessions with subagents, 1752 agent files, 1752 parsed, 0 skipped unreadable, 0 malformed lines skipped, 0 assistant entries with missing/invalid usage, 2774 passes starting before 2026-10-16T00:00:00Z
+#   reach (snapshot of 2026-10-16, the same 1,750 agent files as section 1.1; the count grows while sessions are written, --before keeps the 2,774 passes fixed): 16 sessions with subagents, 1750 agent files, 1750 parsed, 0 skipped unreadable, 0 malformed lines skipped, 0 assistant entries with missing/invalid usage, 2774 passes starting before 2026-10-16T00:00:00Z
 cd /tmp/l6t5 && node analysis.mjs        # appendix B; prints sections 1-4
 ```
 
-Control prices (section 7), one command each; each prints a reach line (files examined, files skipped as unreadable, malformed lines skipped, assistant entries with missing or invalid usage, files matched) and a `TOTAL` line, marked `(lower bound)` when anything was skipped:
+Control prices (section 7), one command each; each prints a reach line (files examined, files skipped as unreadable, malformed lines skipped, assistant entries with missing or invalid usage, matching calls unpriced, files matched) and a `TOTAL` line, marked `(lower bound)` when anything was skipped or unpriced:
 
 ```bash
 B=2026-10-16T00:00:00Z

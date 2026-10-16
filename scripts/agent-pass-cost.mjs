@@ -137,28 +137,35 @@ export function parsePasses(entries, stats = { badUsage: 0 }) {
 
 /**
  * Every task-notification's token figure in a parent session's text, keyed by
- * task id, in order. Read structurally, never by matching free text: the text
- * is split on each `<task-notification>` opener, the id is the `<task-id>`
- * that immediately follows the opener, and the figure is the last one before
- * that notification's `</task-notification>` (or, if it was never closed,
- * before the next opener). A `<task-id>` quoted inside an agent's result text
- * is not directly after an opener, so it is neither an id nor a boundary.
+ * task id, in order. A notification STARTS at a `<task-notification>` that is
+ * immediately followed (whitespace, including a JSON-escaped `\n`, allowed) by
+ * `<task-id>id</task-id>`; any other `<task-notification>`, `<task-id>` or
+ * `</task-notification>` in the text is result text and is not structure. It
+ * ENDS at the first `</usage>` followed directly by `</task-notification>`, or
+ * at the next start if it was never closed. The figure is the one in the last
+ * `<usage>` block of that span. Known limit: a result text that itself
+ * contains a complete, adjacent `<task-notification><task-id>..</task-id>`
+ * sequence is indistinguishable from a real notification and is read as one.
  */
 export function notificationTotals(text) {
   const out = new Map();
-  for (const chunk of text.split("<task-notification>").slice(1)) {
-    const head = /^(?:\s|\\[nrt])*<task-id>([a-z0-9]+)<\/task-id>/.exec(chunk);
-    if (!head) continue;
-    const end = chunk.indexOf("</task-notification>");
-    const body = (end < 0 ? chunk : chunk.slice(0, end)).slice(head[0].length).replace(/\\n/g, "\n");
-    const figures = [...body.matchAll(/<subagent_tokens>(\d+)<\/subagent_tokens>|total_tokens:\s*(\d+)/g)];
-    if (!figures.length) continue;
-    const last = figures[figures.length - 1];
-    const v = Number(last[1] ?? last[2]);
-    const list = out.get(head[1]) || [];
+  const ws = String.raw`(?:\s|\\[nrt])*`;
+  const starts = [...text.matchAll(new RegExp(String.raw`<task-notification>${ws}<task-id>([a-z0-9]+)</task-id>`, "g"))];
+  const closer = new RegExp(String.raw`</usage>${ws}</task-notification>`);
+  starts.forEach((m, k) => {
+    const from = m.index + m[0].length;
+    let span = text.slice(from, k + 1 < starts.length ? starts[k + 1].index : text.length);
+    const c = closer.exec(span);
+    if (c) span = span.slice(0, c.index + "</usage>".length);
+    const u = span.lastIndexOf("<usage>");
+    if (u < 0) return;
+    const t = /<subagent_tokens>(\d+)<\/subagent_tokens>|total_tokens:\s*(\d+)/.exec(span.slice(u).replace(/\\n/g, "\n"));
+    if (!t) return;
+    const v = Number(t[1] ?? t[2]);
+    const list = out.get(m[1]) || [];
     if (list[list.length - 1] !== v) list.push(v); // the same notification is echoed into several entries
-    out.set(head[1], list);
-  }
+    out.set(m[1], list);
+  });
   return out;
 }
 

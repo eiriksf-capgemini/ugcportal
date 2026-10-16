@@ -131,6 +131,36 @@ describe("notificationTotals reads structure, not free text", () => {
   });
 });
 
+describe("notificationTotals, structure quoted inside result text", () => {
+  const open = (id) => `<task-notification>\\n<task-id>${id}</task-id>\\n`;
+  const usageBlock = (n) => `<usage><subagent_tokens>${n}</subagent_tokens></usage>`;
+  const close = "\\n</task-notification>";
+  it("keeps the figure when a <task-notification> opener is quoted in the result text", () => {
+    const out = notificationTotals([open("aa11"), "<result>the harness prints <task-notification> around these</result>", usageBlock(111), close].join(""));
+    expect(out.get("aa11")).toEqual([111]);
+  });
+  it("keeps the figure with the real id when a quoted opener is followed by a quoted <task-id>", () => {
+    const out = notificationTotals([open("aa11"), "<result>a <task-notification> wrapper with <task-id>zz</task-id> inside</result>", usageBlock(111), close].join(""));
+    expect(out.get("aa11")).toEqual([111]);
+    expect(out.has("zz")).toBe(false);
+  });
+  it("keeps the figure when a </task-notification> closer is quoted in the result text", () => {
+    const out = notificationTotals([open("aa11"), "<result>ends with </task-notification> as quoted</result>", usageBlock(111), close].join(""));
+    expect(out.get("aa11")).toEqual([111]);
+  });
+});
+
+describe("the --tool lower-bound condition, one counter at a time", () => {
+  const clean = { filesExamined: 3, unreadable: 0, malformedLines: 0, badUsage: 0, unpriced: 0, rows: [] };
+  for (const k of ["unreadable", "malformedLines", "badUsage", "unpriced"]) {
+    it(`${k} alone prints the WARNING and marks the TOTAL a lower bound`, () => {
+      const { err, out } = reportTool({ ...clean, [k]: 1 }, "x");
+      expect(err[1]).toMatch(/^WARNING: .*LOWER BOUNDS/);
+      expect(out[out.length - 1]).toMatch(/\(lower bound\)$/);
+    });
+  }
+});
+
 describe("missing or non-numeric usage is counted, not zero-filled", () => {
   const bad = [
     asst("b1", "2026-10-15T09:00:06Z", undefined),
