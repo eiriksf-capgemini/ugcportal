@@ -72,8 +72,8 @@ export function validUsage(u) {
   if (cc === undefined || cc === null) return true;
   if (typeof cc !== "object") return false;
   const eph = [cc.ephemeral_5m_input_tokens, cc.ephemeral_1h_input_tokens];
-  // an object with neither ephemeral field would price the cache write at 0
-  return eph.some(isNum) && eph.every((x) => x === undefined || isNum(x));
+  // a missing ephemeral field would price that part of the cache write at 0
+  return eph.every(isNum);
 }
 
 /** Parse a jsonl file line by line; a bad line is skipped and counted, never fatal to the file. */
@@ -135,17 +135,29 @@ export function parsePasses(entries, stats = { badUsage: 0 }) {
   });
 }
 
-/** Every task-notification's token figure in a parent session's text, keyed by task id, in order. */
+/**
+ * Every task-notification's token figure in a parent session's text, keyed by
+ * task id, in order. Read structurally, never by matching free text: the text
+ * is split on each `<task-notification>` opener, the id is the `<task-id>`
+ * that immediately follows the opener, and the figure is the last one before
+ * that notification's `</task-notification>` (or, if it was never closed,
+ * before the next opener). A `<task-id>` quoted inside an agent's result text
+ * is not directly after an opener, so it is neither an id nor a boundary.
+ */
 export function notificationTotals(text) {
   const out = new Map();
-  const re = /<task-id>([a-z0-9]+)<\/task-id>((?:(?!<task-id>|<task-notification>|<\/task-notification>)[\s\S])*)/g;
-  for (const m of text.matchAll(re)) {
-    const t = /<subagent_tokens>(\d+)<\/subagent_tokens>|total_tokens:\s*(\d+)/.exec(m[2].replace(/\\n/g, "\n"));
-    if (!t) continue;
-    const v = Number(t[1] ?? t[2]);
-    const list = out.get(m[1]) || [];
+  for (const chunk of text.split("<task-notification>").slice(1)) {
+    const head = /^(?:\s|\\[nrt])*<task-id>([a-z0-9]+)<\/task-id>/.exec(chunk);
+    if (!head) continue;
+    const end = chunk.indexOf("</task-notification>");
+    const body = (end < 0 ? chunk : chunk.slice(0, end)).slice(head[0].length).replace(/\\n/g, "\n");
+    const figures = [...body.matchAll(/<subagent_tokens>(\d+)<\/subagent_tokens>|total_tokens:\s*(\d+)/g)];
+    if (!figures.length) continue;
+    const last = figures[figures.length - 1];
+    const v = Number(last[1] ?? last[2]);
+    const list = out.get(head[1]) || [];
     if (list[list.length - 1] !== v) list.push(v); // the same notification is echoed into several entries
-    out.set(m[1], list);
+    out.set(head[1], list);
   }
   return out;
 }

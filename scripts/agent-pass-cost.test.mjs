@@ -106,15 +106,28 @@ describe("notificationTotals, a long notification", () => {
   });
 });
 
-describe("notificationTotals, an unterminated notification", () => {
-  it("reads a notification without a closing tag up to the next one, not through it", () => {
-    const text = [
-      "<task-notification>\\n<task-id>aa11</task-id>\\n<usage><subagent_tokens>111</subagent_tokens></usage>",
-      "<task-notification>\\n<task-id>bb22</task-id>\\n<usage><subagent_tokens>222</subagent_tokens></usage>\\n</task-notification>",
-    ].join("\n");
-    const out = notificationTotals(text);
+describe("notificationTotals reads structure, not free text", () => {
+  const open = (id) => `<task-notification>\\n<task-id>${id}</task-id>\\n`;
+  const tokens = (n) => `<usage><subagent_tokens>${n}</subagent_tokens></usage>`;
+  const close = "\\n</task-notification>";
+  it("reads two adjacent well-formed notifications", () => {
+    const out = notificationTotals([open("aa11"), tokens(111), close, "\n", open("bb22"), tokens(222), close].join(""));
+    expect(out.get("aa11")).toEqual([111]);
     expect(out.get("bb22")).toEqual([222]);
-    expect(out.get("aa11")).toEqual([111]); // read to the next opening tag, not credited with 222
+  });
+  it("reads an unterminated notification up to the next one, not through it", () => {
+    const out = notificationTotals([open("aa11"), tokens(111), "\n", open("bb22"), tokens(222), close].join(""));
+    expect(out.get("aa11")).toEqual([111]);
+    expect(out.get("bb22")).toEqual([222]);
+  });
+  it("does not read a closed <task-id> quoted in result text as an agent", () => {
+    const out = notificationTotals([open("aa11"), "<result>the other agent was <task-id>zzz</task-id></result>", tokens(111), close].join(""));
+    expect(out.get("aa11")).toEqual([111]);
+    expect(out.has("zzz")).toBe(false);
+  });
+  it("does not lose the figure to an unclosed <task-id> quoted in result text", () => {
+    const out = notificationTotals([open("aa11"), "<result>see <task-id> for details</result>", tokens(111), close].join(""));
+    expect(out.get("aa11")).toEqual([111]);
   });
 });
 
@@ -183,6 +196,18 @@ describe("scan and scanTool over a transcript directory", () => {
     expect(rows[0].lowerBound).toBe(true);
   });
 
+  it("a printed default-mode row for a file with a malformed line carries the >= marker, and a clean file's row does not", () => {
+    const dir = tree();
+    const sub = path.join(dir, "s1", "subagents");
+    fs.mkdirSync(sub, { recursive: true });
+    const good = jsonl(prompt("2026-10-15T09:00:00Z", "go"), asst("m1", "2026-10-15T09:00:05Z", usage({ output_tokens: 10 })));
+    fs.writeFileSync(path.join(sub, "agent-bad.jsonl"), `${good}\n{"type":"assis`);
+    fs.writeFileSync(path.join(sub, "agent-good.jsonl"), good);
+    const { out } = reportScan(scan(dir), dir);
+    expect(out.find((l) => l.startsWith("bad\t"))).toContain("\t>=");
+    expect(out.find((l) => l.startsWith("good\t"))).not.toContain(">=");
+  });
+
   it("scan counts assistant entries with missing usage and marks the rows a lower bound", () => {
     const dir = tree();
     const sub = path.join(dir, "s1", "subagents");
@@ -227,6 +252,11 @@ describe("usage blocks and entries that cannot be priced", () => {
     const stats = { badUsage: 0 };
     parsePasses([prompt("2026-10-15T09:00:00Z", "go"), asst("m1", "2026-10-15T09:00:05Z", u)], stats);
     expect(stats.badUsage).toBe(1);
+  });
+  it("a cache_creation object missing either ephemeral field is invalid usage", () => {
+    expect(validUsage(usage({ cache_creation_input_tokens: 30000, cache_creation: { ephemeral_1h_input_tokens: 10 } }))).toBe(false);
+    expect(validUsage(usage({ cache_creation_input_tokens: 30000, cache_creation: { ephemeral_5m_input_tokens: 30000 } }))).toBe(false);
+    expect(validUsage(usage({ cache_creation_input_tokens: 30000, cache_creation: { ephemeral_5m_input_tokens: 30000, ephemeral_1h_input_tokens: 0 } }))).toBe(true);
   });
   it("toolCallCost counts an assistant entry without a message id the way parsePasses does, and reports its matching calls unpriced", () => {
     const e = { type: "assistant", timestamp: "2026-10-14T11:00:00Z", message: { usage: usage({}), content: [{ type: "tool_use", id: "u1", input: { command: "check-bead-dispatch" } }] } };
