@@ -1,8 +1,9 @@
 /**
  * Tests for scripts/bd-guard.mjs (ugcportal-vu49). Every case runs the real CLI
- * with hook JSON on stdin. The blessed-form fixtures are loaded from the three
- * skill files at test time by content anchor (scripts/bd-guard-fixtures.mjs),
- * never by line number.
+ * with hook JSON on stdin. The two BLESSED skill-file fixtures (cut-release and
+ * review-standards) are loaded by content anchor (scripts/bd-guard-fixtures.mjs);
+ * the pr-review-merge 5a block is sliced directly from the skill file by its
+ * heading in the test itself, never by line number.
  */
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -27,7 +28,8 @@ const skill = (name) => path.join(root, ".claude", "skills", name, "SKILL.md");
 const ACC_ANCHOR = '--acceptance="$(cat "$scratch/acc.md")"';
 const BLESSED = [
   ["cut-release", skill("cut-release"), "bd create \"$(cat <<'BD_EOF'"],
-  ["pr-review-merge", skill("pr-review-merge"), "Use quoted heredocs (`<<'EOF'`)"],
+  // pr-review-merge step 5a no longer uses the inline `"$(cat <<'BD_EOF' ... )"` form
+  // (unsafe on bash 3.2, ugcportal-nr72); its block is tested below instead.
   ["review-standards", skill("review-standards"), "so use quoted heredocs, which expand nothing"],
 ];
 
@@ -105,6 +107,22 @@ describe("allows (K2 must-pass, K4)", () => {
       expect(r.code).toBe(0);
     });
   }
+});
+
+describe("pr-review-merge step 5a block (ugcportal-nr72)", () => {
+  const text = fs.readFileSync(skill("pr-review-merge"), "utf8");
+  const heading = text.indexOf("## 5a. File every deferred finding as a bead");
+  const open = text.indexOf("```bash\n", heading) + "```bash\n".length;
+  const block = text.slice(open, text.indexOf("\n```", open) + 1);
+  it("the anchor is found and the block is the bd create block", () => {
+    expect(heading).toBeGreaterThan(-1);
+    expect(block).toContain('--metadata @"$scratch/meta.json"');
+    expect(block).toContain('"$(cat "$scratch/title.txt")"');
+  });
+  it("is allowed raw, and with every <fill: ...> placeholder filled", () => {
+    expect(hook(block).code).toBe(0);
+    expect(hook(block.replace(/<fill: [^>]*>/g, "x")).code).toBe(0);
+  });
 });
 
 describe("passes through / fail-open", () => {
