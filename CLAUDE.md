@@ -250,7 +250,8 @@ section 1.2 names). Per side (`impl` = everything up to opening the PR,
 - `cost_ite_impl` / `cost_ite_qa` and `cost_calls_impl` / `cost_calls_qa` —
   ITE and API-call count summed over every pass of those agents. They are
   **recomputed whole from the agent list** each time they are written, never
-  incremented by hand, so re-recording after a resumed pass cannot double-count.
+  incremented by hand, so re-recording after a resumed pass does not count
+  its earlier passes twice.
 - `cost_note_impl` / `cost_note_qa` — which listed agents had no transcript
   (`missing=` below), or `all transcripts present`. Work done inline in an
   orchestrator or human session has no agent id and is not in these keys; say

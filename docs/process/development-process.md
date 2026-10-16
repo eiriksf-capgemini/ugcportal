@@ -397,7 +397,9 @@ three times in one day (`stacked-prs-close-when-base-branch-deleted`).
 
 Then the bead is closed with `cc_type`, `cc_scope`, `prs` (merged PRs only —
 a closed bead listing an open PR makes release tooling claim unshipped work
-as released), `tokens_impl`, and `tokens_qa` accumulated per round.
+as released), and the cost fields as CLAUDE.md > "Token cost metadata"
+defines them: `tokens_impl`/`tokens_qa` (each agent's final context size, one
+figure per agent) and the transcript-derived `cost_*` keys.
 
 ---
 
