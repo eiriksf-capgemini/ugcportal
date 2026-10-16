@@ -265,35 +265,37 @@ const ABSOLUTE_RE =
 // ugcportal-fgcb: a universal-coverage claim about an instrument ("this
 // guard catches every reader", "the scan sees all of them") is the overclaim
 // that sits opposite a scope-limiting sentence, and ABSOLUTE_RE's word list
-// had no entry for it -- PR #200's round-1 findings 2-4 were all of this
-// family. It is scored as ABSOLUTE, never as SCOPE-LIMITING. It matches
-// these seven verbs directly followed by "every" or "all" and nothing more:
-// "catches any", "reports each" ("see each call site" is a pointer, not a
-// claim, so "each" is left out), a word between verb and quantifier, and
-// "fails this file by existing" (#200 findings 3 and 4's real wording) are
-// not matched.
+// has no entry for it. It is scored as ABSOLUTE, never as SCOPE-LIMITING. It
+// matches these seven verbs directly followed by "every" or "all" and
+// nothing more: "catches any", "reports each" ("see each call site" is a
+// pointer, not a claim, so "each" is left out), a word between verb and
+// quantifier, and the wording of PR #200's round-1 findings 3 and 4 ("fails
+// this file by existing", issue comment 6069779392) are not matched.
 const COVERAGE_UNIVERSAL_RE = /\b(?:catch(?:es)?|sees?|covers?|detects?|flags?|finds?|reports?)\s+(?:every|all)\b/i;
 
 // --- scope-limiting recategorisation (ugcportal-fgcb) ---------------------
 //
 // PR #200's round-1 fix raised its own ABSOLUTE count 81 -> 93 while making
-// its prose MORE accurate: the round-2 reviewer read the added lines and
-// found them to be statements of what a guard does NOT see, written in the
-// same words (only / cannot / never / nothing else / no other) that
-// ABSOLUTE_RE scores as a guarantee. An ABSOLUTE line is therefore moved to
-// SCOPE-LIMITING when EVERY one of its absolute-word matches sits inside one
-// of the narrowing forms below. One absolute word outside every form keeps
-// the whole line ABSOLUTE, so a sentence that limits one claim and makes
-// another is still scored as making it.
+// its prose MORE accurate. The round-2 reviewer (issue comment 6070699194)
+// read the added lines and found them to be mostly statements of what a
+// guard does not catch, citations of review findings, and explanations of
+// fixture mutations -- the first written in the same words (only / cannot /
+// never / nothing else / no other) that ABSOLUTE_RE scores as a guarantee.
+// An ABSOLUTE line is therefore moved to SCOPE-LIMITING when EVERY one of
+// its absolute-word matches sits inside one of the narrowing forms below.
+// One absolute word outside every form keeps the whole line ABSOLUTE, so a
+// sentence that limits one claim and makes another is still scored as
+// making it.
 //
-// What the forms match, and nothing about them is a judgement of truth --
-// a SCOPE-LIMITING line is still listed for a human, just not counted as an
+// What the forms match -- none of it is a judgement of truth; a
+// SCOPE-LIMITING line is still listed for a human, just not counted as an
 // unsupported guarantee:
 //
 //   N1  cannot / can't / can not + a narrowing verb
 //         ("that scan cannot see a namespace import").
-//   N2  only + a narrowing verb ("this guard only covers named imports"),
-//       and the window (below) also has limitation evidence.
+//   N2  only (optionally "only ever") + a narrowing verb ("this guard only
+//       covers named imports"), and the window (below) also has limitation
+//       evidence.
 //   N3  nothing else + a narrowing verb ("Nothing else catches that shape"),
 //       no other + up to two words + an instrument noun + a narrowing verb
 //       ("no other guard sees it"), or an instrument subject + a narrowing
@@ -307,22 +309,26 @@ const COVERAGE_UNIVERSAL_RE = /\b(?:catch(?:es)?|sees?|covers?|detects?|flags?|f
 // about detection whatever their subject. see / cover / inspect / look at
 // (and, after "only", also check / scan / read / match / find) are just as
 // often about a person or a request ("an anonymous visitor cannot see an
-// unpublished row" is an access-control guarantee), so with those -- and
-// with every N2 -- the word directly before the absolute word (one adverb
-// such as "also" or "deliberately" may sit between) must be an instrument
-// noun (guard, check, scan, test, regex, script ... INSTRUMENT_NOUN_RE) or
-// one of the pronouns it / which / that / this, and a pronoun counts only
-// when an instrument noun appears somewhere else in the window.
+// unpublished row" is an access-control guarantee). So with those, with
+// every N2, and with every "<verb> no other", the subject must be an
+// instrument: the word directly before the absolute word (before the verb,
+// for "<verb> no other"), skipping at most one adverb such as "also" or
+// "deliberately", must be an instrument noun (guard, check, scan, test,
+// regex, script ... INSTRUMENT_NOUN_RE) or one of the pronouns it / which /
+// that / this, and a pronoun counts only when an instrument noun appears
+// somewhere else in the window.
 //
-// Limitation evidence is LIMITATION_RE (does not / is not / won't + a
-// narrowing verb, "blind to", "not covered", "still passes") or an N1 or N3
-// match elsewhere in the window.
+// Limitation evidence is LIMITATION_RE -- does not / is not / won't (and
+// their siblings) + a narrowing verb or reach / report / flag; "blind to";
+// "not covered / reported / caught / seen / detected"; "still passes" -- or
+// an N1 or N3 match elsewhere in the window.
 //
-// The window is the line itself plus the line directly above and below it
-// in the same file or body (auditContent / auditBodyText supply them),
-// because comments wrap: "... still passes. Nothing else" / "catches that
-// shape either" is one sentence over two lines. A caller that passes no
-// neighbours gets a window of the line alone.
+// The window is the line itself plus the comment or prose line directly
+// above and below it in the same file or body, when there is one
+// (auditContent / auditBodyText supply them; a blank line is not a
+// neighbour), because comments wrap: "... still passes. Nothing else" /
+// "catches that shape either" is one sentence over two lines. A caller that
+// passes no neighbours gets a window of the line alone.
 //
 // Cases this does not handle, each left as ABSOLUTE: a narrowing verb
 // outside the two sets ("it only binds a query routed through listMedia",
@@ -330,8 +336,9 @@ const COVERAGE_UNIVERSAL_RE = /\b(?:catch(?:es)?|sees?|covers?|detects?|flags?|f
 // absolute word; "never" with no other limitation in the window ("the scan
 // never sees a namespace import" alone); and "covers X and no other", which
 // is how a clearance's guarantee is phrased in PR #199. And the reverse
-// error it can make: a pronoun subject borrowing an unrelated instrument
-// noun from the window ("the test asserts that it cannot see the draft").
+// error it does make: a pronoun subject borrowing an unrelated instrument
+// noun from the window ("the test asserts that it cannot see the draft" is
+// SCOPE-LIMITING). Each of these is pinned in scripts/claims-audit.test.mjs.
 const DETECTION_VERB = String.raw`(?:catch(?:es)?|detects?|notices?|recogni[sz]es?)`;
 const AMBIGUOUS_VERB = String.raw`(?:sees?|covers?|inspects?|looks? at)`;
 const ONLY_EXTRA_VERB = String.raw`(?:checks?|scans?|reads?|match(?:es)?|finds?)`;

@@ -289,8 +289,9 @@ describe("scope-limiting recategorisation (ugcportal-fgcb K1)", () => {
   });
 
   it("does not recategorise a guarantee about what a person or request can see", () => {
-    // Access-control guarantees use the same words; "see"/"cover" need an
-    // instrument subject (guard, scan, test, ...) directly before them.
+    // Access-control guarantees use the same words; after "cannot", "see"
+    // needs an instrument subject (guard, scan, test, ...) or a pronoun
+    // directly before the absolute word.
     expect(classifyClaimLine("an anonymous visitor cannot see an unpublished row")).toEqual(["ABSOLUTE"]);
     expect(classifyClaimLine("only admins can see the queue; a curator does not see it")).toEqual(["ABSOLUTE"]);
     expect(classifyClaimLine("the guard cannot see an unpublished row")).toEqual(["SCOPE-LIMITING"]);
@@ -310,6 +311,18 @@ describe("scope-limiting recategorisation (ugcportal-fgcb K1)", () => {
     expect(classifyClaimLine("the scan sees no other shape; a namespace import is not covered")).toEqual(["SCOPE-LIMITING"]);
     expect(classifyClaimLine("no other guard catches a hand-written where")).toEqual(["SCOPE-LIMITING"]);
     expect(classifyClaimLine("a clearance covers the layer it names and no other")).toEqual(["ABSOLUTE"]);
+  });
+
+  it("skips one adverb before the absolute word, and no more", () => {
+    expect(classifyClaimLine("the guard deliberately cannot see a draft")).toEqual(["SCOPE-LIMITING"]);
+    expect(classifyClaimLine("the guard quite deliberately cannot see a draft")).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine("the scan only ever sees named imports; it does not see a namespace import")).toEqual(["SCOPE-LIMITING"]);
+  });
+
+  it("KNOWN ERROR, pinned: a pronoun subject borrows an unrelated instrument noun from the window", () => {
+    // The comment above findScopeLimitingSpans names this as the reverse
+    // error the rule makes; pinned so a fix to it is visible here.
+    expect(classifyClaimLine("the test asserts that it cannot see the draft")).toEqual(["SCOPE-LIMITING"]);
   });
 
   it("isScopeLimiting is false for a line with no absolute word at all", () => {
