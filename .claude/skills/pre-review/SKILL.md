@@ -130,7 +130,7 @@ reporting a possibly-false zero when a required git read fails. A
 worth one second of suspicion: check the `base` it names in its own header
 line is the base you meant.
 
-Expect tens of lines on a code PR and hundreds on a PR that adds documentation (run on its own branch, this skill's PR listed 268, most of them in the report and in the script's own header, which is prose about claims); read code files first, Markdown last. It lists, per `file:line`, every comment or prose sentence that is **ABSOLUTE** (never / always / cannot / only / exactly / guarantees / ensures / impossible / unreachable / by construction), a **MEASUREMENT** (a number with a unit: `85px`, `3.18:1`, `~46x`, `2588 tests`), **TEMPORAL** (still / not yet / currently / once #94 merges / TODO), **HISTORY** (review-round narration in code or a test title), or a **REFERENCE** to a file that `git ls-files` does not have. It judges nothing; you do, one line at a time, under `review-standards` section 5:
+Expect tens of lines on a code PR and hundreds on a PR that adds documentation (run on its own branch, this skill's PR listed 268, most of them in the report and in the script's own header, which is prose about claims); read code files first, Markdown last. It lists, per `file:line`, every comment or prose sentence that is **ABSOLUTE** (never / always / cannot / only / exactly / guarantees / ensures / impossible / unreachable / by construction), a **MEASUREMENT** (a number with a unit: `85px`, `3.18:1`, `~46x`, `2588 tests`), **TEMPORAL** (still / not yet / currently / once #94 merges / TODO), **HISTORY** (review-round narration in code or a test title), or a **REFERENCE** to a file that `git ls-files` does not have; an ABSOLUTE-shaped line whose every absolute word only limits scope is reported as **SCOPE-LIMITING** instead (listed, not counted under ABSOLUTE). It judges nothing; you do, one line at a time, under `review-standards` section 5:
 
 - an **ABSOLUTE** gets the evidence beside it (`// never null: the Prisma select requires it, see route.test.ts "rejects a null id"`) or is weakened to what the code does;
 - a **MEASUREMENT** moves into a test that fails when it drifts, and the comment points at the test; if no test is worth writing, the number is not worth keeping;
@@ -215,11 +215,11 @@ Then paste this into the PR body, filled in. Every line is a fact you observed, 
    - Family 2: <every comparison, NaN/null/empty answer, fail-closed yes/no>
    - Family 3: see 5.
    - Family 4: <identifiers/strings/claims grepped, siblings found and fixed | nothing>
-4. Claims audit (`claims-audit`): <n> candidates; ABSOLUTE <n> (evidence added / weakened: <n>/<n>), MEASUREMENT <n> (moved to tests: <n>, deleted: <n>), TEMPORAL <n>, HISTORY <n> (removed), REFERENCE not found <n> (fixed). `--all-lines`: <n> stale siblings corrected.
+4. Claims audit (`claims-audit`): <n> candidates; ABSOLUTE <n> (evidence added / weakened: <n>/<n>), MEASUREMENT <n> (moved to tests: <n>, deleted: <n>), TEMPORAL <n>, HISTORY <n> (removed), REFERENCE not found <n> (fixed), SCOPE-LIMITING <n> (copy the `recategorised from ABSOLUTE to SCOPE-LIMITING (...): <n>` reach line's count). `--all-lines`: <n> stale siblings corrected.
 5. Fixture mutation: <n> new assertions, <n> fixture-mutated, each failed as described; <exceptions, with why>.
 6. Real flow driven: <command and observation | none, because ...>.
 7. Diff hygiene: <n> files, all in scope; attribution on <n>/<n> commits; title type <type> matches the diff; PR body reread against the final diff. Fail-loud guards (`review-standards` 6): `check-silenced-stderr` <n> files examined, <n> sites, <n> not allowed | n/a, diff touches neither scripts/ nor .claude/skills/. `bd` read-back: <ids verified | no bd write this bead>.
-8. PR-body audit (`claims-audit --body`): <n> body candidates; ABSOLUTE <n>, MEASUREMENT <n>, TEMPORAL <n>, HISTORY <n>, DONE <n> (contradicted by the diff: <n>, fixed), REFERENCE not found <n> (fixed).
+8. PR-body audit (`claims-audit --body`): <n> body candidates; ABSOLUTE <n>, MEASUREMENT <n>, TEMPORAL <n>, HISTORY <n>, DONE <n> (contradicted by the diff: <n>, fixed), REFERENCE not found <n> (fixed), SCOPE-LIMITING <n> (the `recategorised from ABSOLUTE to SCOPE-LIMITING (...): <n>` reach line).
 ```
 
 If a step found something and you fixed it, say so in the line — a finding pre-review caught is the whole point, not something to hide. If it found something you chose not to fix, say that too, and why; the reviewer will otherwise find it at round 1 for the price of a round.
