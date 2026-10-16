@@ -173,7 +173,7 @@ Within every angle, check against `review-standards` section 2's four defect fam
 
 None of this produces a severity field on its own — assigning severity is still your job. For **every** finding, classify it against `review-standards` section 3 (medium-or-above = wrong behaviour a user or the data can reach; low = the correctness of the code's *description* rather than of the code), and **state the severity explicitly** in the comment you post and in your step 6 report. The entire round-4+ gate keys on that value. A finding whose severity nobody wrote down is the gate not running — if you cannot classify one, it counts as medium-or-above until someone does.
 
-A false claim that lives only in a review-thread comment (an issue or inline comment that is not a round marker) is not a finding for this step's gate: correct it in place and note it in the next round's comment, as `review-standards` section 3 ("A false claim in a review-thread comment") defines, which also lists the artefacts that still block.
+A false claim that lives only in a review-thread comment (an issue or inline comment that is not a round marker) is not a finding for this step's gate: classify it as such and write nothing yet. Step 5 makes the correction after the verdict, as `review-standards` section 3 ("A false claim in a review-thread comment") defines, which also lists the artefacts that still block.
 
 ### 4.1 Required recurring-family sweep
 
@@ -714,7 +714,7 @@ First, the gates that apply at every round without exception. Approve and merge 
 
 Then apply the severity gate to the findings from steps 4 and 4.1, using the severities **you** assigned in step 4 and the round from step 4b. Definitions are in `review-standards` section 3; in short, **medium-or-above** is wrong behaviour a user or the data can reach (fail-open, authz gap, data loss, leaked credential, broken migration, a wrong figure a later bead builds on), and **low** is the correctness of the code's *description* rather than of the code (inaccurate comment, duplicate log lines, naming nit, an untidy test that still fails when the behaviour breaks). Note the one rule that is easy to get backwards: a **defective test inherits the severity of what it guards**, so a family-3 assertion-that-cannot-fail over a fresh fail-open fix is medium-or-above, not low.
 
-Findings about a false claim in a review-thread comment alone are not counted here and do not consume a round; `review-standards` section 3 owns that rule and the artefacts that still block.
+Findings about a false claim in a review-thread comment alone are not counted here and do not consume a round. Once the verdict is reached, correct that comment in place (body written through a quoted heredoc to a file, passed as `-F body=@<file>`) and put `thread claim corrected in place: <comment id>` in the comment that ends this round; `review-standards` section 3 owns the rule, the commands and the artefacts that still block.
 
 Exactly one row matches any given round.
 
