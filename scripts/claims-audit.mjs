@@ -291,37 +291,48 @@ const COVERAGE_UNIVERSAL_RE = /\b(?:catch(?:es)?|sees?|covers?|detects?|flags?|f
 // SCOPE-LIMITING line is still listed for a human, just not counted as an
 // unsupported guarantee:
 //
-//   N1  cannot / can't / can not + a narrowing verb
+//   N1  instrument subject + cannot / can't / can not + a narrowing verb
 //         ("that scan cannot see a namespace import").
-//   N2  only (optionally "only ever") + a narrowing verb ("this guard only
-//       covers named imports"), and the window (below) also has limitation
-//       evidence.
-//   N3  nothing else + a narrowing verb ("Nothing else catches that shape"),
-//       no other + up to two words + an instrument noun + a narrowing verb
-//       ("no other guard sees it"), or an instrument subject + a narrowing
-//       verb + no other ("the scan sees no other shape").
-//   N4  never: either never + a narrowing verb ("the scan never sees ...")
-//       or a relative clause "that/which/who never ..." ("blind to a reader
-//       that never mentions it"), and in both cases the window also has
-//       limitation evidence other than this match.
+//   N2  instrument subject + only (optionally "only ever") + a narrowing
+//       verb ("this guard only covers named imports"), and the window
+//       (below) also has limitation evidence.
+//   N3  nothing else + a narrowing verb ("Nothing else catches that
+//       shape"), when the window also has limitation evidence; no other +
+//       up to two words + an instrument noun + a narrowing verb ("no other
+//       guard sees it"); or an instrument subject + a narrowing verb + no
+//       other ("the scan sees no other shape").
+//   N4  never: either instrument subject + never + a narrowing verb ("the
+//       scan never sees ...") or a relative clause "that/which/who never"
+//       + a narrowing verb or mentions / names / references / spells
+//       ("blind to a reader that never mentions it"), and in both cases the
+//       window also has limitation evidence other than this match. The
+//       relative clause's own subject is the reader out of reach, so it is
+//       the evidence that has to name the instrument.
 //
-// Narrowing verbs come in two sets. catch / detect / notice / recognise are
-// about detection whatever their subject. see / cover / inspect / look at
-// (and, after "only", also check / scan / read / match / find) are just as
-// often about a person or a request ("an anonymous visitor cannot see an
-// unpublished row" is an access-control guarantee). So with those, with
-// every N2, and with every "<verb> no other", the subject must be an
-// instrument: the word directly before the absolute word (before the verb,
-// for "<verb> no other"), skipping at most one adverb such as "also" or
-// "deliberately", must be an instrument noun (guard, check, scan, test,
-// regex, script ... INSTRUMENT_NOUN_RE) or one of the pronouns it / which /
-// that / this, and a pronoun counts only when an instrument noun appears
-// somewhere else in the window.
+// Narrowing verbs are catch / detect / notice / recognise / see / cover /
+// inspect / look at, plus, after "only", check / scan / read / match / find.
+// Every one of them is as often about a person or a request ("an anonymous
+// visitor cannot see an unpublished row", "an attacker cannot detect
+// whether an account exists"), so the subject must be an instrument: the
+// word directly before the absolute word (before the verb, for "<verb> no
+// other"), skipping at most one adverb such as "also" or "deliberately",
+// must be an instrument noun (guard, check, scan, test, regex, script ...
+// INSTRUMENT_NOUN_RE), a test matcher (toEqual, expect), or one of the
+// pronouns it / which / that / this. A pronoun counts only when an
+// instrument noun appears in the window BEFORE it ("The public projection
+// strips previewKey, so it cannot see the draft row (see the test)" stays
+// ABSOLUTE), and an "it" or "this" directly after "that" does not count at
+// all: in "the test asserts that it cannot see the draft" it is what the
+// test asserts about, not the test.
 //
-// Limitation evidence is LIMITATION_RE -- does not / is not / won't (and
-// their siblings) + a narrowing verb or reach / report / flag; "blind to";
-// "not covered / reported / caught / seen / detected"; "still passes" -- or
-// an N1 or N3 match elsewhere in the window.
+// Limitation evidence is a limitation of an instrument, never a guarantee
+// phrased negatively ("a NaN date does not reach the sellable branch" is
+// not evidence): does not / is not / won't (and their siblings) + a
+// narrowing verb or reach / report / flag, "blind to" (one is / are / was /
+// were / be / stays / remains before it skipped) and "still passes", each
+// with an instrument subject by the rule above; "not covered / reported / caught / seen / detected by" +
+// up to three words + an instrument noun; or an N1 or N3 match elsewhere in
+// the window whose own conditions hold.
 //
 // The window is the line itself plus the comment or prose line directly
 // above and below it in the same file or body, when there is one
@@ -331,48 +342,86 @@ const COVERAGE_UNIVERSAL_RE = /\b(?:catch(?:es)?|sees?|covers?|detects?|flags?|f
 // passes no neighbours gets a window of the line alone.
 //
 // Cases this does not handle, each left as ABSOLUTE: a narrowing verb
-// outside the two sets ("it only binds a query routed through listMedia",
-// PR #200's own body); a subject more than one adverb away from the
-// absolute word; "never" with no other limitation in the window ("the scan
-// never sees a namespace import" alone); and "covers X and no other", which
-// is how a clearance's guarantee is phrased in PR #199. And the reverse
-// error it does make: a pronoun subject borrowing an unrelated instrument
-// noun from the window ("the test asserts that it cannot see the draft" is
-// SCOPE-LIMITING). Each of these is pinned in scripts/claims-audit.test.mjs.
+// outside the set ("it only binds a query routed through listMedia", PR
+// #200's own body); a subject more than one adverb away from the absolute
+// word, or one that names an instrument in words outside INSTRUMENT_NOUN_RE
+// ("a captured string cannot notice that changing"); "never" with no other
+// limitation in the window ("the scan never sees a namespace import"
+// alone); an instrument named only outside the window (PR #200's table row
+// "nothing else catches it either", whose instrument is in the table's
+// header four lines up); and "covers X and no other", which is how a
+// clearance's guarantee is phrased in PR #199. Each of these is pinned in
+// scripts/claims-audit.test.mjs.
 const DETECTION_VERB = String.raw`(?:catch(?:es)?|detects?|notices?|recogni[sz]es?)`;
 const AMBIGUOUS_VERB = String.raw`(?:sees?|covers?|inspects?|looks? at)`;
 const ONLY_EXTRA_VERB = String.raw`(?:checks?|scans?|reads?|match(?:es)?|finds?)`;
+const NARROWING_VERB = String.raw`(?:${DETECTION_VERB}|${AMBIGUOUS_VERB})`;
+// How a relative clause says a reader stays out of an instrument's reach.
+const MENTION_VERB = String.raw`(?:mentions?|names?|references?|spells?)`;
 const INSTRUMENT_NOUN_RE =
   /\b(?:guards?|checks?|checkers?|scans?|scanners?|sweeps?|audits?|regex(?:es|p)?|patterns?|matchers?|tests?|suites?|assertions?|lint(?:er)?s?|rules?|scripts?|tools?|grep|walkers?|filters?|parsers?|probes?|hooks?)\b/i;
 const INSTRUMENT_SUBJECT_RE = new RegExp(`^${INSTRUMENT_NOUN_RE.source}$`, "i");
+// A test-runner matcher named as the subject ("`toEqual` therefore still
+// passes"). Case-sensitive on purpose: "to" + a capital, not "together".
+const MATCHER_SUBJECT_RE = /^(?:to[A-Z]\w*|expect)$/;
 const SUBJECT_PRONOUN_RE = /^(?:it|which|that|this)$/i;
 const SUBJECT_ADVERB_RE = /^(?:\w+ly|also|still|therefore|now|so)$/i;
-const LIMITATION_RE = new RegExp(
-  String.raw`\b(?:does not|doesn['’]t|do not|don['’]t|did not|is not|isn['’]t|are not|aren['’]t|will not|won['’]t)\s+(?:${DETECTION_VERB}|${AMBIGUOUS_VERB}|reach(?:es)?|report(?:s|ed)?|flag(?:s|ged)?)\b|\bblind to\b|\bnot (?:covered|reported|caught|seen|detected)\b|\bstill pass(?:es)?\b`,
-  "i",
+const COPULA_RE = /^(?:is|are|was|were|be|stays?|remains?)$/i;
+const WORD_RE = /[\w'’-]+/g;
+// Limitation evidence, each form with the subject condition
+// findLimitationEvidence applies to it.
+const NEGATED_VERB_RE = new RegExp(
+  String.raw`\b(?:does not|doesn['’]t|do not|don['’]t|did not|is not|isn['’]t|are not|aren['’]t|will not|won['’]t)\s+(?:${NARROWING_VERB}|reach(?:es)?|report(?:s|ed)?|flag(?:s|ged)?)\b`,
+  "gi",
 );
-const N1_RE = new RegExp(String.raw`\b(cannot|can['’]t|can not)\s+(?:(${DETECTION_VERB})|${AMBIGUOUS_VERB})\b`, "gi");
-const N2_RE = new RegExp(String.raw`\b(only)\s+(?:ever\s+)?(?:${DETECTION_VERB}|${AMBIGUOUS_VERB}|${ONLY_EXTRA_VERB})\b`, "gi");
-const N3_NOTHING_ELSE_RE = new RegExp(String.raw`\b(nothing else)\s+(?:${DETECTION_VERB}|${AMBIGUOUS_VERB})\b`, "gi");
-const N3_NO_OTHER_SUBJECT_RE = new RegExp(String.raw`\b(no other)\s+(?:[\w-]+\s+){0,2}?${INSTRUMENT_NOUN_RE.source.slice(2, -2)}\s+(?:${DETECTION_VERB}|${AMBIGUOUS_VERB})\b`, "gi");
-const N3_VERB_NO_OTHER_RE = new RegExp(String.raw`\b(?:${DETECTION_VERB}|${AMBIGUOUS_VERB})\s+(no other)\b`, "gi");
-const N4_NEVER_VERB_RE = new RegExp(String.raw`\b(never)\s+(?:(${DETECTION_VERB})|${AMBIGUOUS_VERB})\b`, "gi");
-const N4_RELATIVE_RE = /\b(?:that|which|who)\s+(never)\b/gi;
+const BLIND_TO_RE = /\bblind to\b/gi;
+const STILL_PASSES_RE = /\bstill pass(?:es)?\b/gi;
+const PASSIVE_BY_INSTRUMENT_RE = new RegExp(
+  String.raw`\bnot (?:covered|reported|caught|seen|detected)\s+by\s+(?:[\w\`'’.-]+\s+){0,3}?${INSTRUMENT_NOUN_RE.source.slice(2, -2)}\b`,
+  "gi",
+);
+const N1_RE = new RegExp(String.raw`\b(cannot|can['’]t|can not)\s+${NARROWING_VERB}\b`, "gi");
+const N2_RE = new RegExp(String.raw`\b(only)\s+(?:ever\s+)?(?:${NARROWING_VERB}|${ONLY_EXTRA_VERB})\b`, "gi");
+const N3_NOTHING_ELSE_RE = new RegExp(String.raw`\b(nothing else)\s+${NARROWING_VERB}\b`, "gi");
+const N3_NO_OTHER_SUBJECT_RE = new RegExp(String.raw`\b(no other)\s+(?:[\w-]+\s+){0,2}?${INSTRUMENT_NOUN_RE.source.slice(2, -2)}\s+${NARROWING_VERB}\b`, "gi");
+const N3_VERB_NO_OTHER_RE = new RegExp(String.raw`\b${NARROWING_VERB}\s+(no other)\b`, "gi");
+const N4_NEVER_VERB_RE = new RegExp(String.raw`\b(never)\s+${NARROWING_VERB}\b`, "gi");
+const N4_RELATIVE_RE = new RegExp(String.raw`\b(?:that|which|who)\s+(never)\s+(?:${MENTION_VERB}|${NARROWING_VERB})\b`, "gi");
 const ABSOLUTE_GLOBAL_RE = new RegExp(ABSOLUTE_RE.source, "gi");
 
 /**
  * Whether the word(s) directly before `index` in `window` are an instrument
- * subject, per the rule in the comment above.
+ * subject, per the rule in the comment above. With `skipCopula`, one
+ * "is"/"are"/... directly before `index` is skipped first ("it is blind to").
  */
-function hasInstrumentSubject(window, index, formStart, formEnd) {
-  const words = window.slice(0, index).split(/[^\w'’-]+/).filter(Boolean);
+function hasInstrumentSubject(window, index, { skipCopula = false } = {}) {
+  const words = [...window.slice(0, index).matchAll(WORD_RE)];
   let subject = words.pop();
-  if (subject !== undefined && SUBJECT_ADVERB_RE.test(subject) && !INSTRUMENT_NOUN_RE.test(subject)) subject = words.pop();
+  if (skipCopula && subject !== undefined && COPULA_RE.test(subject[0])) subject = words.pop();
+  if (subject !== undefined && SUBJECT_ADVERB_RE.test(subject[0]) && !INSTRUMENT_NOUN_RE.test(subject[0])) subject = words.pop();
   if (subject === undefined) return false;
-  if (INSTRUMENT_SUBJECT_RE.test(subject)) return true;
-  if (!SUBJECT_PRONOUN_RE.test(subject)) return false;
-  const elsewhere = window.slice(0, formStart) + " " + window.slice(formEnd);
-  return INSTRUMENT_NOUN_RE.test(elsewhere);
+  if (INSTRUMENT_SUBJECT_RE.test(subject[0]) || MATCHER_SUBJECT_RE.test(subject[0])) return true;
+  if (!SUBJECT_PRONOUN_RE.test(subject[0])) return false;
+  // "the test asserts that it cannot see the draft": an "it"/"this" opening a
+  // "that" clause is what the clause is about, not the instrument before it.
+  const previous = words.at(-1);
+  if (/^(?:it|this)$/i.test(subject[0]) && previous !== undefined && /^that$/i.test(previous[0])) return false;
+  // The antecedent must come before the pronoun, not anywhere in the window.
+  return INSTRUMENT_NOUN_RE.test(window.slice(0, subject.index));
+}
+
+/**
+ * Every limitation-evidence match in `window` whose subject is an
+ * instrument, as `{ formStart, formEnd }` ranges.
+ */
+function findLimitationEvidence(window) {
+  const out = [];
+  const range = (m) => ({ formStart: m.index, formEnd: m.index + m[0].length });
+  for (const m of window.matchAll(NEGATED_VERB_RE)) if (hasInstrumentSubject(window, m.index)) out.push(range(m));
+  for (const m of window.matchAll(BLIND_TO_RE)) if (hasInstrumentSubject(window, m.index, { skipCopula: true })) out.push(range(m));
+  for (const m of window.matchAll(STILL_PASSES_RE)) if (hasInstrumentSubject(window, m.index)) out.push(range(m));
+  for (const m of window.matchAll(PASSIVE_BY_INSTRUMENT_RE)) out.push(range(m));
+  return out;
 }
 
 /**
@@ -388,42 +437,45 @@ export function findScopeLimitingSpans(window) {
     const start = m.index + m[0].toLowerCase().indexOf(m[group].toLowerCase());
     return { start, end: start + m[group].length, formStart: m.index, formEnd: m.index + m[0].length };
   };
-  // Forms that are limitation evidence in their own right.
-  const evidence = [];
+  // Instrument limitations: evidence for the forms below that need it.
+  const evidence = findLimitationEvidence(window);
+  const hasEvidenceBesides = (s) => evidence.some((e) => e.formEnd <= s.formStart || e.formStart >= s.formEnd);
+  const accept = (s, { isEvidence = false } = {}) => {
+    spans.push(s);
+    if (isEvidence) evidence.push(s);
+  };
+
+  // N1 and N3's "no other" forms carry their own instrument subject, so they
+  // are limitation evidence in their own right.
   for (const m of window.matchAll(N1_RE)) {
     const s = spanOf(m, 1);
-    if (m[2] === undefined && !hasInstrumentSubject(window, s.start, s.formStart, s.formEnd)) continue;
-    evidence.push(s);
+    if (hasInstrumentSubject(window, s.start)) accept(s, { isEvidence: true });
   }
-  for (const m of window.matchAll(N3_NOTHING_ELSE_RE)) evidence.push(spanOf(m, 1));
-  for (const m of window.matchAll(N3_NO_OTHER_SUBJECT_RE)) evidence.push(spanOf(m, 1));
+  for (const m of window.matchAll(N3_NO_OTHER_SUBJECT_RE)) accept(spanOf(m, 1), { isEvidence: true });
   for (const m of window.matchAll(N3_VERB_NO_OTHER_RE)) {
     const s = spanOf(m, 1);
-    if (!hasInstrumentSubject(window, s.formStart, s.formStart, s.formEnd)) continue;
-    evidence.push(s);
+    if (hasInstrumentSubject(window, s.formStart)) accept(s, { isEvidence: true });
   }
-  spans.push(...evidence);
-
-  const hasEvidenceBesides = (s) =>
-    LIMITATION_RE.test(window.slice(0, s.formStart) + " " + window.slice(s.formEnd)) ||
-    evidence.some((e) => e.formEnd <= s.formStart || e.formStart >= s.formEnd);
-
+  // "nothing else" has no subject of its own, so it needs an instrument
+  // limitation elsewhere in the window; once it has one, it is evidence too.
+  for (const m of window.matchAll(N3_NOTHING_ELSE_RE)) {
+    const s = spanOf(m, 1);
+    if (hasEvidenceBesides(s)) accept(s, { isEvidence: true });
+  }
   for (const m of window.matchAll(N2_RE)) {
     const s = spanOf(m, 1);
-    if (!hasInstrumentSubject(window, s.start, s.formStart, s.formEnd)) continue;
-    if (!hasEvidenceBesides(s)) continue;
-    spans.push(s);
+    if (hasInstrumentSubject(window, s.start) && hasEvidenceBesides(s)) accept(s);
   }
   for (const m of window.matchAll(N4_NEVER_VERB_RE)) {
     const s = spanOf(m, 1);
-    if (m[2] === undefined && !hasInstrumentSubject(window, s.start, s.formStart, s.formEnd)) continue;
-    if (!hasEvidenceBesides(s)) continue;
-    spans.push(s);
+    if (hasInstrumentSubject(window, s.start) && hasEvidenceBesides(s)) accept(s);
   }
+  // The relative clause's own subject is the thing out of reach ("a reader
+  // that never mentions it"), so it gets no subject check; the instrument
+  // limitation has to come from the evidence.
   for (const m of window.matchAll(N4_RELATIVE_RE)) {
     const s = spanOf(m, 1);
-    if (!hasEvidenceBesides(s)) continue;
-    spans.push(s);
+    if (hasEvidenceBesides(s)) accept(s);
   }
   return spans.map(({ start, end }) => ({ start, end }));
 }
@@ -821,10 +873,13 @@ export function tokenStillInDiff(token, diffText) {
 // claims-audit's original mode (below, in main()) only ever read files the
 // diff touched -- a PR's own DESCRIPTION, where most late-round Family 1
 // findings now land (the bead's own evidence: PR #125 round 3, #107 round 3,
-// #112 round 4), was invisible to it. This section runs the SAME claim
-// vocabulary (ABSOLUTE/MEASUREMENT/TEMPORAL/HISTORY/REFERENCE -- none of it
-// changed, per the bead's explicit "out of scope") over the PR body's own
-// text, plus one new category that only makes sense for a body: a "done"
+// #112 round 4), was invisible to it. This section runs the same claim
+// vocabulary file mode uses (ABSOLUTE or SCOPE-LIMITING, MEASUREMENT,
+// TEMPORAL and HISTORY via classifyClaimLine, plus REFERENCE) over the PR
+// body's own text. ugcportal-bn94 left that vocabulary as it was;
+// ugcportal-fgcb later changed it for both modes at once, adding
+// SCOPE-LIMITING and the "catches every" / "covers all" ABSOLUTE form. On
+// top of it comes one category that only makes sense for a body: a "done"
 // claim (classifyDoneVerb above) that the diff itself can, for two of its
 // three verb classes, contradict.
 //
@@ -863,8 +918,10 @@ export function extractBodyLines(bodyText) {
 
 /**
  * Audits a PR body's text with the same categories auditContent uses for a
- * comment (ABSOLUTE/MEASUREMENT/TEMPORAL/HISTORY via classifyClaimLine,
- * REFERENCE via findPathReferences/referenceExists), plus DONE: a line with
+ * comment (ABSOLUTE or SCOPE-LIMITING, MEASUREMENT, TEMPORAL, HISTORY via
+ * classifyClaimLine, each body line read with its neighbouring lines as the
+ * scope-limiting window; REFERENCE via findPathReferences/referenceExists),
+ * plus DONE: a line with
  * any DONE-verb occurrence (findDoneVerbOccurrences) is reported with
  * category "DONE", and EACH of its quoted spans (findQuotedSpans) is first
  * scoped to its OWN sentence (splitIntoSentences/findSentenceContaining),

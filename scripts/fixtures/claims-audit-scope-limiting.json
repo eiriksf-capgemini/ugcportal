@@ -51,8 +51,8 @@
       "after": "catches that shape either — `MediaAnonymousScope` in"
     },
     {
-      "form": "never + nothing else (PR body table row)",
-      "expected": "SCOPE-LIMITING",
+      "form": "never + nothing else (PR body table row): limitation prose the rule does NOT recategorise, because the instrument is named only in the table header four lines up, outside the window (a known miss, pinned so a change to it is deliberate)",
+      "expected": "ABSOLUTE",
       "commentQuote": "They are overwhelmingly three things: statements of what a guard does *not* catch (findings 2 and 3's fix)",
       "source": {
         "pr": 200,
@@ -129,6 +129,34 @@
       },
       "commentQuote": "`layerIsCleared` matches `candidate.layer === layer` and nothing else.",
       "text": "`layerIsCleared` matches `candidate.layer === layer` and nothing else."
+    },
+    {
+      "form": "never look at, with a code subject rather than an instrument: a narrowing form whose subject check fails (boundary pin)",
+      "expected": "ABSOLUTE",
+      "source": {
+        "pr": 199,
+        "kind": "file",
+        "commit": "4acd815dc64dc12056d592b6ca162633641597d3",
+        "path": "src/lib/curation-clearance-write.ts",
+        "line": 142
+      },
+      "before": "than stored. The table would accept the row and `factBlocker` would",
+      "text": "never look at it, so what would be recorded is an inert sentence that",
+      "after": "reads, to anyone reviewing the register, exactly like the sentence that"
+    },
+    {
+      "form": "cannot see, with a code subject rather than an instrument: a narrowing form whose subject check fails (boundary pin)",
+      "expected": "ABSOLUTE",
+      "source": {
+        "pr": 199,
+        "kind": "file",
+        "commit": "4acd815dc64dc12056d592b6ca162633641597d3",
+        "path": "src/lib/curation-clearance-write.test.ts",
+        "line": 693
+      },
+      "before": "ACTOR MATCHES — checked through the gate's own projection, not just",
+      "text": "the raw row, so a clearance attributed to someone the gate cannot see",
+      "after": "would fail here."
     }
   ],
   "truePositives": [
@@ -193,6 +221,15 @@
       },
       "commentQuote": "`layerIsCleared` matching any clearance rather than this layer's: 17 tests fail across the new suite and the existing gate suite.",
       "text": "`layerIsCleared` matching any clearance rather than this layer's: 17 tests fail across the new suite and the existing gate suite."
+    }
+  ],
+  "searchedWithoutANarrowingSentence": [
+    {
+      "construction": "no other",
+      "note": "No sentence in #199 or #200 uses \"no other\" to narrow what an instrument sees, so K1 has no real SCOPE-LIMITING entry for it; the rule is asserted on constructed sentences instead (\"no other guard catches a hand-written where\"). Every use found states a guarantee or a fact: in #199, six added diff lines such as \"covers the layer it names and no other\" and \"settles that layer and no other\", and two review-comment sentences; in #200, \"DELETE has no other\" (a diff line, pinned above as ABSOLUTE, and its review-comment twin) and \"and no others\" in a test title.",
+      "searched": "case-insensitive \"no other\" over each PR body (gh pr view <n> --json body), every issue comment (gh api --paginate repos/eiriksf-capgemini/ugcportal/issues/<n>/comments), every review comment (gh api --paginate repos/eiriksf-capgemini/ugcportal/pulls/<n>/comments) and every added diff line (gh pr diff <n>)",
+      "reach": "PR #199: body 0 matches; 3 issue comments, 2 matches (6068974327, 6069537357); review comments 0 matches; 2964 added diff lines, 6 matches. PR #200: body 0 matches; 6 issue comments, 1 match (6070270739); review comments 0 matches; 3190 added diff lines, 2 matches.",
+      "fetched": "2026-10-16"
     }
   ]
 }

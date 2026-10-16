@@ -18,9 +18,13 @@
  * -- because the guardrail was gated on "is the tree dirty" rather than
  * "did the read succeed" (round 2 H1).
  *
- * Each fixture is shaped like a real finding from the v0.5.0 review rounds
- * (docs/process/review-rounds-v0.5.0.md, Part 1) or from this PR's own
- * review rounds, named in the test title.
+ * The ugcportal-wzgw fixtures are shaped like real findings from the v0.5.0
+ * review rounds (docs/process/review-rounds-v0.5.0.md, Part 1) or from that
+ * PR's own review rounds, named in the test title. The scope-limiting
+ * fixtures (ugcportal-fgcb) are real sentences from PRs #199 and #200, plus
+ * the bead's own K1 example, in
+ * scripts/fixtures/claims-audit-scope-limiting.json, each with its source;
+ * the constructed sentences beside them are labelled as such in the test.
  *
  * PR body mode (ugcportal-bn94) gets its own describe blocks below: pure
  * fixtures for auditBodyText/findQuotedSpans/tokenStillInDiff/
@@ -238,13 +242,28 @@ const scopeEntry = (form) => {
 };
 
 describe("scope-limiting recategorisation (ugcportal-fgcb K1)", () => {
-  it("the fixture covers each construction K1 names, and every SCOPE-LIMITING entry carries an absolute word", () => {
+  it("the fixture has a SCOPE-LIMITING entry for each construction K1 names, or a recorded search that found none", () => {
+    // Only entries EXPECTED to be recategorised count: an ABSOLUTE pin that
+    // happens to contain "no other" says nothing about the narrowing form
+    // (round 1 L1). A construction with no real narrowing sentence in
+    // #199/#200 must say so, with the search's reach, rather than pass by
+    // borrowing a guarantee's label.
+    const recategorised = SCOPE_FIXTURE.scopeLimiting.filter((e) => e.expected === "SCOPE-LIMITING");
+    const searchedWithoutOne = new Map((SCOPE_FIXTURE.searchedWithoutANarrowingSentence ?? []).map((r) => [r.construction, r]));
+    for (const construction of ["only covers", "cannot see", "never", "nothing else", "no other"]) {
+      const entries = recategorised.filter((e) => e.form.includes(construction));
+      const absence = searchedWithoutOne.get(construction);
+      if (absence === undefined) {
+        expect(entries, `no SCOPE-LIMITING entry and no recorded search for ${JSON.stringify(construction)}`).not.toHaveLength(0);
+      } else {
+        expect(entries).toHaveLength(0);
+        expect(absence.searched.length).toBeGreaterThan(0);
+        expect(absence.reach.length).toBeGreaterThan(0);
+      }
+    }
+    expect(recategorised.length).toBeGreaterThanOrEqual(4);
     // Without this, an entry that never contained "only"/"cannot"/... would
     // pass the per-entry test below by never having been ABSOLUTE at all.
-    const forms = SCOPE_FIXTURE.scopeLimiting.map((e) => e.form).join(" | ");
-    for (const construction of ["only covers", "cannot see", "never", "nothing else", "no other"]) expect(forms).toContain(construction);
-    const recategorised = SCOPE_FIXTURE.scopeLimiting.filter((e) => e.expected === "SCOPE-LIMITING");
-    expect(recategorised.length).toBeGreaterThanOrEqual(5);
     for (const e of recategorised) expect(e.text).toMatch(/\b(only|cannot|never|nothing else|no other)\b/i);
   });
 
@@ -297,7 +316,7 @@ describe("scope-limiting recategorisation (ugcportal-fgcb K1)", () => {
     expect(classifyClaimLine("the guard cannot see an unpublished row")).toEqual(["SCOPE-LIMITING"]);
   });
 
-  it("a pronoun subject counts only when an instrument noun is elsewhere in the window", () => {
+  it("a pronoun subject counts only when an instrument noun is earlier in the window", () => {
     expect(classifyClaimLine("it cannot see a namespace import")).toEqual(["ABSOLUTE"]);
     expect(classifyClaimLine("it cannot see a namespace import", { before: "This scan answers who names the constant." })).toEqual(["SCOPE-LIMITING"]);
   });
@@ -319,10 +338,54 @@ describe("scope-limiting recategorisation (ugcportal-fgcb K1)", () => {
     expect(classifyClaimLine("the scan only ever sees named imports; it does not see a namespace import")).toEqual(["SCOPE-LIMITING"]);
   });
 
-  it("KNOWN ERROR, pinned: a pronoun subject borrows an unrelated instrument noun from the window", () => {
-    // The comment above findScopeLimitingSpans names this as the reverse
-    // error the rule makes; pinned so a fix to it is visible here.
-    expect(classifyClaimLine("the test asserts that it cannot see the draft")).toEqual(["SCOPE-LIMITING"]);
+  // Round 1 (issue comment 6212969131) found M1-M4 below: real guarantees,
+  // reachable as SCOPE-LIMITING. The sentences are constructed, each the
+  // reviewer's own reproduction unless the test says otherwise.
+  it("M4: a pronoun cannot borrow an instrument noun from AFTER it in the window", () => {
+    expect(classifyClaimLine("The public projection strips previewKey, so it cannot see the draft row (see the test).")).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine("so it cannot see the draft row", { after: "The test pins this." })).toEqual(["ABSOLUTE"]);
+  });
+
+  it("M4: an 'it' opening a 'that' clause is what the clause is about, not the instrument before it", () => {
+    expect(classifyClaimLine("the test asserts that it cannot see the draft")).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine("the test asserts it cannot see the draft")).toEqual(["SCOPE-LIMITING"]);
+  });
+
+  it("M2: a detection verb needs an instrument subject too, after 'cannot' and after 'never'", () => {
+    expect(classifyClaimLine("an attacker cannot detect whether an account exists")).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine("the user cannot notice that a watermark was applied")).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine("Moderators review uploads; the uploader cannot recognise who flagged it")).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine("the user never notices the redirect; the hook does not see it")).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine("the scan cannot detect a namespace import")).toEqual(["SCOPE-LIMITING"]);
+  });
+
+  it("M3: 'nothing else' needs an instrument limitation elsewhere in the window", () => {
+    expect(classifyClaimLine("The signing key is read here and nothing else sees it")).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine("nothing else covers the refund path")).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine("the scan does not see a namespace import, and nothing else catches it")).toEqual(["SCOPE-LIMITING"]);
+  });
+
+  it("M1: 'that/which/who never' takes only a narrowing or mention verb", () => {
+    expect(classifyClaimLine("The expiry gate is the one check that never fails open:", { after: "a NaN date does not reach the sellable branch." })).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine("a gate which never lets an expired listing sell, since an expired row does not reach it")).toEqual(["ABSOLUTE"]);
+    // The evidence here IS an instrument limitation, so only the verb
+    // restriction keeps this one ABSOLUTE.
+    expect(classifyClaimLine("a session that never expires is rejected", { before: "the hook does not see the cookie" })).toEqual(["ABSOLUTE"]);
+  });
+
+  it("M1: 'that/which/who never' needs limitation evidence besides itself", () => {
+    expect(classifyClaimLine("a reader that never mentions the constant is rejected")).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine("the scan is blind to a reader that never mentions the constant")).toEqual(["SCOPE-LIMITING"]);
+  });
+
+  it("M1: limitation evidence must be a limitation of an instrument, not a guarantee phrased negatively", () => {
+    // "does not reach", "is blind to", "still passes" and a passive "not
+    // seen" are the evidence forms; each counts only for an instrument.
+    expect(classifyClaimLine("a request that never mentions the token does not reach the handler")).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine("the visitor is blind to the draft, and nothing else sees it")).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine("the request still passes, and nothing else catches it")).toEqual(["ABSOLUTE", "TEMPORAL"]);
+    expect(classifyClaimLine("the draft row is not seen, and nothing else sees it")).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine("a namespace import is not caught by the scan, and nothing else catches it")).toEqual(["SCOPE-LIMITING"]);
   });
 
   it("isScopeLimiting is false for a line with no absolute word at all", () => {
@@ -1351,7 +1414,7 @@ describe("scope-limiting reach line end-to-end, real git repo (ugcportal-fgcb K2
 
   it("body mode prints the same reach line, 0 included", () => {
     const { runScriptStdin } = makeFixtureRepo();
-    const entry = SCOPE_FIXTURE.scopeLimiting.find((e) => e.form === "never + nothing else (PR body table row)");
+    const entry = scopeEntry("only covers + cannot see");
     const withOut = runScriptStdin(["--body"], `${entry.text}\n`);
     expect(withOut).toMatch(REACH_RE(1));
     expect(withOut).toMatch(/SCOPE-LIMITING 1$/m);
