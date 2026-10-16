@@ -17,8 +17,9 @@ const prompt = (ts, text) => ({ type: "user", timestamp: ts, message: { content:
 describe("parsePasses", () => {
   const entries = [
     prompt("2026-10-15T09:00:00Z", "Implement bead ugcportal-x"),
-    prompt("2026-10-15T09:00:00Z", "<system-reminder> report through SubagentHandback </system-reminder>"),
     asst("m1", "2026-10-15T09:00:05Z", usage({ cache_creation_input_tokens: 30000, cache_creation: { ephemeral_5m_input_tokens: 30000, ephemeral_1h_input_tokens: 0 } })),
+    // a reminder injected mid-run, after a call, must not open a pass
+    prompt("2026-10-15T09:00:06Z", "<system-reminder> report through SubagentHandback </system-reminder>"),
     // a streamed message repeats its id; only the last record per id counts
     asst("m2", "2026-10-15T09:00:09Z", usage({ cache_read_input_tokens: 30000, output_tokens: 5 })),
     asst("m2", "2026-10-15T09:00:10Z", usage({ cache_read_input_tokens: 30000, output_tokens: 400 })),
