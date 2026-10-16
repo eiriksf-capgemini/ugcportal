@@ -307,8 +307,12 @@ reviewed nothing and does not count as a round.
 | 7+ | Only on an **exact** marker chain, anchored to the latest stop comment at or above 6, with evidence someone acted since it. See `pr-review-merge` step 5b, which is operative — `CLAUDE.md`'s phrasing of this row is stale relative to it. |
 
 **Why severity and not a flat count.** Measured 2026-09-25 across five beads:
-3.40M tokens of implementation, 1.32M of review, ~0.95M per bead, with a
-worst case of **ten implementation rounds and nine review passes**
+3.40M tokens of implementation, 1.32M of review, ~0.95M per bead. These are
+context sizes, not cost (CLAUDE.md > "Token cost metadata"), and `44q`'s and
+`bdh`'s `tokens_impl` were sums of one agent's snapshots, since corrected
+(ugcportal-cii0). Recomputed 2026-10-16 from `bd show <id> --json` for `44q`,
+`bdh`, `e86`, `r1d` and `0ss`: 2.45M of implementation, 1.56M of review
+(later rounds have landed since), ~0.80M per bead. The worst case in the set was **ten implementation rounds and nine review passes**
 (`ugcportal-r1d`). Value decayed *unevenly*: `0ss` round 7 found a live
 fail-open (`NaN <= number` is `false`, so an `Invalid Date` skipped an expiry
 check and the gate could return sellable); `r1d` round 9 found a migration
@@ -335,8 +339,10 @@ repo.** (It was applied by mistake three times in v0.5.0 — PRs #60, #61,
 #75 — which is a separate defect, not an exception to this.) The
 reviewer and the PR author are the same GitHub account, so every marker
 chain computes as `approx` rather than `exact`, and an `approx` chain runs
-the strict rounds-1–3 rule at *every* round. Cost of that, measured: one P3
-bead consumed **987k review tokens**. The fix is a separate reviewer
+the strict rounds-1–3 rule at *every* round. In recorded context size, not cost: one P3
+bead recorded **987k review tokens** (`tokens_qa` 987,870 on `ugcportal-577s`, PR #201, in `bd show
+ugcportal-577s --json` on 2026-10-16; `zo8n` shares that PR and records the
+same figure; context size, not cost). The fix is a separate reviewer
 identity (`ugcportal-62b6`) — a bot account or GitHub App — and it is
 pending on Eirik. This is the largest known inefficiency in the process and
 it is structural, not behavioural.
@@ -397,7 +403,9 @@ three times in one day (`stacked-prs-close-when-base-branch-deleted`).
 
 Then the bead is closed with `cc_type`, `cc_scope`, `prs` (merged PRs only —
 a closed bead listing an open PR makes release tooling claim unshipped work
-as released), `tokens_impl`, and `tokens_qa` accumulated per round.
+as released), and the cost fields as CLAUDE.md > "Token cost metadata"
+defines them: `tokens_impl`/`tokens_qa` (each agent's final context size, one
+figure per agent) and the transcript-derived `cost_*` keys.
 
 ---
 
@@ -412,14 +420,25 @@ release cost and which way is it moving*. Selected findings:
 | Measure | v0.4.0 | v0.5.0 | v0.6.0 |
 |---|---:|---:|---:|
 | Beads shipped | 38 | 54 | 85 |
-| Recorded cost per bead | 568k | 565k | 560k |
+| Recorded context size per bead (not cost) | 443k | 554k | 560k |
 | Median review rounds per PR | — | 4 | 2 |
 | PRs reaching the 6-round cap | — | 11 | 1 |
 
-Per-bead cost has been **flat within 1.5% across three releases** while
-per-bead *review* cost fell and throughput rose. The cost did not disappear;
-it moved out of late rounds and into round 1, which is now 68% of review
-spend. That is the intended direction.
+The per-bead row is recomputed 2026-10-16 from current bead metadata:
+`node scripts/release-cost-report.mjs --releases v0.4.0,v0.5.0,v0.6.0
+--bd-cwd <main checkout> --allow-unmerged`, Grand total over "Beads in the
+CHANGELOG section" (16,833,761 / 38, 29,911,783 / 54, 47,586,500 / 85). It
+is `tokens_*`, each agent's final context size, not cost. This table used to
+read 568k / 565k / 560k and said per-bead cost was **flat within 1.5% across
+three releases**. That no longer holds: ugcportal-cii0 corrected five v0.4.0
+beads whose `tokens_impl` summed one agent's snapshots, and the recomputed
+row rises 26% from v0.4.0 to v0.6.0. Neither version measures cost. The
+context-size figure understates price-weighted tokens by a median factor that
+differs by release (7.0x to 13.0x across v0.5.0-v0.7.0,
+`docs/process/cost-performance-claims-v0.7.0-2026-10-16.md` section 1.2), so
+no per-bead cost trend can be read from it. Throughput rose (38, 54, 85 beads),
+and in the same unit round 1 holds 68% of v0.6.0's recorded review figures
+(`release-cost-v0.5.0-vs-v0.6.0.md`), the direction intended.
 
 **The round analyses** (`docs/process/review-rounds-v0.5.0.md`) answer *why*
 and are the more valuable of the two. That one found: 53% of rounds found
@@ -547,8 +566,8 @@ path is the first defect family applied to itself.
 
 1. **The review identity problem.** Every marker chain is `approx` because
    reviewer and author share an account, so the lenient band is unreachable
-   and every round runs at full strictness. Measured cost: 987k review
-   tokens on a single P3. Fix: `ugcportal-62b6`, pending on Eirik.
+   and every round runs at full strictness. Recorded context size: 987k review
+   tokens on a single P3 (`ugcportal-577s`, PR #201; context size, not cost). Fix: `ugcportal-62b6`, pending on Eirik.
 2. **The orchestrator is the least-reviewed participant.** Implementers and
    reviewers are checked by each other; the orchestrator's briefs, bead
    edits and metadata writes are checked by nobody. Every error in section A

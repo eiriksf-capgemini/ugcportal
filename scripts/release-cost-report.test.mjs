@@ -16,14 +16,40 @@
  * ("two lows fixed", with an unrelated `--since` flag later in the same
  * paragraph) and PR #193's round-1 review ("one CONFIRMED low", with the
  * CSS custom property `--color-petrol-deep` later on the same line).
+ *
+ * Two suites at the end cover the cost unit and recording helper
+ * (ugcportal-cii0), with inline fixtures. "cost unit" tests costUnitOf
+ * (one unit per bead; a cost_ite_* is accepted only as a positive integer
+ * on a side not marked incomplete), the tokens_impl_convention flag,
+ * buildRows, aggregate, the per-unit review shares (pct), the tier table
+ * and the report's unit labels and Data gaps lines.
+ * "agentCostFromPasses" tests the recording rule CLAUDE.md's one-liner
+ * runs: the last notification per agent, the un-notified final pass,
+ * INCOMPLETE when a transcript is missing, the coverage checks
+ * (uncoveredByAgents, coverageIncomplete across two recordings), the
+ * INCOMPLETE note forms (formatAgentCost) and runAgentCost's arguments.
  */
 import fs from "node:fs";
+import os from "node:os";
 import { describe, expect, it } from "vitest";
 
 import {
+  CONTEXT_LABEL,
   GENERATED_END,
   GENERATED_START,
+  SUMMED_SNAPSHOTS,
   addendumRound,
+  agentCostFromPasses,
+  aggregate,
+  buildRows,
+  costUnitOf,
+  fmt,
+  formatAgentCost,
+  pct,
+  renderReport,
+  runAgentCost,
+  tierPerformance,
+  uncoveredByAgents,
   beadsAndPrsFromGitLog,
   classifySeverity,
   clusterByTime,
@@ -726,5 +752,301 @@ describe("spliceGenerated", () => {
     const out = spliceGenerated(existing, `${GENERATED_START}\nnew\n${GENERATED_END}`);
     expect(out).toBe(`# Title\n\nprose\n\n${GENERATED_START}\nnew\n${GENERATED_END}\n\nmore prose\n`);
     expect(spliceGenerated("# Title\n", `${GENERATED_START}\nnew\n${GENERATED_END}`)).toBe(`# Title\n\n${GENERATED_START}\nnew\n${GENERATED_END}\n`);
+  });
+});
+
+describe("cost unit (ugcportal-cii0): one unit per bead, context-size never added to transcript cost", () => {
+  // Fixture beads, one of each kind. The ITE bead also carries the old
+  // fields (as ugcportal-6uc2 does after its re-tag), so a reader that mixed
+  // units would have something to mix. Figures are 6uc2's and ei7's own.
+  const ite = { id: "ugcportal-aaa1", title: "ITE bead", metadata: { cc_type: "feat", model: "sonnet", cost_ite_impl: 30018329, cost_calls_impl: 530, cost_ite_qa: 11063233, cost_calls_qa: 471, tokens_impl: 744413, tokens_qa: 1450244 } };
+  const ctx = { id: "ugcportal-aaa2", title: "context-only bead", metadata: { cc_type: "feat", model: "sonnet", tokens_impl: 222680, tokens_qa: 521004 } };
+  const summed = { id: "ugcportal-aaa3", title: "flagged summed bead", metadata: { cc_type: "fix", tokens_impl: 4410532, tokens_impl_convention: SUMMED_SNAPSHOTS, tokens_qa: 1000 } };
+  // M1: a cost_ite_* of 0 is what a transcript sum over agents with no
+  // transcript gives; it must fall back to the bead's context-size figures.
+  const zeroIte = { id: "ugcportal-aaa4", title: "zero ITE bead", metadata: { cc_type: "fix", cost_ite_impl: 0, cost_calls_impl: 0, tokens_impl: 333111, tokens_qa: 222333 } };
+  const beads = [ite, ctx, summed, zeroIte];
+  const release = { version: "v9.9.9", ids: beads.map((b) => b.id), entries: new Map(beads.map((b) => [b.id, { title: b.title, type: "Features" }])) };
+  const rows = buildRows(release, new Map(beads.map((b) => [b.id, b])), new Map());
+  const row = (id) => rows.find((r) => r.id === id);
+  const render = (rs) => renderReport({ releases: ["v9.9.9"], rowsByRelease: new Map([["v9.9.9", rs]]), membershipChecks: [], unmerged: [], generatedAt: "2026-10-16", reviewer: "x", prCount: 0 });
+  const report = render(rows);
+  const tableLine = (short, text = report) => text.split("\n").find((l) => l.startsWith(`| \`${short}\` |`));
+
+  it("costUnitOf reads cost_ite_* when present and ignores tokens_* on that bead", () => {
+    expect(costUnitOf(ite.metadata)).toMatchObject({ unit: "ite", impl: 30018329, qa: 11063233, iteRejected: [] });
+    expect(costUnitOf(ctx.metadata)).toMatchObject({ unit: "context", impl: 222680, qa: 521004, implSummedExcluded: false, implConventionUnknown: null });
+    expect(costUnitOf({})).toMatchObject({ unit: null, impl: null, qa: null });
+  });
+
+  describe("M1: a cost_ite_* that is 0, non-numeric or absent is no ITE figure", () => {
+    for (const [label, value] of [["0", 0], ['"0"', "0"], ['"abc"', "abc"], ["negative", -5], ["fractional", 1.5]]) {
+      it(`cost_ite_impl=${label} falls back to the context-size unit and is listed`, () => {
+        const c = costUnitOf({ cost_ite_impl: value, tokens_impl: 744413, tokens_qa: 500000 });
+        expect(c).toMatchObject({ unit: "context", impl: 744413, qa: 500000 });
+        expect(c.iteRejected).toEqual([`cost_ite_impl=${value}`]);
+      });
+    }
+    it("an absent cost_ite_* is not rejected, it is simply not there", () => {
+      expect(costUnitOf({ tokens_impl: 744413 })).toMatchObject({ unit: "context", impl: 744413, iteRejected: [] });
+    });
+    it("one valid side keeps the bead in ITE; the invalid side is listed and reads as no figure", () => {
+      expect(costUnitOf({ cost_ite_impl: 100, cost_ite_qa: "abc", tokens_qa: 9 })).toMatchObject({ unit: "ite", impl: 100, qa: null, iteRejected: ["cost_ite_qa=abc"] });
+    });
+    it("the zero-ITE bead prints its context-size figures, not a 0, and Data gaps names it", () => {
+      expect(tableLine("aaa4")).toContain(`| ${fmt(333111)} | ${fmt(222333)} | ${fmt(555444)} | ${CONTEXT_LABEL} |`);
+      const cells = tableLine("aaa4").split(" | ");
+      expect(cells.slice(4, 7)).toEqual([fmt(333111), fmt(222333), fmt(555444)]); // Impl, QA, Total: never a printed 0
+      expect(report).toContain("`cost_ite_*` not a positive integer, not read as ITE (1): aaa4 (cost_ite_impl=0)");
+    });
+  });
+
+  describe("L1: tokens_impl_convention is normalised; an unknown value is counted at neither value", () => {
+    for (const v of ["summed_snapshots", "Summed-Snapshots", " summed-snapshots "]) {
+      it(`${JSON.stringify(v)} reads as summed-snapshots`, () => {
+        expect(costUnitOf({ tokens_impl: 4410532, tokens_impl_convention: v })).toMatchObject({ impl: null, implSummedExcluded: true, implConventionUnknown: null });
+      });
+    }
+    it("LAST_PER_AGENT in any case counts the figure", () => {
+      expect(costUnitOf({ tokens_impl: 180000, tokens_impl_convention: "Last_Per_Agent" })).toMatchObject({ impl: 180000, implSummedExcluded: false, implConventionUnknown: null });
+    });
+    it("an unknown value is not counted and is listed under Data gaps", () => {
+      const odd = { id: "ugcportal-aaa5", metadata: { tokens_impl: 777000, tokens_impl_convention: "summed" } };
+      const rs = buildRows({ version: "v9.9.9", ids: [odd.id], entries: new Map() }, new Map([[odd.id, odd]]), new Map());
+      expect(rs[0]).toMatchObject({ impl: null, implConventionUnknown: "summed" });
+      const out = render(rs);
+      expect(out).not.toContain(fmt(777000));
+      expect(out).toContain("`tokens_impl` not counted, unknown `tokens_impl_convention` (1): aaa5 (summed)");
+    });
+  });
+
+  it("K3: a bead flagged summed-snapshots is not counted at its summed tokens_impl", () => {
+    expect(costUnitOf(summed.metadata)).toMatchObject({ unit: "context", impl: null, qa: 1000, implSummedExcluded: true });
+    expect(row("ugcportal-aaa3").impl).toBeNull();
+    expect(report).not.toContain(fmt(4410532));
+    expect(tableLine("aaa3")).toContain("excluded (summed snapshots)");
+    expect(report).toContain(`\`tokens_impl_convention=${SUMMED_SNAPSHOTS}\` (1): aaa3`);
+  });
+
+  it("buildRows fills exactly one unit's pair per row", () => {
+    expect(row("ugcportal-aaa1")).toMatchObject({ unit: "ite", impl: null, qa: null, iteImpl: 30018329, iteQa: 11063233, iteTotal: 41081562 });
+    expect(row("ugcportal-aaa2")).toMatchObject({ unit: "context", impl: 222680, qa: 521004, iteImpl: null, iteQa: null, iteTotal: null });
+    expect(row("ugcportal-aaa4")).toMatchObject({ unit: "context", impl: 333111, iteTotal: null });
+  });
+
+  it("aggregate sums each unit separately: context totals exclude the ITE bead's old fields, ITE totals exclude context beads", () => {
+    const a = aggregate(rows);
+    expect(a.implTotal).toBe(222680 + 333111);
+    expect(a.qaTotal).toBe(521004 + 1000 + 222333);
+    expect(a.grandTotal).toBe(222680 + 333111 + 521004 + 1000 + 222333);
+    expect(a.iteGrandTotal).toBe(30018329 + 11063233);
+    expect(a).toMatchObject({ nIte: 1, nContext: 3, nSummedExcluded: 1, nAny: 4 });
+  });
+
+  it("guardrail: the old-field bead is labelled context-size, not cost; the ITE bead is not", () => {
+    expect(tableLine("aaa2")).toContain(`| ${CONTEXT_LABEL} |`);
+    expect(tableLine("aaa1")).toContain("| ITE (cost) |");
+    expect(tableLine("aaa1")).not.toContain(CONTEXT_LABEL);
+    // The ITE bead's own tokens_* were never read, and no printed figure is a cross-unit sum.
+    expect(report).not.toContain(fmt(744413));
+    expect(report).not.toContain(fmt(1450244));
+    const ctxGrand = 222680 + 333111 + 521004 + 1000 + 222333;
+    expect(report).not.toContain(fmt(30018329 + 11063233 + ctxGrand));
+    expect(report).toContain(`| Grand total (context-size, not cost) | ${fmt(ctxGrand)} |`);
+    expect(report).toContain(`| ITE total, impl / qa / both (transcript cost) | ${fmt(30018329)} / ${fmt(11063233)} / ${fmt(41081562)} |`);
+  });
+
+  it("L3: Data gaps name the missing figure by the bead's unit", () => {
+    const halfIte = { id: "ugcportal-aaa6", metadata: { cost_ite_impl: 5000, tokens_qa: 900 } };
+    const out = render(buildRows({ version: "v9.9.9", ids: [halfIte.id], entries: new Map() }, new Map([[halfIte.id, halfIte]]), new Map()));
+    expect(out).toContain("no QA figure in the bead's unit (1): aaa6 (ite)");
+    expect(out).toContain("no impl figure in the bead's unit (0): —");
+  });
+
+  it("L4: review shares are per unit and print — rather than NaN% when a unit has no figures", () => {
+    expect(pct(1, 0)).toBe("—");
+    expect(pct(1, NaN)).toBe("—");
+    expect(pct(1, 4)).toBe("25%");
+    const out = render([row("ugcportal-aaa1")]);
+    expect(out).not.toContain("NaN");
+    expect(out).toContain("| Review share of context-size (qa / impl+qa, not cost) | — |");
+    expect(out).toContain(`| Review share of transcript cost (ITE) | ${pct(11063233, 41081562)} |`);
+  });
+
+  it("L10: the tier table carries ITE beads in their own columns", () => {
+    const sonnet = tierPerformance(rows).find((t) => t.tier === "sonnet");
+    expect(sonnet).toMatchObject({ n: 2, nIte: 1, iteTotal: 41081562, implTotal: 222680, qaTotal: 521004 });
+  });
+});
+
+describe("agentCostFromPasses (ugcportal-cii0): the recording rule CLAUDE.md's one-liner runs", () => {
+  // agent-pass-cost.mjs --json rows: one per pass, `notified` is the agent's whole list.
+  const pass = (agentId, n, ctxEnd, notified, ite = 10, calls = 1) => ({ agentId, pass: n, ctxEnd, notified, ite, calls });
+
+  it("K1: a resumed agent notified 100k, 150k, 180k over three passes records 180k, not 430k", () => {
+    const notified = [100000, 150000, 180000];
+    const rows = [pass("a1", 1, 100100, notified), pass("a1", 2, 150100, notified), pass("a1", 3, 180100, notified)];
+    const c = agentCostFromPasses(rows, ["a1"]);
+    expect(c.ctx).toBe(180000);
+    expect(c.ctx).not.toBe(notified.reduce((a, b) => a + b, 0));
+    expect(c).toMatchObject({ complete: true, ite: 30, calls: 3, passes: 3, missing: [] });
+  });
+
+  it("L6: a final pass with no notification takes that pass's ctxEnd (ugcportal-bdh's shape)", () => {
+    const notified = [84495, 129467, 150052, 158394];
+    const rows = [1, 2, 3, 4].map((n) => pass("b", n, notified[n - 1], notified)).concat(pass("b", 5, 260896, notified));
+    expect(agentCostFromPasses(rows, ["b"]).ctx).toBe(260896);
+  });
+
+  it("distinct agents are summed, each at its own last figure", () => {
+    const rows = [pass("r1", 1, 231000, [231225]), pass("r2", 1, 289000, [289552])];
+    expect(agentCostFromPasses(rows, ["r1", "r2"]).ctx).toBe(231225 + 289552);
+  });
+
+  it("M1: any agent without a transcript makes the result incomplete, with no ITE, calls or ctx to write", () => {
+    const none = agentCostFromPasses([], ["gone1", "gone2"]);
+    expect(none).toMatchObject({ complete: false, passes: 0, missing: ["gone1", "gone2"], ite: null, calls: null, ctx: null });
+    const part = agentCostFromPasses([pass("a1", 1, 5, [5])], ["a1", "gone"]);
+    expect(part).toMatchObject({ complete: false, missing: ["gone"], ite: null });
+    expect(formatAgentCost(none)).toMatch(/^INCOMPLETE .*missing=gone1,gone2 uncovered=none -- write no cost_ite_\*/);
+    expect(formatAgentCost(none)).not.toMatch(/ite=0/);
+    expect(agentCostFromPasses([], [])).toMatchObject({ complete: false });
+  });
+
+  describe("M2: the list must cover what the bead already records", () => {
+    const r2 = [pass("rev2", 1, 289000, [289552], 2511477, 101)];
+    it("a pre-rule tokens_qa_r1 with no agent id plus the current reviewer is INCOMPLETE, so tokens_qa is not overwritten", () => {
+      const meta = { tokens_qa: 231225, tokens_qa_r1: 231225 };
+      const c = agentCostFromPasses(r2, ["rev2"], { meta, side: "qa" });
+      expect(c).toMatchObject({ complete: false, missing: [], uncoveredFigures: ["r1"], ite: null, calls: null, ctx: null });
+      const line = formatAgentCost(c);
+      expect(line).toMatch(/^INCOMPLETE .*uncovered=r1 -- write no cost_ite_\*\/cost_calls_\* and unset any already there, do not overwrite tokens_\*/);
+      expect(line).toContain('"rounds without agent ids: r1"');
+      expect(line).not.toMatch(/ctx=/);
+    });
+    it("6uc2's shape: six pre-rule rounds and only the newest reviewer listed is INCOMPLETE, not ctx=262550", () => {
+      const meta = { tokens_qa: 1450244, ...Object.fromEntries([231225, 289552, 261101, 179537, 226279, 262550].map((v, i) => [`tokens_qa_r${i + 1}`, v])) };
+      const c = agentCostFromPasses([pass("rev6", 1, 262000, [262550])], ["rev6"], { meta, side: "qa" });
+      expect(c).toMatchObject({ complete: false, ctx: null, uncoveredFigures: ["r1", "r2", "r3", "r4", "r5", "r6"] });
+    });
+    it("rounds whose agent ids are recorded and listed are covered", () => {
+      const meta = { tokens_qa: 231225, tokens_qa_r1: 231225, tokens_qa_r1_agent: "rev1", cost_agents_qa: "rev1" };
+      const rows = [pass("rev1", 1, 231000, [231225]), ...r2];
+      expect(agentCostFromPasses(rows, ["rev1", "rev2"], { meta, side: "qa" })).toMatchObject({ complete: true, ctx: 231225 + 289552, uncoveredFigures: [] });
+    });
+    it("dropping an agent cost_agents_* already lists is INCOMPLETE", () => {
+      expect(uncoveredByAgents({ cost_agents_qa: "rev1,rev2" }, "qa", ["rev2"])).toEqual(["dropped rev1"]);
+      expect(formatAgentCost(agentCostFromPasses(r2, ["rev2"], { meta: { cost_agents_qa: "rev1,rev2" }, side: "qa" }))).toContain('"recorded agents dropped from the list: rev1"');
+    });
+    it("impl side: a tokens_impl recorded before cost_agents_impl is INCOMPLETE; one with a covering list is not", () => {
+      expect(uncoveredByAgents({ tokens_impl: 437394 }, "impl", ["a1"])).toEqual(["tokens_impl recorded before cost_agents_impl"]);
+      expect(uncoveredByAgents({ tokens_impl: 437394, cost_agents_impl: "a1" }, "impl", ["a1"])).toEqual([]);
+      expect(uncoveredByAgents({}, "impl", ["a1"])).toEqual([]);
+      expect(() => uncoveredByAgents({}, "both", ["a1"])).toThrow(/side/);
+    });
+    it("runAgentCost (the CLAUDE.md one-liner) reads the bead file and applies the check; every argument is required", () => {
+      const dir = fs.mkdtempSync(`${os.tmpdir()}/cii0-`);
+      const passes = `${dir}/passes.json`, bead = `${dir}/bead.json`;
+      fs.writeFileSync(passes, JSON.stringify(r2));
+      fs.writeFileSync(bead, JSON.stringify([{ id: "x", metadata: { tokens_qa: 231225, tokens_qa_r1: 231225 } }]));
+      expect(runAgentCost(passes, "rev2", bead, "qa")).toMatch(/^INCOMPLETE .*uncovered=r1/);
+      fs.writeFileSync(bead, JSON.stringify([{ id: "x", metadata: {} }]));
+      expect(runAgentCost(passes, "rev2", bead, "qa")).toBe("ite=2511477 calls=101 ctx=289552 agents=1 passes=1 missing=none uncovered=none");
+      expect(() => runAgentCost(passes, "rev2")).toThrow(/usage/);
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+  });
+
+  describe("M3: an INCOMPLETE recording keeps the next recording INCOMPLETE", () => {
+    // The reviewer's repro: real figures of two agents A and B, a pre-rule tokens_impl of 300000.
+    const A = pass("A", 1, 262000, [262550], 1000, 10);
+    const B = pass("B", 1, 226000, [226279], 2000, 20);
+    const P = pass("P", 1, 299000, [300000], 3000, 30); // the pre-rule pass's agent, once a human has found it
+    const quoted = (line, key) => new RegExp(`${key} to "([^"]*)"`).exec(line)?.[1];
+    // What the INCOMPLETE template in CLAUDE.md / step 4a writes, applied to `meta`.
+    const incompleteWrite = (meta, side, line, extra) => {
+      const next = { ...meta, ...extra, [`cost_note_${side}`]: quoted(line, `cost_note_${side}`), [`cost_coverage_${side}`]: quoted(line, `cost_coverage_${side}`) };
+      delete next[`cost_ite_${side}`];
+      delete next[`cost_calls_${side}`];
+      return next;
+    };
+
+    it("impl: pre-rule tokens_impl -> INCOMPLETE write -> the next pass with A,B is still INCOMPLETE, not ctx=488829", () => {
+      const meta0 = { tokens_impl: 300000 };
+      const first = formatAgentCost(agentCostFromPasses([A], ["A"], { meta: meta0, side: "impl" }));
+      expect(first).toMatch(/^INCOMPLETE .*uncovered=tokens_impl recorded before cost_agents_impl /);
+      expect(quoted(first, "cost_coverage_impl")).toBe("incomplete: tokens_impl recorded before cost_agents_impl");
+      const meta1 = incompleteWrite(meta0, "impl", first, { tokens_impl: 300000 + 262550, cost_agents_impl: "A" });
+      const second = agentCostFromPasses([A, B], ["A", "B"], { meta: meta1, side: "impl" });
+      expect(second).toMatchObject({ complete: false, ctx: null, ite: null });
+      expect(second.uncoveredFigures).toEqual(["marked incomplete by cost_coverage_impl"]);
+      const line = formatAgentCost(second);
+      expect(line).not.toMatch(/ctx=488829/);
+      // The marker an earlier recording wrote is passed on unchanged, not rewritten or nested.
+      expect(quoted(line, "cost_coverage_impl")).toBe("incomplete: tokens_impl recorded before cost_agents_impl");
+      expect(quoted(line, "cost_note_impl")).toBe("marked incomplete by an earlier recording: cost_coverage_impl");
+    });
+
+    it("impl: the cost_note_* alone (no marker key) keeps it INCOMPLETE too", () => {
+      const meta = { tokens_impl: 562550, cost_agents_impl: "A", cost_note_impl: "tokens_impl recorded before cost_agents_impl" };
+      expect(uncoveredByAgents(meta, "impl", ["A", "B"])).toEqual(["marked incomplete by cost_note_impl"]);
+      expect(uncoveredByAgents({ ...meta, cost_note_impl: "All transcripts present (1 agent)" }, "impl", ["A", "B"])).toEqual([]);
+    });
+
+    it("qa: pre-rule tokens_qa -> INCOMPLETE write with round agent ids -> the next round is still INCOMPLETE", () => {
+      const meta0 = { tokens_qa: 400000 };
+      const first = formatAgentCost(agentCostFromPasses([A], ["A"], { meta: meta0, side: "qa" }));
+      expect(first).toMatch(/^INCOMPLETE .*uncovered=tokens_qa recorded before cost_agents_qa /);
+      const meta1 = incompleteWrite(meta0, "qa", first, { tokens_qa: 400000 + 262550, tokens_qa_r1: 262550, tokens_qa_r1_agent: "A", cost_agents_qa: "A" });
+      const second = agentCostFromPasses([A, B], ["A", "B"], { meta: { ...meta1, tokens_qa_r2: 226279, tokens_qa_r2_agent: "B" }, side: "qa" });
+      expect(second).toMatchObject({ complete: false, ctx: null, uncoveredFigures: ["marked incomplete by cost_coverage_qa"] });
+    });
+
+    it("once a human has backfilled the pre-rule agent and removed the marker and note, the figure is complete", () => {
+      const meta = { tokens_impl: 562550, cost_agents_impl: "P,A" };
+      expect(agentCostFromPasses([P, A, B], ["P", "A", "B"], { meta, side: "impl" })).toMatchObject({ complete: true, ctx: 300000 + 262550 + 226279 });
+    });
+  });
+
+  describe("M4: a cost_ite_* left on a side later marked incomplete is not read as ITE", () => {
+    const stale = { cost_ite_qa: 11063233, cost_calls_qa: 471, tokens_qa: 1700000, tokens_qa_r7: 250000, tokens_impl: 744413 };
+    it("the marker key alone, or the note alone, demotes it; the bead falls back to context size", () => {
+      for (const mark of [{ cost_coverage_qa: "incomplete: missing: a0" }, { cost_note_qa: "missing: a0" }]) {
+        const c = costUnitOf({ ...stale, ...mark });
+        expect(c).toMatchObject({ unit: "context", impl: 744413, qa: 1700000 });
+        expect(c.iteIncomplete).toEqual([`cost_ite_qa=11063233, ${Object.keys(mark)[0]}`]);
+      }
+    });
+    it("a note that begins all transcripts present (6uc2's form) leaves the figure in ITE", () => {
+      expect(costUnitOf({ ...stale, cost_note_qa: "all transcripts present (6 reviewer agents)" })).toMatchObject({ unit: "ite", qa: 11063233, iteIncomplete: [] });
+    });
+    it("the stale side prints no ITE figure and Data gaps names it", () => {
+      const b = { id: "ugcportal-aaa7", metadata: { ...stale, cost_coverage_qa: "incomplete: missing: a0" } };
+      const rs = buildRows({ version: "v9.9.9", ids: [b.id], entries: new Map() }, new Map([[b.id, b]]), new Map());
+      expect(rs[0]).toMatchObject({ unit: "context", iteQa: null, qa: 1700000 });
+      const out = renderReport({ releases: ["v9.9.9"], rowsByRelease: new Map([["v9.9.9", rs]]), membershipChecks: [], unmerged: [], generatedAt: "2026-10-16", reviewer: "x", prCount: 0 });
+      expect(out).not.toContain("11,063,233");
+      expect(out).toContain("`cost_ite_*` on a side whose coverage is marked incomplete, not read as ITE (1): aaa7 (cost_ite_qa=11063233, cost_coverage_qa)");
+    });
+  });
+
+  describe("L13/L14: a round's agent id must be in the list, and the note says which way a round is uncovered", () => {
+    it("a round whose agent id is recorded but in neither list is INCOMPLETE", () => {
+      const meta = { tokens_qa: 231225, tokens_qa_r1: 231225, tokens_qa_r1_agent: "revX" };
+      expect(uncoveredByAgents(meta, "qa", ["rev2"])).toEqual(["r1 unlisted"]);
+      const c = agentCostFromPasses([pass("rev2", 1, 289000, [289552])], ["rev2"], { meta, side: "qa" });
+      expect(c).toMatchObject({ complete: false, ctx: null });
+      expect(formatAgentCost(c)).toContain('cost_note_qa to "rounds whose agents are not in the list: r1"');
+    });
+    it("rounds without ids and rounds with unlisted ids get two different messages", () => {
+      const meta = { tokens_qa_r1: 1, tokens_qa_r2: 2, tokens_qa_r2_agent: "revX" };
+      const line = formatAgentCost(agentCostFromPasses([pass("rev3", 1, 3, [3])], ["rev3"], { meta, side: "qa" }));
+      expect(line).toContain('"rounds without agent ids: r1; rounds whose agents are not in the list: r2"');
+      expect(line).not.toMatch(/pre-rule rounds/);
+    });
+  });
+
+  it("a complete result prints every figure", () => {
+    expect(formatAgentCost(agentCostFromPasses([pass("a1", 1, 5, [7], 12, 3)], ["a1"]))).toBe("ite=12 calls=3 ctx=7 agents=1 passes=1 missing=none uncovered=none");
   });
 });
