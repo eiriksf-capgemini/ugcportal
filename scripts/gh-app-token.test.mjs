@@ -3,10 +3,11 @@ import {
   createVerify,
   generateKeyPairSync,
 } from "node:crypto";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
 import { buildEnvLines, main, mintJwt } from "./gh-app-token.mjs";
 
@@ -117,7 +118,10 @@ describe("main", () => {
 
   it("non-2xx (401): exit 1, empty stdout, gh-app-token: stderr naming the status", async () => {
     const r = await main({
-      fetch: stubFetch(401, { message: "Bad credentials" }),
+      fetch: stubFetch(401, {
+        message: "Bad credentials",
+        token: "ghs_LEAKME401",
+      }),
       argv: ["--env"],
       env: envOf(),
     });
@@ -125,7 +129,7 @@ describe("main", () => {
     expect(r.stdout).toBe("");
     expect(r.stderr.startsWith("gh-app-token:")).toBe(true);
     expect(r.stderr).toContain("401");
-    expect(r.stderr).not.toContain("ghs_");
+    expect(r.stderr + r.stdout).not.toContain("ghs_LEAKME401");
   });
 
   it("a non-2xx response is a failure even if its body carries a token", async () => {
@@ -137,6 +141,47 @@ describe("main", () => {
     expect(r.code).toBe(1);
     expect(r.stdout).toBe("");
     expect(r.stderr).toContain("403");
+    expect(r.stderr + r.stdout).not.toContain("ghs_TESTTOKEN123");
+  });
+
+  it("a 403 whose message echoes the token never prints it", async () => {
+    const r = await main({
+      fetch: stubFetch(403, {
+        message: "bad ghs_TESTTOKEN123 here",
+        token: "ghs_TESTTOKEN123",
+      }),
+      argv: [],
+      env: envOf(),
+    });
+    expect(r.code).toBe(1);
+    expect(r.stderr + r.stdout).not.toContain("ghs_TESTTOKEN123");
+  });
+
+  it.each([
+    [
+      "a token containing ;",
+      { token: "ghs_x; rm -rf ~", expires_at: "2026-10-16T12:00:00Z" },
+    ],
+    [
+      "a token containing a newline",
+      { token: "ghs_x\nexport EVIL=1", expires_at: "2026-10-16T12:00:00Z" },
+    ],
+    [
+      "an expires_at containing a newline",
+      { token: "ghs_ok", expires_at: "2026-10-16T12:00:00Z\nexport EVIL=1" },
+    ],
+    ["a non-ISO expires_at", { token: "ghs_ok", expires_at: "$(id)" }],
+  ])("--env rejects %s and writes nothing to stdout", async (_name, body) => {
+    const r = await main({
+      fetch: stubFetch(201, body),
+      argv: ["--env"],
+      env: envOf(),
+    });
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr.startsWith("gh-app-token:")).toBe(true);
+    expect(r.stderr).not.toContain("EVIL");
+    expect(r.stderr).not.toContain("rm -rf");
   });
 
   it("2xx without a token still fails loudly", async () => {
@@ -146,21 +191,66 @@ describe("main", () => {
   });
 });
 
+const trackedFiles = (cwd) =>
+  execFileSync("git", ["ls-files", "-z"], {
+    cwd,
+    encoding: "utf8",
+    timeout: 30_000,
+  })
+    .split("\0")
+    .filter(Boolean);
 const pemFiles = (files) =>
   files.filter((f) => f.toLowerCase().endsWith(".pem"));
+
+describe("entry guard", () => {
+  it(
+    "runs main when invoked through a symlinked directory",
+    { timeout: 30_000 },
+    () => {
+      const real = mkdtempSync(join(tmpdir(), "gh-app-token-real-"));
+      const link = join(
+        mkdtempSync(join(tmpdir(), "gh-app-token-link-")),
+        "scripts",
+      );
+      symlinkSync(dirname(fileURLToPath(import.meta.url)), link);
+      const res = spawnSync(
+        process.execPath,
+        [join(link, "gh-app-token.mjs")],
+        {
+          encoding: "utf8",
+          timeout: 20_000,
+          env: {
+            ...process.env,
+            GH_APP_PRIVATE_KEY_PATH: join(real, "absent.pem"),
+          },
+        },
+      );
+      expect(res.status).toBe(1);
+      expect(res.stdout).toBe("");
+      expect(res.stderr.startsWith("gh-app-token:")).toBe(true);
+    },
+  );
+});
 
 describe("K4: no private key is ever tracked", () => {
   // git ls-files reads the whole index; 30s is the inherent-cost ceiling.
   it("git ls-files contains no .pem file", { timeout: 30_000 }, () => {
-    const files = execFileSync("git", ["ls-files"], {
-      encoding: "utf8",
-      timeout: 30_000,
-    })
-      .split("\n")
-      .filter(Boolean);
+    const files = trackedFiles(process.cwd());
     expect(files.length).toBeGreaterThan(100); // proves the listing was read
     expect(pemFiles(files)).toEqual([]);
   });
+
+  it(
+    "the listing sees a tracked non-ASCII .pem name",
+    { timeout: 30_000 },
+    () => {
+      const repo = mkdtempSync(join(tmpdir(), "gh-app-token-repo-"));
+      execFileSync("git", ["init", "-q"], { cwd: repo, timeout: 20_000 });
+      writeFileSync(join(repo, "ø-key.pem"), "x");
+      execFileSync("git", ["add", "."], { cwd: repo, timeout: 20_000 });
+      expect(pemFiles(trackedFiles(repo))).toEqual(["ø-key.pem"]);
+    },
+  );
 
   it("the pem filter itself flags a tracked key, at any depth and case", () => {
     expect(pemFiles(["a.txt", "hal9000.pem", "x/y/KEY.PEM"])).toEqual([

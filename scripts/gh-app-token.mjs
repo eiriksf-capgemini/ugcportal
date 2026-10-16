@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Mint a short-lived GitHub App installation token for hal9000-agent[bot],
+// Mint a short-lived GitHub App installation token for hal9000-agent-bot[bot],
 // the separate identity subagents use so their PRs, reviews and commits are
 // not attributed to a human account.
 //
@@ -15,7 +15,7 @@
 //
 // GitHub sets the token's expiry (see the `# expires` line under --env). Re-run to get a fresh one.
 import { createSign } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -23,6 +23,9 @@ const DEFAULT_CLIENT_ID = "Iv23liumVwHXyUQYitdf";
 const DEFAULT_INSTALLATION_ID = "171866134";
 const BOT_LOGIN = "hal9000-agent-bot[bot]";
 const BOT_USER_ID = 343198806;
+
+const TOKEN_PATTERN = /^[A-Za-z0-9_-]+$/;
+const EXPIRY_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
 
 const b64url = (buf) => Buffer.from(buf).toString("base64url");
 
@@ -85,9 +88,20 @@ export async function main({
     );
     const body = await res.json();
     if (!res.ok || !body.token) {
-      return fail(
-        `GitHub returned ${res.status}: ${body.message ?? JSON.stringify(body)}`,
-      );
+      // Never print the raw body: a non-2xx body may still carry a token.
+      const msg =
+        typeof body.message === "string"
+          ? `: ${body.message.split("\n")[0].replaceAll(String(body.token ?? "\0"), "[redacted]")}`
+          : "";
+      return fail(`GitHub returned ${res.status}${msg}`);
+    }
+    // The token and expiry are spliced into lines meant for eval; accept only
+    // shapes that cannot carry shell syntax, and never echo a rejected value.
+    if (!TOKEN_PATTERN.test(body.token)) {
+      return fail("GitHub returned a token with unexpected characters");
+    }
+    if (argv.includes("--env") && !EXPIRY_PATTERN.test(body.expires_at)) {
+      return fail("GitHub returned an expires_at that is not ISO-8601");
     }
     const out = argv.includes("--env")
       ? buildEnvLines(body.token, body.expires_at).join("\n")
@@ -98,10 +112,21 @@ export async function main({
   }
 }
 
-if (
-  process.argv[1] &&
-  fileURLToPath(import.meta.url) === resolve(process.argv[1])
-) {
+// Compare realpaths on both sides: import.meta.url is already symlink-resolved,
+// process.argv[1] is not (/tmp -> /private/tmp on macOS).
+function invokedDirectly() {
+  if (!process.argv[1]) return false;
+  try {
+    return (
+      realpathSync(process.argv[1]) ===
+      realpathSync(fileURLToPath(import.meta.url))
+    );
+  } catch {
+    return false;
+  }
+}
+
+if (invokedDirectly()) {
   const r = await main({ argv: process.argv.slice(2) });
   process.stdout.write(r.stdout);
   process.stderr.write(r.stderr);
