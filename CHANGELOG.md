@@ -1,5 +1,36 @@
 # Changelog
 
+## v0.8.0 - 2026-10-16
+
+### 💰 Cost Summary
+
+| Type | Impl | QA | Total | Beads with data |
+|---|---:|---:|---:|:---:|
+| ✨ Features | 573,419 | 504,746 | 1,078,165 | 1/1 |
+| 🐛 Fixes | 402,987 | 531,702 | 934,689 | 1/1 |
+| 📝 Documentation | 570,949 | 500,317 | 1,071,266 | 2/2 |
+| 🔧 Chores | — | 134,748 | 134,748 | 1/1 |
+| **Total** | **1,547,355** | **1,671,513** | **3,218,868** | **5/5** |
+
+*Cost figures come from bead metadata (`tokens_impl`/`tokens_qa`) as recorded as of this release. `tokens_impl` is a best-effort manual estimate that isn't consistently recorded, and a bead's `tokens_qa` can keep growing later from review on a follow-up fix without retroactively updating a past release — treat these totals as a lower bound, not the release's full or final cost.*
+
+### ✨ Features
+
+- **Uploads by configured users publish on upload, with no per-upload rights questions** (`ugcportal-ho7j`, scope: upload) — https://github.com/eiriksf-capgemini/ugcportal/pull/249
+
+### 🐛 Fixes
+
+- **Configured-ness is read from User.configuredHandle, so a person removed from the array stays configured until an operator edits the database** (`ugcportal-lskg`, scope: upload) — https://github.com/eiriksf-capgemini/ugcportal/pull/251
+
+### 📝 Documentation
+
+- **Post-release sizing review: what actually predicts a bead's cost, and are we estimating the wrong variable** (`ugcportal-2hwe`, scope: process) — https://github.com/eiriksf-capgemini/ugcportal/pull/248
+- **v0.7.0 post-release review: process errors and rule violations observed during the build** (`ugcportal-fbng`, scope: process) — https://github.com/eiriksf-capgemini/ugcportal/pull/247
+
+### 🔧 Chores
+
+- **Remove August from CONFIGURED_USERS** (`ugcportal-m82q`, scope: auth) — https://github.com/eiriksf-capgemini/ugcportal/pull/250
+
 ## v0.7.0 - 2026-10-15
 
 ### 💰 Cost Summary
