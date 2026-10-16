@@ -1010,7 +1010,7 @@ export function outcomeOf(bead, prAnalyses, rounds) {
 //             model priced at the standard ratios; cost-performance-claims-
 //             v0.7.0 section 1.2 names two models where it overstates the
 //             cache-read part.
-//   "context" the old fields only: tokens_impl / tokens_qa, the agent's
+//   "context" no accepted cost_ite_* figure: tokens_impl / tokens_qa, the agent's
 //             context size at its last call (same document, section 1.2).
 //             Not cost, and printed with CONTEXT_LABEL.
 //
@@ -1072,19 +1072,28 @@ export function costUnitOf(meta = {}) {
  *          ctxEnd from the transcript instead -- the same quantity (section
  *          1.2). Summed over distinct agents: the value for tokens_impl/_qa.
  *   ite, calls = summed over every pass of every agent.
- * `complete` is false when any listed agent has no transcript row; then ite,
- * calls and ctx are all null, because a sum over the agents that do have one
- * is a partial figure, and over none it is a 0 that would read as a measured
- * zero. Write cost_note_* naming `missing` instead of any cost_ite_* key.
+ * `complete` is false when any listed agent has no transcript row, or --
+ * given the bead's current metadata and the side -- when the list does not
+ * cover what the bead already records (`uncoveredFigures`):
+ *   - an agent already in cost_agents_<side> that the list drops ("dropped <id>");
+ *   - for qa, any tokens_qa_rN whose tokens_qa_rN_agent is absent or not
+ *     in the list (a round recorded before agent ids were kept);
+ *   - a tokens_<side> recorded with no cost_agents_<side> at all.
+ * Then ite, calls and ctx are all null: a sum over the agents that have a
+ * transcript, or over only the newest agent, is partial, and over none it
+ * is a 0 that would read as a measured zero. Write cost_note_* naming
+ * `missing` / `uncoveredFigures` instead of any cost_ite_* key, and do not
+ * overwrite tokens_<side>.
  */
-export function agentCostFromPasses(rows, agentIds) {
+export function agentCostFromPasses(rows, agentIds, { meta = null, side = null } = {}) {
   const want = [...new Set(agentIds.filter(Boolean))];
   const byAgent = new Map(want.map((id) => [id, []]));
   for (const r of rows) if (byAgent.has(r.agentId)) byAgent.get(r.agentId).push(r);
   const missing = want.filter((id) => byAgent.get(id).length === 0);
   const passes = [...byAgent.values()].reduce((a, rs) => a + rs.length, 0);
-  const complete = want.length > 0 && missing.length === 0;
-  if (!complete) return { complete, agents: want.length, passes, missing, ite: null, calls: null, ctx: null };
+  const uncoveredFigures = meta ? uncoveredByAgents(meta, side, want) : [];
+  const complete = want.length > 0 && missing.length === 0 && uncoveredFigures.length === 0;
+  if (!complete) return { complete, agents: want.length, passes, missing, uncoveredFigures, ite: null, calls: null, ctx: null };
   let ite = 0, calls = 0, ctx = 0;
   for (const rs of byAgent.values()) {
     const sorted = rs.slice().sort((a, b) => a.pass - b.pass);
@@ -1092,12 +1101,59 @@ export function agentCostFromPasses(rows, agentIds) {
     ctx += notified.length >= sorted.length ? notified[notified.length - 1] : sorted[sorted.length - 1].ctxEnd;
     for (const r of sorted) { ite += r.ite; calls += r.calls; }
   }
-  return { complete, agents: want.length, passes, missing, ite, calls, ctx };
+  return { complete, agents: want.length, passes, missing, uncoveredFigures, ite, calls, ctx };
+}
+
+/** What `meta` already records for `side` that the agent list `ids` does not cover. */
+export function uncoveredByAgents(meta, side, ids) {
+  if (side !== "impl" && side !== "qa") throw new Error(`side must be impl or qa, got ${side}`);
+  const listed = new Set(ids);
+  const out = [];
+  const recorded = String(meta[`cost_agents_${side}`] ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+  for (const id of recorded) if (!listed.has(id)) out.push(`dropped ${id}`);
+  let rounds = [];
+  if (side === "qa") {
+    rounds = Object.keys(meta).map((k) => /^tokens_qa_r(\d+)$/.exec(k)?.[1]).filter(Boolean).sort((x, y) => Number(x) - Number(y));
+    for (const n of rounds) {
+      const agent = meta[`tokens_qa_r${n}_agent`];
+      if (!agent || !listed.has(String(agent).trim())) out.push(`r${n}`);
+    }
+  }
+  // A figure with neither an agent list nor per-round keys to check it against.
+  if (toInt(meta[`tokens_${side}`]) !== null && recorded.length === 0 && rounds.length === 0) {
+    out.push(`tokens_${side} recorded before cost_agents_${side}`);
+  }
+  return out;
 }
 
 export function formatAgentCost(c) {
-  if (!c.complete) return `INCOMPLETE agents=${c.agents} passes=${c.passes} missing=${c.missing.join(",") || "none"} -- write no cost_ite_*/cost_calls_*; set cost_note_* to "missing: ${c.missing.join(",")}"`;
-  return `ite=${c.ite} calls=${c.calls} ctx=${c.ctx} agents=${c.agents} passes=${c.passes} missing=none`;
+  if (!c.complete) {
+    const uncovered = c.uncoveredFigures ?? [];
+    const dropped = uncovered.filter((u) => u.startsWith("dropped ")).map((u) => u.slice(8));
+    const preRule = uncovered.filter((u) => !u.startsWith("dropped "));
+    const why = [
+      c.missing.length ? `missing: ${c.missing.join(",")}` : "",
+      preRule.length ? `pre-rule rounds without agent ids: ${preRule.join(", ")}` : "",
+      dropped.length ? `recorded agents dropped from the list: ${dropped.join(",")}` : "",
+    ].filter(Boolean).join("; ");
+    return `INCOMPLETE agents=${c.agents} passes=${c.passes} missing=${c.missing.join(",") || "none"} uncovered=${uncovered.join(",") || "none"} -- write no cost_ite_*/cost_calls_*, do not overwrite tokens_* from this; set cost_note_* to "${why || "no agents listed"}"`;
+  }
+  return `ite=${c.ite} calls=${c.calls} ctx=${c.ctx} agents=${c.agents} passes=${c.passes} missing=none uncovered=none`;
+}
+
+/**
+ * What CLAUDE.md's one-liner calls: `passesPath` is agent-pass-cost.mjs
+ * --json output, `ids` the comma-separated agent list, `beadPath` a saved
+ * `bd show <id> --json`, `side` impl or qa. Every argument is required, so
+ * the coverage check above cannot be skipped by leaving one out.
+ */
+export function runAgentCost(passesPath, ids, beadPath, side) {
+  if (!passesPath || !ids || !beadPath || !side) throw new Error("usage: runAgentCost(<passes.json>, <id,id>, <bd show --json file>, impl|qa)");
+  const rows = JSON.parse(fs.readFileSync(passesPath, "utf8"));
+  const shown = JSON.parse(fs.readFileSync(beadPath, "utf8"));
+  const bead = Array.isArray(shown) ? shown[0] : shown;
+  if (!bead || typeof bead !== "object") throw new Error(`${beadPath}: no bead in that file`);
+  return formatAgentCost(agentCostFromPasses(rows, ids.split(","), { meta: bead.metadata ?? {}, side }));
 }
 
 /** The unit label printed beside a bead's figures. */
@@ -1436,7 +1492,7 @@ export function renderReport(ctx) {
   const out = [];
   out.push(GENERATED_START);
   out.push("");
-  out.push(`_Generated ${generatedAt} by \`node scripts/release-cost-report.mjs\`; reviewer identity \`${reviewer ?? "unknown"}\`; ${prCount} PRs read via \`gh\`. Legend: \`~\` = the bead's own notes call this figure an estimate; \`(cr)\` = round count from the close reason (pre-marker PR); \`(!)\` = markers and close reason disagree, markers shown; \`rN:?\` = that round's verdict states no severity; "Lows (labels)" counts severity labels, a single \`LOW:\` label often covers several items, so it is a floor. qa/round is the QA figure divided by rounds, a crude mean (\`tokens_qa_rN\` is not read here). Unit (ugcportal-cii0): each bead is read in ONE unit — \`ITE (cost)\` from \`cost_ite_impl\`/\`cost_ite_qa\` (transcript input-token equivalents, scripts/agent-pass-cost.mjs), or \`${CONTEXT_LABEL}\` from \`tokens_impl\`/\`tokens_qa\` alone (the agent's final context size, docs/process/cost-performance-claims-v0.7.0-2026-10-16.md section 1.2); impl/qa totals, medians, and the top-five tables are ${CONTEXT_LABEL}; the tier tables carry both, ITE in its own three columns; ITE is totalled only in its own columns and rows, and the two are never added._`);
+  out.push(`_Generated ${generatedAt} by \`node scripts/release-cost-report.mjs\`; reviewer identity \`${reviewer ?? "unknown"}\`; ${prCount} PRs read via \`gh\`. Legend: \`~\` = the bead's own notes call this figure an estimate; \`(cr)\` = round count from the close reason (pre-marker PR); \`(!)\` = markers and close reason disagree, markers shown; \`rN:?\` = that round's verdict states no severity; "Lows (labels)" counts severity labels, a single \`LOW:\` label often covers several items, so it is a floor. qa/round is the QA figure divided by rounds, a crude mean (\`tokens_qa_rN\` is not read here). Unit (ugcportal-cii0): each bead is read in ONE unit — \`ITE (cost)\` from \`cost_ite_impl\`/\`cost_ite_qa\` (transcript input-token equivalents, scripts/agent-pass-cost.mjs), or \`${CONTEXT_LABEL}\` from \`tokens_impl\`/\`tokens_qa\` when the bead has no accepted \`cost_ite_*\` figure (the agent's final context size, docs/process/cost-performance-claims-v0.7.0-2026-10-16.md section 1.2); impl/qa totals, medians, and the top-five tables are ${CONTEXT_LABEL}; the tier tables carry both, ITE in its own three columns; ITE is totalled only in its own columns and rows, and the two are never added._`);
   out.push("");
   for (const version of releases) {
     const rows = rowsByRelease.get(version);

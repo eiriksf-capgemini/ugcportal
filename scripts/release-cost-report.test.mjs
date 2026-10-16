@@ -18,6 +18,7 @@
  * CSS custom property `--color-petrol-deep` later on the same line).
  */
 import fs from "node:fs";
+import os from "node:os";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -34,7 +35,9 @@ import {
   formatAgentCost,
   pct,
   renderReport,
+  runAgentCost,
   tierPerformance,
+  uncoveredByAgents,
   beadsAndPrsFromGitLog,
   classifySeverity,
   clusterByTime,
@@ -893,12 +896,56 @@ describe("agentCostFromPasses (ugcportal-cii0): the recording rule CLAUDE.md's o
     expect(none).toMatchObject({ complete: false, passes: 0, missing: ["gone1", "gone2"], ite: null, calls: null, ctx: null });
     const part = agentCostFromPasses([pass("a1", 1, 5, [5])], ["a1", "gone"]);
     expect(part).toMatchObject({ complete: false, missing: ["gone"], ite: null });
-    expect(formatAgentCost(none)).toMatch(/^INCOMPLETE .*missing=gone1,gone2 -- write no cost_ite_\*/);
+    expect(formatAgentCost(none)).toMatch(/^INCOMPLETE .*missing=gone1,gone2 uncovered=none -- write no cost_ite_\*/);
     expect(formatAgentCost(none)).not.toMatch(/ite=0/);
     expect(agentCostFromPasses([], [])).toMatchObject({ complete: false });
   });
 
+  describe("M2: the list must cover what the bead already records", () => {
+    const r2 = [pass("rev2", 1, 289000, [289552], 2511477, 101)];
+    it("a pre-rule tokens_qa_r1 with no agent id plus the current reviewer is INCOMPLETE, so tokens_qa is not overwritten", () => {
+      const meta = { tokens_qa: 231225, tokens_qa_r1: 231225 };
+      const c = agentCostFromPasses(r2, ["rev2"], { meta, side: "qa" });
+      expect(c).toMatchObject({ complete: false, missing: [], uncoveredFigures: ["r1"], ite: null, calls: null, ctx: null });
+      const line = formatAgentCost(c);
+      expect(line).toMatch(/^INCOMPLETE .*uncovered=r1 -- write no cost_ite_\*\/cost_calls_\*, do not overwrite tokens_\*/);
+      expect(line).toContain('"pre-rule rounds without agent ids: r1"');
+      expect(line).not.toMatch(/ctx=/);
+    });
+    it("6uc2's shape: six pre-rule rounds and only the newest reviewer listed is INCOMPLETE, not ctx=262550", () => {
+      const meta = { tokens_qa: 1450244, ...Object.fromEntries([231225, 289552, 261101, 179537, 226279, 262550].map((v, i) => [`tokens_qa_r${i + 1}`, v])) };
+      const c = agentCostFromPasses([pass("rev6", 1, 262000, [262550])], ["rev6"], { meta, side: "qa" });
+      expect(c).toMatchObject({ complete: false, ctx: null, uncoveredFigures: ["r1", "r2", "r3", "r4", "r5", "r6"] });
+    });
+    it("rounds whose agent ids are recorded and listed are covered", () => {
+      const meta = { tokens_qa: 231225, tokens_qa_r1: 231225, tokens_qa_r1_agent: "rev1", cost_agents_qa: "rev1" };
+      const rows = [pass("rev1", 1, 231000, [231225]), ...r2];
+      expect(agentCostFromPasses(rows, ["rev1", "rev2"], { meta, side: "qa" })).toMatchObject({ complete: true, ctx: 231225 + 289552, uncoveredFigures: [] });
+    });
+    it("dropping an agent cost_agents_* already lists is INCOMPLETE", () => {
+      expect(uncoveredByAgents({ cost_agents_qa: "rev1,rev2" }, "qa", ["rev2"])).toEqual(["dropped rev1"]);
+      expect(formatAgentCost(agentCostFromPasses(r2, ["rev2"], { meta: { cost_agents_qa: "rev1,rev2" }, side: "qa" }))).toContain('"recorded agents dropped from the list: rev1"');
+    });
+    it("impl side: a tokens_impl recorded before cost_agents_impl is INCOMPLETE; one with a covering list is not", () => {
+      expect(uncoveredByAgents({ tokens_impl: 437394 }, "impl", ["a1"])).toEqual(["tokens_impl recorded before cost_agents_impl"]);
+      expect(uncoveredByAgents({ tokens_impl: 437394, cost_agents_impl: "a1" }, "impl", ["a1"])).toEqual([]);
+      expect(uncoveredByAgents({}, "impl", ["a1"])).toEqual([]);
+      expect(() => uncoveredByAgents({}, "both", ["a1"])).toThrow(/side/);
+    });
+    it("runAgentCost (the CLAUDE.md one-liner) reads the bead file and applies the check; every argument is required", () => {
+      const dir = fs.mkdtempSync(`${os.tmpdir()}/cii0-`);
+      const passes = `${dir}/passes.json`, bead = `${dir}/bead.json`;
+      fs.writeFileSync(passes, JSON.stringify(r2));
+      fs.writeFileSync(bead, JSON.stringify([{ id: "x", metadata: { tokens_qa: 231225, tokens_qa_r1: 231225 } }]));
+      expect(runAgentCost(passes, "rev2", bead, "qa")).toMatch(/^INCOMPLETE .*uncovered=r1/);
+      fs.writeFileSync(bead, JSON.stringify([{ id: "x", metadata: {} }]));
+      expect(runAgentCost(passes, "rev2", bead, "qa")).toBe("ite=2511477 calls=101 ctx=289552 agents=1 passes=1 missing=none uncovered=none");
+      expect(() => runAgentCost(passes, "rev2")).toThrow(/usage/);
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+  });
+
   it("a complete result prints every figure", () => {
-    expect(formatAgentCost(agentCostFromPasses([pass("a1", 1, 5, [7], 12, 3)], ["a1"]))).toBe("ite=12 calls=3 ctx=7 agents=1 passes=1 missing=none");
+    expect(formatAgentCost(agentCostFromPasses([pass("a1", 1, 5, [7], 12, 3)], ["a1"]))).toBe("ite=12 calls=3 ctx=7 agents=1 passes=1 missing=none uncovered=none");
   });
 });
