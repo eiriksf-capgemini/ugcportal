@@ -98,14 +98,26 @@ This header, the optional Cost Summary from step 5a immediately below, and the p
 
 ## 5a. Cost summary
 
-Add a per-type rollup of the same `tokens_impl`/`tokens_qa` bead metadata described in CLAUDE.md > "Token cost metadata" — but only if **at least one** included issue has either field set. If none do, skip this whole step (an all-empty table is noise, not a summary); say so explicitly in your step 10 report either way.
+Add a per-type rollup of the cost metadata described in CLAUDE.md > "Token cost metadata" — but only if **at least one** included issue has a `cost_ite_impl`, `cost_ite_qa`, `tokens_impl` or `tokens_qa` field set. If none do, skip this whole step (an all-empty table is noise, not a summary); say so explicitly in your step 10 report either way.
 
-Reuse the exact same per-`cc_type` sections step 5 already grouped — same buckets, same order, same membership — rather than recomputing or restating the bucketing rules here. Render one row per section, regardless of whether any issue in it has cost data (a section with zero data still gets a row of dashes, so the absence is visible rather than silently dropped). For each section: sum `tokens_impl` and `tokens_qa` separately across its issues, and set `Total = Impl + QA` for that row. A missing `tokens_impl`/`tokens_qa` field contributes 0 to its sum; if a value is present but isn't a plain integer, treat it as missing too (don't guess or round) and flag the malformed value in your step 10 report. Separately, count how many of the section's issues have *either* field set as a "Beads with data" fraction (numerator = issues with data, denominator = the section's total issue count from step 5).
+**One unit per bead, never added across units (ugcportal-cii0).** Those fields come in two units: `cost_ite_*` is transcript-derived cost in input-token equivalents, `tokens_*` is the agent's final context size, not its cost (`docs/process/cost-performance-claims-v0.7.0-2026-10-16.md` section 1.2). Put each issue in exactly one of two tables: the **ITE** table if it has any `cost_ite_*` field (its `tokens_*` are then not read at all), otherwise the **context-size** table if it has any `tokens_*` field. A `tokens_impl` on an issue with `tokens_impl_convention=summed-snapshots` is a legacy sum of one agent's cumulative snapshots: treat it as missing and name the issue in your step 10 report. The same rule is implemented, and tested, as `costUnitOf` in `scripts/release-cost-report.mjs`; when the two disagree, that code is the reference.
 
-Add a final **Total** row: `Total = Impl + QA` there too, and its Impl/QA/Total/"Beads with data" cells are each the straight sum of that column down the per-section rows above (numerator-with-numerator, denominator-with-denominator for the fraction) — never inferred by inspecting whether other columns are zero.
+In each table, reuse the exact same per-`cc_type` sections step 5 already grouped — same buckets, same order, same membership — rather than recomputing or restating the bucketing rules here. Render one row per section, regardless of whether any issue in it has data in that table's unit (a section with zero data still gets a row of dashes, so the absence is visible rather than silently dropped). For each section: sum that table's Impl field and QA field separately across the section's issues *in that table*, and set `Total = Impl + QA` for that row. A missing field contributes 0 to its sum; if a value is present but isn't a plain integer, treat it as missing too (don't guess or round) and flag the malformed value in your step 10 report. Separately, count "Beads with data" as a fraction: numerator = the section's issues placed in that table, denominator = the section's total issue count from step 5.
+
+Add a final **Total** row to each table: `Total = Impl + QA` there too, and its Impl/QA/Total/"Beads with data" cells are each the straight sum of that column down the per-section rows above (numerator-with-numerator, denominator-with-denominator for the fraction) — never inferred by inspecting whether other columns are zero. Never add a figure from one table to a figure from the other, in a cell, a total or the prose around them. Omit a table whose every row would be dashes.
 
 ```markdown
 ### 💰 Cost Summary
+
+**Transcript cost (input-token equivalents)**
+
+| Type | Impl | QA | Total | Beads with data |
+|---|---:|---:|---:|:---:|
+| ✨ Features | 30,018,329 | 11,063,233 | 41,081,562 | 1/4 |
+| 🔧 Chores | — | — | — | 0/1 |
+| **Total** | **30,018,329** | **11,063,233** | **41,081,562** | **1/5** |
+
+**Context-size, not cost** (beads with only `tokens_impl`/`tokens_qa`)
 
 | Type | Impl | QA | Total | Beads with data |
 |---|---:|---:|---:|:---:|
@@ -113,10 +125,10 @@ Add a final **Total** row: `Total = Impl + QA` there too, and its Impl/QA/Total/
 | 🔧 Chores | — | 129,674 | 129,674 | 1/1 |
 | **Total** | **12,000** | **366,125** | **378,125** | **3/5** |
 
-*Cost figures come from bead metadata (`tokens_impl`/`tokens_qa`) as recorded as of this release. `tokens_impl` is a best-effort manual estimate that isn't consistently recorded, and a bead's `tokens_qa` can keep growing later from review on a follow-up fix without retroactively updating a past release — treat these totals as a lower bound, not the release's full or final cost.*
+*Transcript cost is priced from local agent transcripts by `scripts/agent-pass-cost.mjs` in input-token equivalents, proportional to price for one model and a relative measure across models; it omits work done inline in an orchestrator session. The context-size table is each agent's final context window, not what it cost, and is not comparable with the first table or summable with it. A bead's figures can keep growing later from review on a follow-up fix without retroactively updating a past release — treat both as a lower bound, not the release's full or final cost.*
 ```
 
-Use `—` rather than `0` for any Impl/QA/Total cell — including in the Total row — where the underlying sum is zero only because nothing contributing to it has the field set, so a reader doesn't mistake "no data" for "confirmed zero cost." Comma-format numbers for readability. Always keep the caveat line — it's what stops a partial figure (which this will usually be, until `tokens_impl` is recorded more consistently) from being misread as the release's true or final cost.
+Use `—` rather than `0` for any Impl/QA/Total cell — including in the Total row — where the underlying sum is zero only because nothing contributing to it has the field set, so a reader doesn't mistake "no data" for "confirmed zero cost." Comma-format numbers for readability. Always keep the caveat line — it's what stops a partial figure, or a context-size figure, from being misread as the release's true or final cost.
 
 ## 6. Write it out
 
@@ -268,6 +280,6 @@ Do this only after confirming the release PR from step 8 is merged (`gh pr view 
 
 ## 10. Report back
 
-State the computed version, the bump reason (which issue(s) triggered feat/major), step 1's three narrowing figures (`A` closed / `B` unreleased / `C` verified-shipped), step 7's read-back fraction, how many issues were included, whether step 5a's Cost Summary was included or skipped (and why, if skipped, or note any malformed `tokens_impl`/`tokens_qa` value it ignored), the PR URL, and the GitHub Release URL (or why it was skipped/deferred).
+State the computed version, the bump reason (which issue(s) triggered feat/major), step 1's three narrowing figures (`A` closed / `B` unreleased / `C` verified-shipped), step 7's read-back fraction, how many issues were included, whether step 5a's Cost Summary was included or skipped (and why, if skipped, or note any malformed `tokens_impl`/`tokens_qa`/`cost_ite_*` value it ignored, and any `summed-snapshots` value it treated as missing), the PR URL, and the GitHub Release URL (or why it was skipped/deferred).
 
 Then step 7a's result, which is reported whether or not it filed anything: the retrospective document read and how many recommendations it held, how many were already converted, every bead id filed, and every recommendation deliberately not filed with its reason. If 7a was skipped or stopped, say which branch of its steps 1 or 2 caused it — a retrospective silently going unread is the failure this step exists to prevent, so "nothing to report" is never an acceptable rendering of it.

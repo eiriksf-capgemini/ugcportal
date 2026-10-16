@@ -21,9 +21,16 @@ import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
+  CONTEXT_LABEL,
   GENERATED_END,
   GENERATED_START,
+  SUMMED_SNAPSHOTS,
   addendumRound,
+  aggregate,
+  buildRows,
+  costUnitOf,
+  fmt,
+  renderReport,
   beadsAndPrsFromGitLog,
   classifySeverity,
   clusterByTime,
@@ -726,5 +733,64 @@ describe("spliceGenerated", () => {
     const out = spliceGenerated(existing, `${GENERATED_START}\nnew\n${GENERATED_END}`);
     expect(out).toBe(`# Title\n\nprose\n\n${GENERATED_START}\nnew\n${GENERATED_END}\n\nmore prose\n`);
     expect(spliceGenerated("# Title\n", `${GENERATED_START}\nnew\n${GENERATED_END}`)).toBe(`# Title\n\n${GENERATED_START}\nnew\n${GENERATED_END}\n`);
+  });
+});
+
+describe("cost unit (ugcportal-cii0): one unit per bead, context-size never added to transcript cost", () => {
+  // Three fixture beads, one of each kind. The ITE bead also carries the old
+  // fields (as ugcportal-6uc2 does after its re-tag), so a reader that mixed
+  // units would have something to mix. Figures are 6uc2's and ei7's own.
+  const ite = { id: "ugcportal-aaa1", title: "ITE bead", metadata: { cc_type: "feat", cost_ite_impl: 30018329, cost_calls_impl: 530, cost_ite_qa: 11063233, cost_calls_qa: 471, tokens_impl: 744413, tokens_qa: 1450244 } };
+  const ctx = { id: "ugcportal-aaa2", title: "context-only bead", metadata: { cc_type: "feat", tokens_impl: 222680, tokens_qa: 521004 } };
+  const summed = { id: "ugcportal-aaa3", title: "flagged summed bead", metadata: { cc_type: "fix", tokens_impl: 4410532, tokens_impl_convention: SUMMED_SNAPSHOTS, tokens_qa: 1000 } };
+  const beads = [ite, ctx, summed];
+  const release = { version: "v9.9.9", ids: beads.map((b) => b.id), entries: new Map(beads.map((b) => [b.id, { title: b.title, type: "Features" }])) };
+  const rows = buildRows(release, new Map(beads.map((b) => [b.id, b])), new Map());
+  const row = (id) => rows.find((r) => r.id === id);
+  const report = renderReport({ releases: ["v9.9.9"], rowsByRelease: new Map([["v9.9.9", rows]]), membershipChecks: [], unmerged: [], generatedAt: "2026-10-16", reviewer: "x", prCount: 0 });
+  const tableLine = (short) => report.split("\n").find((l) => l.startsWith(`| \`${short}\` |`));
+
+  it("costUnitOf reads cost_ite_* when present and ignores tokens_* on that bead", () => {
+    expect(costUnitOf(ite.metadata)).toEqual({ unit: "ite", impl: 30018329, qa: 11063233, implSummedExcluded: false });
+    expect(costUnitOf(ctx.metadata)).toEqual({ unit: "context", impl: 222680, qa: 521004, implSummedExcluded: false });
+    expect(costUnitOf({})).toEqual({ unit: null, impl: null, qa: null, implSummedExcluded: false });
+  });
+
+  it("K1: a resumed agent notified 100k, 150k, 180k is recorded as 180k and read at that value, not 430k", () => {
+    expect(costUnitOf({ tokens_impl: "180000", tokens_impl_convention: "last-per-agent" })).toMatchObject({ unit: "context", impl: 180000 });
+  });
+
+  it("K3: a bead flagged summed-snapshots is not counted at its summed tokens_impl", () => {
+    expect(costUnitOf(summed.metadata)).toEqual({ unit: "context", impl: null, qa: 1000, implSummedExcluded: true });
+    expect(row("ugcportal-aaa3").impl).toBeNull();
+    expect(report).not.toContain(fmt(4410532));
+    expect(tableLine("aaa3")).toContain("excluded (summed snapshots)");
+    expect(report).toContain(`\`tokens_impl_convention=${SUMMED_SNAPSHOTS}\` (1): aaa3`);
+  });
+
+  it("buildRows fills exactly one unit's pair per row", () => {
+    expect(row("ugcportal-aaa1")).toMatchObject({ unit: "ite", impl: null, qa: null, iteImpl: 30018329, iteQa: 11063233, iteTotal: 41081562 });
+    expect(row("ugcportal-aaa2")).toMatchObject({ unit: "context", impl: 222680, qa: 521004, iteImpl: null, iteQa: null, iteTotal: null });
+  });
+
+  it("aggregate sums each unit separately: context totals exclude the ITE bead's old fields, ITE totals exclude context beads", () => {
+    const a = aggregate(rows);
+    expect(a.implTotal).toBe(222680);
+    expect(a.qaTotal).toBe(521004 + 1000);
+    expect(a.grandTotal).toBe(222680 + 521004 + 1000);
+    expect(a.iteGrandTotal).toBe(30018329 + 11063233);
+    expect(a).toMatchObject({ nIte: 1, nContext: 2, nSummedExcluded: 1, nAny: 3 });
+  });
+
+  it("guardrail: the old-field bead is labelled context-size, not cost; the ITE bead is not", () => {
+    expect(tableLine("aaa2")).toContain(`| ${CONTEXT_LABEL} |`);
+    expect(tableLine("aaa1")).toContain("| ITE (cost) |");
+    expect(tableLine("aaa1")).not.toContain(CONTEXT_LABEL);
+    // The ITE bead's own tokens_* were never read, and no printed figure is a cross-unit sum.
+    expect(report).not.toContain(fmt(744413));
+    expect(report).not.toContain(fmt(1450244));
+    expect(report).not.toContain(fmt(30018329 + 11063233 + 222680 + 521004 + 1000));
+    expect(report).toContain(`| Grand total (context-size, not cost) | ${fmt(744684)} |`);
+    expect(report).toContain(`| ITE total, impl / qa / both (transcript cost) | ${fmt(30018329)} / ${fmt(11063233)} / ${fmt(41081562)} |`);
   });
 });

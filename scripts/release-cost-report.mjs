@@ -52,6 +52,10 @@
  * marks both. Plain "chain approx" sentences do not mark anything -- they
  * are about the round chain, not a cost.
  *
+ * Cost unit (ugcportal-cii0): a bead is read in exactly one unit, transcript
+ * cost (cost_ite_*) when it has one, else the old tokens_* context-size
+ * figures, labelled "context-size, not cost"; see costUnitOf.
+ *
  * Per-round review cost is NOT recorded anywhere: tokens_qa accumulates
  * across rounds on the bead. The per-round column is tokens_qa / rounds, a
  * crude mean, and is labelled as such.
@@ -989,6 +993,45 @@ export function outcomeOf(bead, prAnalyses, rounds) {
   return "merged";
 }
 
+// --- cost unit (ugcportal-cii0) -------------------------------------------
+//
+// A bead carries its cost in exactly ONE of two units, and this is the one
+// place that decides which (CLAUDE.md > "Token cost metadata"):
+//
+//   "ite"     transcript-derived cost: cost_ite_impl / cost_ite_qa, input-token
+//             equivalents summed over every API call of every agent, from
+//             scripts/agent-pass-cost.mjs. Proportional to price.
+//   "context" the old fields only: tokens_impl / tokens_qa, the agent's
+//             context size at its last call (cost-performance-claims-v0.7.0
+//             section 1.2). Not cost, and printed with CONTEXT_LABEL.
+//
+// A bead with any cost_ite_* key is read in "ite" and its tokens_* are not
+// read at all, so no row and no total ever adds one unit to the other.
+// tokens_impl_convention=summed-snapshots flags a tokens_impl that is several
+// cumulative context snapshots of one resumed agent added up; it is not
+// counted (impl reads as null) and the bead is listed under Data gaps.
+
+export const CONTEXT_LABEL = "context-size, not cost";
+export const SUMMED_SNAPSHOTS = "summed-snapshots";
+
+export function costUnitOf(meta = {}) {
+  const iteImpl = toInt(meta.cost_ite_impl);
+  const iteQa = toInt(meta.cost_ite_qa);
+  if (iteImpl !== null || iteQa !== null) return { unit: "ite", impl: iteImpl, qa: iteQa, implSummedExcluded: false };
+  const ctxImpl = toInt(meta.tokens_impl);
+  const ctxQa = toInt(meta.tokens_qa);
+  if (ctxImpl === null && ctxQa === null) return { unit: null, impl: null, qa: null, implSummedExcluded: false };
+  const summed = meta.tokens_impl_convention === SUMMED_SNAPSHOTS && ctxImpl !== null;
+  return { unit: "context", impl: summed ? null : ctxImpl, qa: ctxQa, implSummedExcluded: summed };
+}
+
+/** The unit label printed beside a bead's figures. */
+export function unitLabel(unit) {
+  if (unit === "ite") return "ITE (cost)";
+  if (unit === "context") return CONTEXT_LABEL;
+  return "—";
+}
+
 export function buildRows(release, beadsById, prAnalysesByNumber) {
   const rows = [];
   for (const id of release.ids) {
@@ -998,8 +1041,14 @@ export function buildRows(release, beadsById, prAnalysesByNumber) {
     const prs = parsePrs(meta.prs);
     const prAnalyses = prs.map((n) => prAnalysesByNumber.get(n)).filter(Boolean);
     const est = estimateFlags(`${bead?.notes ?? ""}\n${bead?.close_reason ?? ""}`);
-    const impl = toInt(meta.tokens_impl);
-    const qa = toInt(meta.tokens_qa);
+    // One unit per bead: `impl`/`qa` hold the context-size figures and
+    // `iteImpl`/`iteQa` the transcript cost, and a row fills only one pair,
+    // so every existing sum below stays within its unit by construction.
+    const cost = costUnitOf(meta);
+    const impl = cost.unit === "context" ? cost.impl : null;
+    const qa = cost.unit === "context" ? cost.qa : null;
+    const iteImpl = cost.unit === "ite" ? cost.impl : null;
+    const iteQa = cost.unit === "ite" ? cost.qa : null;
     const markerRounds = prAnalyses.filter((p) => p.rounds.length > 0);
     const closeRounds = parseRoundsFromCloseReason(bead?.close_reason ?? "");
     let rounds = null;
@@ -1027,8 +1076,13 @@ export function buildRows(release, beadsById, prAnalysesByNumber) {
       tier: tierOf(bead ?? {}),
       effort: meta.model_effort ?? null,
       modelWhy: meta.model_why ?? null,
+      unit: cost.unit,
+      implSummedExcluded: cost.implSummedExcluded,
       impl,
       qa,
+      iteImpl,
+      iteQa,
+      iteTotal: iteImpl === null && iteQa === null ? null : (iteImpl ?? 0) + (iteQa ?? 0),
       implEstimated: est.impl,
       qaEstimated: est.qa,
       estimateReasons: est.reasons,
@@ -1077,7 +1131,15 @@ export function aggregate(rows) {
     n: rows.length,
     nImpl: impl.length,
     nQa: qa.length,
-    nAny: rows.filter((r) => r.impl !== null || r.qa !== null).length,
+    nAny: rows.filter((r) => r.impl !== null || r.qa !== null || r.iteTotal != null).length,
+    // Transcript cost (ITE), summed only over rows read in that unit; the
+    // impl/qa/grand totals above and below are context-size only (cii0).
+    nIte: rows.filter((r) => r.iteTotal != null).length,
+    iteImplTotal: sum(rows.map((r) => r.iteImpl ?? null)),
+    iteQaTotal: sum(rows.map((r) => r.iteQa ?? null)),
+    iteGrandTotal: sum(rows.map((r) => r.iteImpl ?? null)) + sum(rows.map((r) => r.iteQa ?? null)),
+    nContext: rows.filter((r) => r.unit === "context").length,
+    nSummedExcluded: rows.filter((r) => r.implSummedExcluded).length,
     implTotal: sum(impl),
     qaTotal: sum(qa),
     grandTotal: sum(impl) + sum(qa),
@@ -1142,18 +1204,21 @@ function mdTable(headers, rows) {
 }
 
 function renderReleaseTable(rows) {
-  const headers = ["Bead", "Type", "Scope", "Tier/effort", "tokens_impl", "tokens_qa", "Total", "PRs", "Rounds", "Chain", "Mediums by round", "Lows (labels)", "qa/round", "Outcome (heuristic)"];
+  const headers = ["Bead", "Type", "Scope", "Tier/effort", "Impl", "QA", "Total", "Unit", "PRs", "Rounds", "Chain", "Mediums by round", "Lows (labels)", "qa/round", "Outcome (heuristic)"];
+  // Rows are ranked within their unit (ITE first), never across units.
+  const unitRank = (r) => (r.unit === "ite" ? 0 : r.unit === "context" ? 1 : 2);
   const body = rows
     .slice()
-    .sort((a, b) => (b.total ?? -1) - (a.total ?? -1))
+    .sort((a, b) => unitRank(a) - unitRank(b) || ((b.unit === "ite" ? b.iteTotal : b.total) ?? -1) - ((a.unit === "ite" ? a.iteTotal : a.total) ?? -1))
     .map((r) => [
       `\`${r.id.replace("ugcportal-", "")}\``,
       r.ccType ?? "—",
       r.scope ?? "—",
       r.tier ? `${r.tier}/${r.effort ?? "?"}` : "—",
-      fmtTokens(r.impl, r.implEstimated),
-      fmtTokens(r.qa, r.qaEstimated),
-      fmtTokens(r.total, r.implEstimated || r.qaEstimated),
+      r.unit === "ite" ? fmt(r.iteImpl) : r.implSummedExcluded ? "excluded (summed snapshots)" : fmtTokens(r.impl, r.implEstimated),
+      r.unit === "ite" ? fmt(r.iteQa) : fmtTokens(r.qa, r.qaEstimated),
+      r.unit === "ite" ? fmt(r.iteTotal) : fmtTokens(r.total, r.implEstimated || r.qaEstimated),
+      unitLabel(r.unit),
       r.prs.length ? r.prs.map((n) => `#${n}`).join(", ") : "—",
       r.rounds === null ? "—" : `${r.rounds}${r.roundsSource === "close reason" ? " (cr)" : r.roundsSource.startsWith("markers (") ? " (!)" : ""}`,
       r.chain,
@@ -1166,7 +1231,7 @@ function renderReleaseTable(rows) {
 }
 
 function renderAggregateTable(name, rows) {
-  const headers = ["Group", "Beads", "with impl", "with qa", "impl total", "qa total", "Total", "impl median", "qa median", "Rounds median (n)", "At cap", "Mediums stated"];
+  const headers = ["Group", "Beads", "with impl", "with qa", "impl total", "qa total", "Total", "impl median", "qa median", "ITE total (beads)", "Rounds median (n)", "At cap", "Mediums stated"];
   const line = (label, agg) => [
     label,
     String(agg.n),
@@ -1177,6 +1242,7 @@ function renderAggregateTable(name, rows) {
     fmt(agg.grandTotal),
     fmt(agg.implMedian),
     fmt(agg.qaMedian),
+    agg.nIte ? `${fmt(agg.iteGrandTotal)} (${agg.nIte})` : "—",
     `${fmt(agg.roundsMedian)} (${agg.roundsN})`,
     String(agg.capCount),
     String(agg.mediums),
@@ -1246,8 +1312,8 @@ function renderMembershipChecks(checks) {
 function renderDataGaps(rowsByRelease, prAnalysesByNumber, unmerged) {
   const lines = [];
   for (const [version, rows] of rowsByRelease) {
-    const noImpl = rows.filter((r) => r.impl === null).map((r) => r.id.replace("ugcportal-", ""));
-    const noQa = rows.filter((r) => r.qa === null).map((r) => r.id.replace("ugcportal-", ""));
+    const noImpl = rows.filter((r) => r.impl === null && r.iteImpl == null && !r.implSummedExcluded).map((r) => r.id.replace("ugcportal-", ""));
+    const noQa = rows.filter((r) => r.qa === null && r.iteQa == null).map((r) => r.id.replace("ugcportal-", ""));
     const noRounds = rows.filter((r) => r.prs.length && r.rounds === null).map((r) => r.id.replace("ugcportal-", ""));
     const noPr = rows.filter((r) => !r.prs.length).map((r) => r.id.replace("ugcportal-", ""));
     const crRounds = rows.filter((r) => r.roundsSource === "close reason").map((r) => r.id.replace("ugcportal-", ""));
@@ -1258,6 +1324,8 @@ function renderDataGaps(rowsByRelease, prAnalysesByNumber, unmerged) {
     lines.push(`- **${version}**`);
     lines.push(`  - no \`tokens_impl\` (${noImpl.length}): ${noImpl.join(", ") || "—"}`);
     lines.push(`  - no \`tokens_qa\` (${noQa.length}): ${noQa.join(", ") || "—"}`);
+    const summedOut = rows.filter((r) => r.implSummedExcluded).map((r) => r.id.replace("ugcportal-", ""));
+    if (summedOut.length) lines.push(`  - \`tokens_impl\` not counted, flagged \`tokens_impl_convention=${SUMMED_SNAPSHOTS}\` (${summedOut.length}): ${summedOut.join(", ")}`);
     lines.push(`  - no PR in \`prs\` (${noPr.length}): ${noPr.join(", ") || "—"}`);
     lines.push(`  - PR but no round count from markers or close reason (${noRounds.length}): ${noRounds.join(", ") || "—"}`);
     lines.push(`  - round count from the close reason, not markers (${crRounds.length}): ${crRounds.join(", ") || "—"}`);
@@ -1276,7 +1344,7 @@ export function renderReport(ctx) {
   const out = [];
   out.push(GENERATED_START);
   out.push("");
-  out.push(`_Generated ${generatedAt} by \`node scripts/release-cost-report.mjs\`; reviewer identity \`${reviewer ?? "unknown"}\`; ${prCount} PRs read via \`gh\`. Legend: \`~\` = the bead's own notes call this figure an estimate; \`(cr)\` = round count from the close reason (pre-marker PR); \`(!)\` = markers and close reason disagree, markers shown; \`rN:?\` = that round's verdict states no severity; "Lows (labels)" counts severity labels, a single \`LOW:\` label often covers several items, so it is a floor. qa/round is tokens_qa divided by rounds, a crude mean, because per-round cost is not recorded._`);
+  out.push(`_Generated ${generatedAt} by \`node scripts/release-cost-report.mjs\`; reviewer identity \`${reviewer ?? "unknown"}\`; ${prCount} PRs read via \`gh\`. Legend: \`~\` = the bead's own notes call this figure an estimate; \`(cr)\` = round count from the close reason (pre-marker PR); \`(!)\` = markers and close reason disagree, markers shown; \`rN:?\` = that round's verdict states no severity; "Lows (labels)" counts severity labels, a single \`LOW:\` label often covers several items, so it is a floor. qa/round is the QA figure divided by rounds, a crude mean, because per-round cost is not recorded. Unit (ugcportal-cii0): each bead is read in ONE unit — \`ITE (cost)\` from \`cost_ite_impl\`/\`cost_ite_qa\` (transcript input-token equivalents, scripts/agent-pass-cost.mjs), or \`${CONTEXT_LABEL}\` from \`tokens_impl\`/\`tokens_qa\` alone (the agent's final context size, docs/process/cost-performance-claims-v0.7.0-2026-10-16.md section 1.2); impl/qa totals, medians, the tier tables and the top-five tables are ${CONTEXT_LABEL}, and ITE is totalled only in its own column and rows; the two are never added._`);
   out.push("");
   for (const version of releases) {
     const rows = rowsByRelease.get(version);
@@ -1297,9 +1365,12 @@ export function renderReport(ctx) {
     ["Beads in the CHANGELOG section", ...aggs.map((a) => String(a.n))],
     ["Beads with any token figure", ...aggs.map((a) => `${a.nAny} (${Math.round((100 * a.nAny) / a.n)}%)`)],
     ["Beads with tokens_impl / tokens_qa", ...aggs.map((a) => `${a.nImpl} / ${a.nQa}`)],
-    ["tokens_impl total (lower bound)", ...aggs.map((a) => fmt(a.implTotal))],
-    ["tokens_qa total (lower bound)", ...aggs.map((a) => fmt(a.qaTotal))],
-    ["Grand total (lower bound)", ...aggs.map((a) => fmt(a.grandTotal))],
+    ["tokens_impl total (context-size, not cost)", ...aggs.map((a) => fmt(a.implTotal))],
+    ["tokens_qa total (context-size, not cost)", ...aggs.map((a) => fmt(a.qaTotal))],
+    ["Grand total (context-size, not cost)", ...aggs.map((a) => fmt(a.grandTotal))],
+    ["Beads read as transcript cost (ITE) / as context-size", ...aggs.map((a) => `${a.nIte} / ${a.nContext}`)],
+    ["ITE total, impl / qa / both (transcript cost)", ...aggs.map((a) => (a.nIte ? `${fmt(a.iteImplTotal)} / ${fmt(a.iteQaTotal)} / ${fmt(a.iteGrandTotal)}` : "—"))],
+    ["tokens_impl excluded as summed snapshots", ...aggs.map((a) => String(a.nSummedExcluded))],
     ["tokens_impl median (beads with a figure)", ...aggs.map((a) => fmt(a.implMedian))],
     ["tokens_qa median (beads with a figure)", ...aggs.map((a) => fmt(a.qaMedian))],
     ["Review share of recorded cost", ...aggs.map((a) => `${Math.round((100 * a.qaTotal) / a.grandTotal)}%`)],
@@ -1322,7 +1393,7 @@ export function renderReport(ctx) {
   out.push(renderTierTable(releases.flatMap((v) => rowsByRelease.get(v))));
   out.push("");
   for (const version of releases) {
-    out.push(`### ${version}: five most expensive beads (recorded cost, lower bound)`);
+    out.push(`### ${version}: five most expensive beads (${CONTEXT_LABEL})`);
     out.push("");
     out.push(renderTopTable(rowsByRelease.get(version)));
     out.push("");
