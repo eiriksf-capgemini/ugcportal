@@ -251,6 +251,51 @@ export function recordedPrsOf(bead) {
  */
 
 /**
+ * GitHub labels that mean "reviewed clean, stopped for a human merge", and
+ * bead labels that mean "waiting on a human". Defaults only: buildAttention
+ * takes both as parameters so they can move into per-repo config.
+ */
+export const HUMAN_WAIT_PR_LABELS = ["needs-human-merge"];
+export const HUMAN_WAIT_BEAD_LABELS = ["stalled-on-human", "human-only"];
+
+/** Label names of a PR ({name} objects from gh) or a bead (strings from bd). */
+function labelNames(x) {
+  return (x?.labels ?? []).map((l) => (typeof l === "string" ? l : l?.name)).filter(Boolean);
+}
+
+/** The first of `wanted` that `x` carries, or null. */
+export function humanWaitLabel(x, wanted) {
+  return labelNames(x).find((l) => wanted.includes(l)) ?? null;
+}
+
+/**
+ * Open (not closed) beads from the in-progress, ready and blocked lists,
+ * each once. These are the beads the dashboard can see; a bead outside all
+ * three (deferred, say) is not fetched and so not checked; the printed
+ * sentence names the lists it covers (humanWaitChecked).
+ * @param {any[][]} lists
+ */
+export function uniqueOpenBeads(...lists) {
+  const seen = new Map();
+  for (const b of lists.flat()) if (b?.id && b.status !== "closed" && !seen.has(b.id)) seen.set(b.id, b);
+  return [...seen.values()];
+}
+
+/**
+ * The sentence that makes a zero visible: how many PRs and beads the
+ * human-wait rules actually looked at. A source that is down is named as
+ * unavailable instead of counted as 0 (dev-dashboard.test.mjs, K3 test).
+ * @param {{ prs: any[], beads: any[], prsUp: boolean, beadsUp: boolean }} a
+ */
+export function humanWaitChecked({ prs, beads, prsUp, beadsUp }) {
+  const where = "beads from the in_progress, ready and blocked lists";
+  if (prsUp && beadsUp) return `${plural(prs.length, "PR")} and ${plural(beads.length, "bead")} checked for human-wait labels (${where})`;
+  if (prsUp) return `${plural(prs.length, "PR")} checked for human-wait labels; beads unavailable (bd down)`;
+  if (beadsUp) return `PRs unavailable (gh down); ${plural(beads.length, "bead")} checked for human-wait labels (${where})`;
+  return "PRs unavailable (gh down); beads unavailable (bd down); nothing checked for human-wait labels";
+}
+
+/**
  * Everything that needs a human, most urgent first.
  * @param {object} args
  * @param {string} args.prefix bead id prefix, e.g. "ugcportal"
@@ -258,9 +303,23 @@ export function recordedPrsOf(bead) {
  * @param {any[]} args.currentItems
  * @param {Record<string, {ok: boolean, error?: string}>} args.sources
  * @param {Date} args.now
+ * @param {any[]} [args.prs] open PRs, for the human-wait rule
+ * @param {any[]} [args.beads] open beads (see uniqueOpenBeads), for the human-wait rule
+ * @param {string[]} [args.humanWaitPrLabels]
+ * @param {string[]} [args.humanWaitBeadLabels]
  * @returns {Attention[]}
  */
-export function buildAttention({ prefix, joined, currentItems, sources, now }) {
+export function buildAttention({
+  prefix,
+  joined,
+  currentItems,
+  sources,
+  now,
+  prs = [],
+  beads = [],
+  humanWaitPrLabels = HUMAN_WAIT_PR_LABELS,
+  humanWaitBeadLabels = HUMAN_WAIT_BEAD_LABELS,
+}) {
   /** @type {Attention[]} */
   const out = [];
   const add = (label, text, extra = {}) => out.push({ label, text, severity: "warn", ...extra });
@@ -279,6 +338,19 @@ export function buildAttention({ prefix, joined, currentItems, sources, now }) {
   for (const item of currentItems) {
     const n = (item.attention?.length ?? 0) + (item.possible_human_obligations?.length ?? 0);
     if (n > 0) add("Agent waiting", `${item.label ?? item.cwd} has ${plural(n, "item")} needing you`, { severity: "bad" });
+  }
+  // Human-wait rule 1. Rests on prs only: with prs down `prs` is [], which
+  // would read as "no PR is waiting", so it is skipped and the "Source down"
+  // item above is what the page shows instead.
+  for (const pr of up("prs") ? prs : []) {
+    const label = humanWaitLabel(pr, humanWaitPrLabels);
+    if (!label) continue;
+    const bead = extractBeadId(pr.headRefName, prefix) ?? extractBeadId(pr.title, prefix);
+    add("Merge needed", `#${pr.number}${bead ? ` for ${bead}` : ""}, reviewed clean, sensitive path (${label})`, {
+      anchor: `pr-${pr.number}`,
+      href: pr.url,
+      severity: "bad",
+    });
   }
   const prProblems = (pr, suffix, anchor) => {
     const extra = { anchor, href: pr.url };
@@ -344,6 +416,13 @@ export function buildAttention({ prefix, joined, currentItems, sources, now }) {
       });
   }
   for (const pr of joined.unlinkedPrs) prProblems(pr, "", `pr-${pr.number}`);
+  // Human-wait rule 2: one item per bead (uniqueOpenBeads), whether or not
+  // its PR is also a "Merge needed" item. A bead list that is down is a
+  // "Source down" item above, and its beads are simply absent here.
+  for (const bead of beads) {
+    const label = humanWaitLabel(bead, humanWaitBeadLabels);
+    if (label) add("Waiting on you", `${bead.id} \u2014 ${bead.title} (${label})`, { anchor: `bead-${bead.id}` });
+  }
   for (const wt of up("inProgress") && up("prs") ? joined.orphanWorktrees : []) {
     add("Orphan worktree", `${wt.path} on ${wt.branch} has no in_progress bead and no open PR`);
   }
