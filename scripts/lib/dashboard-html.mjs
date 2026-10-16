@@ -539,13 +539,18 @@ export function renderHtml({ repoName, prefix, sources, now, refreshSeconds = 30
   const mainLog = sources.mainLog?.ok ? sources.mainLog.value.trim() : "";
 
   const joined = joinRows({ prefix, inProgress, prs, worktrees, currentItems, now });
-  const humanWaitBeads = uniqueOpenBeads(inProgress, ready, blocked);
+  const labelledBeads = get("labelled") ?? [];
+  const threeListIds = new Set(uniqueOpenBeads(inProgress, ready, blocked).map((b) => b.id));
+  const humanWaitBeads = uniqueOpenBeads(inProgress, ready, blocked, labelledBeads);
   const attention = buildAttention({ prefix, joined, currentItems, sources, now, prs, beads: humanWaitBeads });
   const checkedText = humanWaitChecked({
     prs,
     beads: humanWaitBeads,
     prsUp: sources.prs?.ok === true,
     beadsUp: ["inProgress", "ready", "blocked"].every((k) => sources[k]?.ok === true),
+    labelledUp: sources.labelled?.ok === true,
+    labelled: uniqueOpenBeads(labelledBeads).length,
+    labelledOutside: uniqueOpenBeads(labelledBeads).filter((b) => !threeListIds.has(b.id)).length,
   });
   const inProgressIds = new Set(inProgress.map((b) => b.id));
   const known = new Map();
