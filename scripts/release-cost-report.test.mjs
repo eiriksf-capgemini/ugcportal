@@ -908,8 +908,8 @@ describe("agentCostFromPasses (ugcportal-cii0): the recording rule CLAUDE.md's o
       const c = agentCostFromPasses(r2, ["rev2"], { meta, side: "qa" });
       expect(c).toMatchObject({ complete: false, missing: [], uncoveredFigures: ["r1"], ite: null, calls: null, ctx: null });
       const line = formatAgentCost(c);
-      expect(line).toMatch(/^INCOMPLETE .*uncovered=r1 -- write no cost_ite_\*\/cost_calls_\*, do not overwrite tokens_\*/);
-      expect(line).toContain('"pre-rule rounds without agent ids: r1"');
+      expect(line).toMatch(/^INCOMPLETE .*uncovered=r1 -- write no cost_ite_\*\/cost_calls_\* and unset any already there, do not overwrite tokens_\*/);
+      expect(line).toContain('"rounds without agent ids: r1"');
       expect(line).not.toMatch(/ctx=/);
     });
     it("6uc2's shape: six pre-rule rounds and only the newest reviewer listed is INCOMPLETE, not ctx=262550", () => {
@@ -942,6 +942,95 @@ describe("agentCostFromPasses (ugcportal-cii0): the recording rule CLAUDE.md's o
       expect(runAgentCost(passes, "rev2", bead, "qa")).toBe("ite=2511477 calls=101 ctx=289552 agents=1 passes=1 missing=none uncovered=none");
       expect(() => runAgentCost(passes, "rev2")).toThrow(/usage/);
       fs.rmSync(dir, { recursive: true, force: true });
+    });
+  });
+
+  describe("M3: an INCOMPLETE recording keeps the next recording INCOMPLETE", () => {
+    // The reviewer's repro: real figures of two agents A and B, a pre-rule tokens_impl of 300000.
+    const A = pass("A", 1, 262000, [262550], 1000, 10);
+    const B = pass("B", 1, 226000, [226279], 2000, 20);
+    const P = pass("P", 1, 299000, [300000], 3000, 30); // the pre-rule pass's agent, once a human has found it
+    const quoted = (line, key) => new RegExp(`${key} to "([^"]*)"`).exec(line)?.[1];
+    // What the INCOMPLETE template in CLAUDE.md / step 4a writes, applied to `meta`.
+    const incompleteWrite = (meta, side, line, extra) => {
+      const next = { ...meta, ...extra, [`cost_note_${side}`]: quoted(line, `cost_note_${side}`), [`cost_coverage_${side}`]: quoted(line, `cost_coverage_${side}`) };
+      delete next[`cost_ite_${side}`];
+      delete next[`cost_calls_${side}`];
+      return next;
+    };
+
+    it("impl: pre-rule tokens_impl -> INCOMPLETE write -> the next pass with A,B is still INCOMPLETE, not ctx=488829", () => {
+      const meta0 = { tokens_impl: 300000 };
+      const first = formatAgentCost(agentCostFromPasses([A], ["A"], { meta: meta0, side: "impl" }));
+      expect(first).toMatch(/^INCOMPLETE .*uncovered=tokens_impl recorded before cost_agents_impl /);
+      expect(quoted(first, "cost_coverage_impl")).toBe("incomplete: tokens_impl recorded before cost_agents_impl");
+      const meta1 = incompleteWrite(meta0, "impl", first, { tokens_impl: 300000 + 262550, cost_agents_impl: "A" });
+      const second = agentCostFromPasses([A, B], ["A", "B"], { meta: meta1, side: "impl" });
+      expect(second).toMatchObject({ complete: false, ctx: null, ite: null });
+      expect(second.uncoveredFigures).toEqual(["marked incomplete by cost_coverage_impl"]);
+      const line = formatAgentCost(second);
+      expect(line).not.toMatch(/ctx=488829/);
+      // The marker an earlier recording wrote is passed on unchanged, not rewritten or nested.
+      expect(quoted(line, "cost_coverage_impl")).toBe("incomplete: tokens_impl recorded before cost_agents_impl");
+      expect(quoted(line, "cost_note_impl")).toBe("marked incomplete by an earlier recording: cost_coverage_impl");
+    });
+
+    it("impl: the cost_note_* alone (no marker key) keeps it INCOMPLETE too", () => {
+      const meta = { tokens_impl: 562550, cost_agents_impl: "A", cost_note_impl: "tokens_impl recorded before cost_agents_impl" };
+      expect(uncoveredByAgents(meta, "impl", ["A", "B"])).toEqual(["marked incomplete by cost_note_impl"]);
+      expect(uncoveredByAgents({ ...meta, cost_note_impl: "All transcripts present (1 agent)" }, "impl", ["A", "B"])).toEqual([]);
+    });
+
+    it("qa: pre-rule tokens_qa -> INCOMPLETE write with round agent ids -> the next round is still INCOMPLETE", () => {
+      const meta0 = { tokens_qa: 400000 };
+      const first = formatAgentCost(agentCostFromPasses([A], ["A"], { meta: meta0, side: "qa" }));
+      expect(first).toMatch(/^INCOMPLETE .*uncovered=tokens_qa recorded before cost_agents_qa /);
+      const meta1 = incompleteWrite(meta0, "qa", first, { tokens_qa: 400000 + 262550, tokens_qa_r1: 262550, tokens_qa_r1_agent: "A", cost_agents_qa: "A" });
+      const second = agentCostFromPasses([A, B], ["A", "B"], { meta: { ...meta1, tokens_qa_r2: 226279, tokens_qa_r2_agent: "B" }, side: "qa" });
+      expect(second).toMatchObject({ complete: false, ctx: null, uncoveredFigures: ["marked incomplete by cost_coverage_qa"] });
+    });
+
+    it("once a human has backfilled the pre-rule agent and removed the marker and note, the figure is complete", () => {
+      const meta = { tokens_impl: 562550, cost_agents_impl: "P,A" };
+      expect(agentCostFromPasses([P, A, B], ["P", "A", "B"], { meta, side: "impl" })).toMatchObject({ complete: true, ctx: 300000 + 262550 + 226279 });
+    });
+  });
+
+  describe("M4: a cost_ite_* left on a side later marked incomplete is not read as ITE", () => {
+    const stale = { cost_ite_qa: 11063233, cost_calls_qa: 471, tokens_qa: 1700000, tokens_qa_r7: 250000, tokens_impl: 744413 };
+    it("the marker key alone, or the note alone, demotes it; the bead falls back to context size", () => {
+      for (const mark of [{ cost_coverage_qa: "incomplete: missing: a0" }, { cost_note_qa: "missing: a0" }]) {
+        const c = costUnitOf({ ...stale, ...mark });
+        expect(c).toMatchObject({ unit: "context", impl: 744413, qa: 1700000 });
+        expect(c.iteIncomplete).toEqual([`cost_ite_qa=11063233, ${Object.keys(mark)[0]}`]);
+      }
+    });
+    it("a note that begins all transcripts present (6uc2's form) leaves the figure in ITE", () => {
+      expect(costUnitOf({ ...stale, cost_note_qa: "all transcripts present (6 reviewer agents)" })).toMatchObject({ unit: "ite", qa: 11063233, iteIncomplete: [] });
+    });
+    it("the stale side prints no ITE figure and Data gaps names it", () => {
+      const b = { id: "ugcportal-aaa7", metadata: { ...stale, cost_coverage_qa: "incomplete: missing: a0" } };
+      const rs = buildRows({ version: "v9.9.9", ids: [b.id], entries: new Map() }, new Map([[b.id, b]]), new Map());
+      expect(rs[0]).toMatchObject({ unit: "context", iteQa: null, qa: 1700000 });
+      const out = renderReport({ releases: ["v9.9.9"], rowsByRelease: new Map([["v9.9.9", rs]]), membershipChecks: [], unmerged: [], generatedAt: "2026-10-16", reviewer: "x", prCount: 0 });
+      expect(out).not.toContain("11,063,233");
+      expect(out).toContain("`cost_ite_*` on a side whose coverage is marked incomplete, not read as ITE (1): aaa7 (cost_ite_qa=11063233, cost_coverage_qa)");
+    });
+  });
+
+  describe("L13/L14: a round's agent id must be in the list, and the note says which way a round is uncovered", () => {
+    it("a round whose agent id is recorded but in neither list is INCOMPLETE", () => {
+      const meta = { tokens_qa: 231225, tokens_qa_r1: 231225, tokens_qa_r1_agent: "revX" };
+      expect(uncoveredByAgents(meta, "qa", ["rev2"])).toEqual(["r1 unlisted"]);
+      const c = agentCostFromPasses([pass("rev2", 1, 289000, [289552])], ["rev2"], { meta, side: "qa" });
+      expect(c).toMatchObject({ complete: false, ctx: null });
+      expect(formatAgentCost(c)).toContain('cost_note_qa to "rounds whose agents are not in the list: r1"');
+    });
+    it("rounds without ids and rounds with unlisted ids get two different messages", () => {
+      const meta = { tokens_qa_r1: 1, tokens_qa_r2: 2, tokens_qa_r2_agent: "revX" };
+      const line = formatAgentCost(agentCostFromPasses([pass("rev3", 1, 3, [3])], ["rev3"], { meta, side: "qa" }));
+      expect(line).toContain('"rounds without agent ids: r1; rounds whose agents are not in the list: r2"');
+      expect(line).not.toMatch(/pre-rule rounds/);
     });
   });
 

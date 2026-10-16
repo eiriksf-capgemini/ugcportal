@@ -1018,7 +1018,11 @@ export function outcomeOf(bead, prAnalyses, rounds) {
 // 0, negative, fractional or non-numeric is not one (a 0 is what a transcript
 // sum over agents with no transcript yields, and must not print as a measured
 // zero cost): it is listed in `iteRejected`, shown under Data gaps, and the
-// bead falls back to its context-size figures. A bead with at least one
+// bead falls back to its context-size figures. Nor is a cost_ite_* on a side
+// whose coverage is marked incomplete (coverageIncomplete below): that value
+// survives from an earlier complete recording that a later INCOMPLETE one
+// left behind, so it misses at least the later agents. It is listed in
+// `iteIncomplete` and shown under Data gaps. A bead with at least one
 // accepted ITE figure is read in "ite" and its tokens_* are not read at all,
 // so no row and no total ever adds one unit to the other.
 //
@@ -1043,16 +1047,43 @@ export function normaliseConvention(v) {
   return String(v).trim().toLowerCase().replace(/_/g, "-");
 }
 
+export const ALL_PRESENT = "all transcripts present";
+
+/**
+ * Whether the bead records that `side`'s cost coverage is incomplete: a
+ * `cost_coverage_<side>` key with any non-empty value (the INCOMPLETE
+ * recording writes it; only a human who has backfilled every earlier agent
+ * id removes it), or a `cost_note_<side>` that does not begin with
+ * "all transcripts present" (what a complete recording writes). Returns the
+ * key that marks it, or null. This is the state that makes the coverage
+ * check hold across recordings (ugcportal-cii0 M3): an INCOMPLETE recording
+ * writes the agents it knows of into cost_agents_<side>, which would
+ * otherwise read on the next recording as a list covering the whole figure.
+ */
+export function coverageIncomplete(meta, side) {
+  const filled = (v) => v !== undefined && v !== null && String(v).trim() !== "";
+  if (filled(meta[`cost_coverage_${side}`])) return `cost_coverage_${side}`;
+  const note = meta[`cost_note_${side}`];
+  if (filled(note) && !String(note).trim().toLowerCase().startsWith(ALL_PRESENT)) return `cost_note_${side}`;
+  return null;
+}
+
 export function costUnitOf(meta = {}) {
   const iteRejected = [];
+  const iteIncomplete = [];
   const ite = {};
   for (const side of ["impl", "qa"]) {
     const key = `cost_ite_${side}`;
     const present = meta[key] !== undefined && meta[key] !== null && meta[key] !== "";
     ite[side] = positiveInt(meta[key]);
     if (present && ite[side] === null) iteRejected.push(`${key}=${meta[key]}`);
+    const marked = coverageIncomplete(meta, side);
+    if (ite[side] !== null && marked) {
+      iteIncomplete.push(`${key}=${meta[key]}, ${marked}`);
+      ite[side] = null;
+    }
   }
-  const base = { implSummedExcluded: false, implConventionUnknown: null, iteRejected };
+  const base = { implSummedExcluded: false, implConventionUnknown: null, iteRejected, iteIncomplete };
   if (ite.impl !== null || ite.qa !== null) return { ...base, unit: "ite", impl: ite.impl, qa: ite.qa };
   const ctxImpl = toInt(meta.tokens_impl);
   const ctxQa = toInt(meta.tokens_qa);
@@ -1075,15 +1106,19 @@ export function costUnitOf(meta = {}) {
  * `complete` is false when any listed agent has no transcript row, or --
  * given the bead's current metadata and the side -- when the list does not
  * cover what the bead already records (`uncoveredFigures`):
+ *   - a side an earlier recording marked incomplete (coverageIncomplete:
+ *     "marked incomplete by <key>"), whatever the list now holds;
  *   - an agent already in cost_agents_<side> that the list drops ("dropped <id>");
- *   - for qa, any tokens_qa_rN whose tokens_qa_rN_agent is absent or not
- *     in the list (a round recorded before agent ids were kept);
+ *   - for qa, any tokens_qa_rN with no tokens_qa_rN_agent ("rN": a round
+ *     recorded before agent ids were kept), or whose agent id is recorded but
+ *     not in the list ("rN unlisted");
  *   - a tokens_<side> recorded with no cost_agents_<side> at all.
  * Then ite, calls and ctx are all null: a sum over the agents that have a
  * transcript, or over only the newest agent, is partial, and over none it
  * is a 0 that would read as a measured zero. Write cost_note_* naming
- * `missing` / `uncoveredFigures` instead of any cost_ite_* key, and do not
- * overwrite tokens_<side>.
+ * `missing` / `uncoveredFigures` and cost_coverage_<side> (`marker`)
+ * instead of any cost_ite_* key, unset any cost_ite_* and cost_calls_*
+ * already there, and do not overwrite tokens_<side>.
  */
 export function agentCostFromPasses(rows, agentIds, { meta = null, side = null } = {}) {
   const want = [...new Set(agentIds.filter(Boolean))];
@@ -1093,7 +1128,8 @@ export function agentCostFromPasses(rows, agentIds, { meta = null, side = null }
   const passes = [...byAgent.values()].reduce((a, rs) => a + rs.length, 0);
   const uncoveredFigures = meta ? uncoveredByAgents(meta, side, want) : [];
   const complete = want.length > 0 && missing.length === 0 && uncoveredFigures.length === 0;
-  if (!complete) return { complete, agents: want.length, passes, missing, uncoveredFigures, ite: null, calls: null, ctx: null };
+  const marker = meta && side ? String(meta[`cost_coverage_${side}`] ?? "").trim() || null : null;
+  if (!complete) return { complete, side, marker, agents: want.length, passes, missing, uncoveredFigures, ite: null, calls: null, ctx: null };
   let ite = 0, calls = 0, ctx = 0;
   for (const rs of byAgent.values()) {
     const sorted = rs.slice().sort((a, b) => a.pass - b.pass);
@@ -1101,7 +1137,7 @@ export function agentCostFromPasses(rows, agentIds, { meta = null, side = null }
     ctx += notified.length >= sorted.length ? notified[notified.length - 1] : sorted[sorted.length - 1].ctxEnd;
     for (const r of sorted) { ite += r.ite; calls += r.calls; }
   }
-  return { complete, agents: want.length, passes, missing, uncoveredFigures, ite, calls, ctx };
+  return { complete, side, marker, agents: want.length, passes, missing, uncoveredFigures, ite, calls, ctx };
 }
 
 /** What `meta` already records for `side` that the agent list `ids` does not cover. */
@@ -1109,6 +1145,8 @@ export function uncoveredByAgents(meta, side, ids) {
   if (side !== "impl" && side !== "qa") throw new Error(`side must be impl or qa, got ${side}`);
   const listed = new Set(ids);
   const out = [];
+  const marked = coverageIncomplete(meta, side);
+  if (marked) out.push(`marked incomplete by ${marked}`);
   const recorded = String(meta[`cost_agents_${side}`] ?? "").split(",").map((x) => x.trim()).filter(Boolean);
   for (const id of recorded) if (!listed.has(id)) out.push(`dropped ${id}`);
   let rounds = [];
@@ -1116,7 +1154,8 @@ export function uncoveredByAgents(meta, side, ids) {
     rounds = Object.keys(meta).map((k) => /^tokens_qa_r(\d+)$/.exec(k)?.[1]).filter(Boolean).sort((x, y) => Number(x) - Number(y));
     for (const n of rounds) {
       const agent = meta[`tokens_qa_r${n}_agent`];
-      if (!agent || !listed.has(String(agent).trim())) out.push(`r${n}`);
+      if (!agent || !String(agent).trim()) out.push(`r${n}`);
+      else if (!listed.has(String(agent).trim())) out.push(`r${n} unlisted`);
     }
   }
   // A figure with neither an agent list nor per-round keys to check it against.
@@ -1130,13 +1169,22 @@ export function formatAgentCost(c) {
   if (!c.complete) {
     const uncovered = c.uncoveredFigures ?? [];
     const dropped = uncovered.filter((u) => u.startsWith("dropped ")).map((u) => u.slice(8));
-    const preRule = uncovered.filter((u) => !u.startsWith("dropped "));
+    const noId = uncovered.filter((u) => /^r\d+$/.test(u));
+    const unlisted = uncovered.filter((u) => /^r\d+ unlisted$/.test(u)).map((u) => u.split(" ")[0]);
+    const marked = uncovered.filter((u) => u.startsWith("marked incomplete by ")).map((u) => u.slice(21));
+    const preRule = uncovered.filter((u) => / recorded before cost_agents_/.test(u));
     const why = [
       c.missing.length ? `missing: ${c.missing.join(",")}` : "",
-      preRule.length ? `pre-rule rounds without agent ids: ${preRule.join(", ")}` : "",
+      marked.length ? `marked incomplete by an earlier recording: ${marked.join(",")}` : "",
+      noId.length ? `rounds without agent ids: ${noId.join(", ")}` : "",
+      unlisted.length ? `rounds whose agents are not in the list: ${unlisted.join(", ")}` : "",
       dropped.length ? `recorded agents dropped from the list: ${dropped.join(",")}` : "",
-    ].filter(Boolean).join("; ");
-    return `INCOMPLETE agents=${c.agents} passes=${c.passes} missing=${c.missing.join(",") || "none"} uncovered=${uncovered.join(",") || "none"} -- write no cost_ite_*/cost_calls_*, do not overwrite tokens_* from this; set cost_note_* to "${why || "no agents listed"}"`;
+      preRule.length ? preRule.join("; ") : "",
+    ].filter(Boolean).join("; ") || "no agents listed";
+    const s = c.side ?? "<side>";
+    // An existing marker is kept as it is: only a human who backfilled clears it.
+    const marker = c.marker ?? `incomplete: ${why}`;
+    return `INCOMPLETE agents=${c.agents} passes=${c.passes} missing=${c.missing.join(",") || "none"} uncovered=${uncovered.join(",") || "none"} -- write no cost_ite_*/cost_calls_* and unset any already there, do not overwrite tokens_* from this; set cost_note_${s} to "${why}" and cost_coverage_${s} to "${marker}"`;
   }
   return `ite=${c.ite} calls=${c.calls} ctx=${c.ctx} agents=${c.agents} passes=${c.passes} missing=none uncovered=none`;
 }
@@ -1211,6 +1259,7 @@ export function buildRows(release, beadsById, prAnalysesByNumber) {
       implSummedExcluded: cost.implSummedExcluded,
       implConventionUnknown: cost.implConventionUnknown,
       iteRejected: cost.iteRejected,
+      iteIncomplete: cost.iteIncomplete,
       impl,
       qa,
       iteImpl,
@@ -1470,6 +1519,8 @@ function renderDataGaps(rowsByRelease, prAnalysesByNumber, unmerged) {
     lines.push(`  - no QA figure in the bead's unit (${noQa.length}): ${noQa.join(", ") || "—"}`);
     const rejected = rows.filter((r) => r.iteRejected?.length).map((r) => `${r.id.replace("ugcportal-", "")} (${r.iteRejected.join(", ")})`);
     if (rejected.length) lines.push(`  - \`cost_ite_*\` not a positive integer, not read as ITE (${rejected.length}): ${rejected.join("; ")}`);
+    const stale = rows.filter((r) => r.iteIncomplete?.length).map((r) => `${r.id.replace("ugcportal-", "")} (${r.iteIncomplete.join("; ")})`);
+    if (stale.length) lines.push(`  - \`cost_ite_*\` on a side whose coverage is marked incomplete, not read as ITE (${stale.length}): ${stale.join("; ")}`);
     const unknownConv = rows.filter((r) => r.implConventionUnknown).map((r) => `${r.id.replace("ugcportal-", "")} (${r.implConventionUnknown})`);
     if (unknownConv.length) lines.push(`  - \`tokens_impl\` not counted, unknown \`tokens_impl_convention\` (${unknownConv.length}): ${unknownConv.join("; ")}`);
     const summedOut = rows.filter((r) => r.implSummedExcluded).map((r) => r.id.replace("ugcportal-", ""));
