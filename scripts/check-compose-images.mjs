@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // Anonymous image-resolution gate for docker-compose.yml (ugcportal-vtgz).
 //
-// Usage: node scripts/check-compose-images.mjs [path/to/docker-compose.yml]
+// Usage: node scripts/check-compose-images.mjs [compose-file]
 //
 // For every service it classifies the image as
 //   registry          -> resolved with an anonymous token and a manifest HEAD
 //   build-local       -> the service has a `build:` key; no registry has it
-//   unresolved-var    -> the reference still contains ${...}; not resolvable
+//   unresolved-var    -> the reference contains a ${...} placeholder, so it names no registry image
 // Exclusions are printed by name. Exit is non-zero on any non-200 or when
 // the set of registry images checked is empty (a gate that checked nothing
 // must not read as a pass).
