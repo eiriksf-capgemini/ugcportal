@@ -9,11 +9,12 @@
 //   registry              -> resolved with an anonymous token and a manifest HEAD
 //   local (build)         -> the service has a `build:` key; no registry has it
 //   local (allowlist)     -> a bare reference (no registry host, no namespace: name[:tag|@digest])
-//                            whose name is on the local-image allowlist; quay.io/o/ugcportal:1
-//                            is a registry reference and is resolved: ugcportal and ugcportal-migrate are
-//                            built locally yet carry no `build:` key. `--local-image <name>`
-//                            (repeatable) adds names to it. The allowlist is printed in the
-//                            reach line so a silent exclusion is visible.
+//                            whose name is on the local-image allowlist. The allowlist applies
+//                            only to a bare reference because ugcportal and ugcportal-migrate
+//                            are built locally yet carry no `build:` key. A registry reference
+//                            such as quay.io/o/ugcportal:1 is resolved, not excluded.
+//                            `--local-image <name>` (repeatable) adds names to the allowlist,
+//                            which is printed in the reach line so a silent exclusion is visible.
 //   unresolved-var        -> a "$" remains after expansion, so it names no registry image. Only
 //                            the braced forms ${VAR:-d} and ${VAR-d} are expanded; an unbraced
 //                            $VAR or a nested/other form stays unresolved-var.
