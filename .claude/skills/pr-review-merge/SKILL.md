@@ -81,7 +81,7 @@ If that date is **more than 60 minutes old**, the holder is stale: delete the re
 gh api -X DELETE repos/:owner/:repo/git/refs/review-locks/pr-<n> --silent
 ```
 
-**Release the lock with that same `DELETE` on every path out of this skill** — after step 6 on a normal finish, and on each bail-out: the step-1 base-branch and mergeability bails (which happen *before* the acquire, so there is nothing to release), the step-3 CI stop, the step-2 sensitive-path stop, a `broken`-chain stop, the "treat as 6" fallback, and the "escalation still outstanding" stop. A lock you forget to release costs the next run 60 minutes; say in your step 6 report that you released it.
+**Release the lock with that same `DELETE` on every path out of this skill** — after step 6 on a normal finish, and on each bail-out: the step-1 base-branch and mergeability bails (which happen *before* the acquire, so there is nothing to release), the step-3 CI stop, the step-2 sensitive-path stop, each stop of step 5's BEHIND recovery (head moved, update conflict, new-head CI not green or stalled, non-empty diff check), a `broken`-chain stop, the "treat as 6" fallback, and the "escalation still outstanding" stop. A lock you forget to release costs the next run 60 minutes; say in your step 6 report that you released it.
 
 **Two limits, stated rather than discovered.** Breaking a stale lock is not itself atomic: two runs can both judge the same lock stale, both delete, and both create, after which the loser's `DELETE` may remove the winner's fresh lock. That is why step 3 above re-reads the ref, and why **step 5 re-reads it once more immediately before stamping** — the stamp is the operation that corrupts state, so that is where the check has to be. What remains is two runs whose pre-stamp re-reads interleave inside a single API round-trip, which is orders of magnitude narrower than the unprotected window this replaces (a whole review pass through step 4, minutes wide). And a run that takes longer than 60 minutes can have its own lock broken under it; the pre-stamp re-read catches that too, and the answer is to stand down rather than to raise the threshold.
 
@@ -871,29 +871,43 @@ gh pr view <n> --json mergeStateStatus,mergeable,headRefOid
 ```
 
 - `CLEAN`: go on to the merge below.
-- `BEHIND` (the strict policy at work): run the recovery below. Do **not** treat it as mergeable and do not retry `gh pr merge` hoping it passes.
-- `CONFLICTING` / `DIRTY`, or any other value: not mergeable. Stop and report; nothing below applies.
+- `mergeStateStatus: BEHIND` (the strict policy at work): run the recovery below. Do **not** treat it as mergeable and do not retry `gh pr merge` hoping it passes.
+- `mergeStateStatus: UNKNOWN`: transient right after a push. Re-read once (`sleep 10`, then the same command); if it still prints `UNKNOWN`, treat it as "any other value" below.
+- `mergeable: CONFLICTING`, `mergeStateStatus: DIRTY`, `BLOCKED` or `UNSTABLE`, or any other value: not mergeable. Stop and report; nothing below applies. (`CONFLICTING` is a `mergeable` value; the others are `mergeStateStatus` values. Read both fields.)
 
-**BEHIND recovery (ugcportal-li65).** In order, no step skipped:
+**BEHIND recovery (ugcportal-li65).** In order, no step skipped. `<reviewed-sha>` is the `headRefOid` **step 1 printed and you wrote down** (the same `<head>` step 1a used) — the head this run reviewed. It is never re-read from the PR at merge time: that value is whatever is live now, and if something was pushed after step 1 it would be the unreviewed head compared against its own update, which prints nothing and merges unreviewed code.
+
+**Every stop path below ends the same way:** post a follow-up comment on the PR saying the merge did not happen and why (the "Auto-approved (review round N)" comment may already be posted, and it must not stand alone), release the step 1a lock, and report (step 6). Post no new round marker.
 
 ```bash
-reviewed_sha=$(gh pr view <n> --json headRefOid -q .headRefOid)   # the head this run reviewed; write it down before updating
-gh pr update-branch <n>        # or: gh api -X PUT repos/:owner/:repo/pulls/<n>/update-branch
+live=$(gh pr view <n> --json headRefOid -q .headRefOid)
+[ "$live" = "<reviewed-sha>" ] || { echo "head moved after step 1: $live" >&2; exit 1; }
+gh api -X PUT repos/:owner/:repo/pulls/<n>/update-branch -f expected_head_sha=<reviewed-sha>   # gh pr update-branch <n> takes no such guard, so use the API
 ```
 
-1. **If the update itself conflicts** (the call returns HTTP 422, or the PR then shows `mergeable: CONFLICTING`), **stop for a human.** Do not resolve conflicts in the review run, and do not merge.
-2. The update creates a **new head commit whose CI has not run**. Merging before it is green would merge a tree nobody tested. Re-read CI on the new head with step 3's per-run `statusCheckRollup` command, against the new `headRefOid` — every row `PASS` — and wait if any is `PENDING`. Do not skip, shortcut or reuse the old head's result.
-3. Re-confirm `gh pr view <n> --json mergeStateStatus -q .mergeStateStatus` prints `CLEAN`. (`BEHIND` again means main moved during the wait: repeat from the update.)
+0. **If the live head differs from `<reviewed-sha>`, stop.** That is a push after review, a new round, not a recovery. The `expected_head_sha` on the update makes GitHub refuse a moved head itself (HTTP 422), which is the same stop.
+1. **If the update itself conflicts or is refused** (HTTP 422, or the PR then shows `mergeable: CONFLICTING`), **stop for a human.** Do not resolve conflicts in the review run, and do not merge.
+2. The update creates a **new head commit whose CI has not run**. Merging before it is green would merge a tree nobody tested. Produce `<new-sha>` and re-read CI on it:
+
+```bash
+gh pr view <n> --json headRefOid -q .headRefOid     # <new-sha>: write it down
+```
+
+   Then run step 3's per-run `statusCheckRollup` command. Every row must read `PASS`. Do not skip, shortcut or reuse the old head's result. `PENDING`: re-run the command every 30 seconds for at most 15 minutes (the skill has no other CI wait, so this is the bound); if rows are still `PENDING` then, stop and report a stall (the command, the elapsed time, the last rows). `FAIL` or `NO_RUN` on any row: stop for a human with the comment above; do not merge, and do not retry the update.
+3. Re-confirm `gh pr view <n> --json mergeStateStatus -q .mergeStateStatus` prints `CLEAN`. (`BEHIND` again means main moved during the wait: repeat from the update, within the same 15 minutes in total; past that, stop and report.)
 4. **Verify the update changed nothing in the PR's own diff** — empty output required:
 
 ```bash
-diff <(git diff origin/main...<reviewed-sha>) <(git diff origin/main...<new-sha>)
+git fetch origin main refs/pull/<n>/head     # both shas must now resolve; the reviewed head is an ancestor of the new one
+git cat-file -e <reviewed-sha>^{commit} && git cat-file -e <new-sha>^{commit} || { echo "sha not fetched" >&2; exit 1; }
+diff <(git diff origin/main...<reviewed-sha> | grep -v -e '^index ' -e '^@@ ') \
+     <(git diff origin/main...<new-sha>      | grep -v -e '^index ' -e '^@@ ')
 ```
 
-   (`git fetch origin main` and fetch the PR head first.) Empty means the update was zero-diff: **it does not start a new review round**, the verdict already reached stands, and you merge without posting a new round marker. Non-empty means main's changes interacted with the PR's diff — a real change, so this run is not the merging round: treat the new head as pushed code and review it as the next round.
-5. Only then `gh pr merge`, below.
+   The `index <blob>..<blob>` and `@@` hunk-header lines are dropped from both sides because they change whenever main touched a file the PR touches, however far from the PR's lines; left in, any such update would read as non-empty. Added, removed and context lines are still compared. The filter errs toward a non-empty result (an extra round), never toward a missed one. **Empty** means the update was zero-diff: it does not start a new review round, the verdict already reached stands, and you merge without posting a new round marker. **Non-empty** means main's changes altered the lines or context of the PR's diff — a real change, so **this run ends here and is not the merging round**: post the comment above (naming the new head), release the lock, and hand back; a fresh run reviews the new head as the next round. Do not start that round in this run: its own round-N marker and approval already sit inside this run's `run_started` window, and step 5's "before any stamp" integrity check would count them and force an `untracked-write` stop.
+5. **Record it on the PR before merging**: post a comment giving `<reviewed-sha>`, `<new-sha>` and the step 4 result (`empty`), so the merged head differing from the round marker's `at=` is explained where a reader will look. Then `gh pr merge`, below. Step 6 reports the same two shas and the result.
 
-Why the update commit is not a round, and how it stays out of 4.2 and 4.4: it is exactly the "main merged between rounds" case [step 4.2](#42-after-a-behaviour-changing-fix-re-grep-the-whole-file) already handles — its trigger intersects the pushed files with the PR's own files, so the commits `origin/main` contributed drop out and a zero-diff update contributes no changed file. 4.4's trigger keys on sentences the round itself writes rather than on commits, so an update commit supplies none. Worked case: PR #254 was refused `BEHIND` after `166c345` (`chore(release): v0.8.0`, #253) landed on `main`; `gh pr update-branch` produced `a2302de` over the reviewed `3e74045`, the three-dot diffs were identical, and it merged as `bf616bd`.
+Why the update commit is not a round, and how it stays out of 4.2 and 4.4: it is the "main merged between rounds" case [step 4.2](#42-after-a-behaviour-changing-fix-re-grep-the-whole-file) already handles — its trigger intersects the pushed files with the PR's own files, so the commits `origin/main` contributed drop out, and a zero-diff update (the `index` lines aside, main touched no file in the PR's diff) contributes no changed file. 4.4's trigger keys on sentences the round itself writes rather than on commits, so an update commit supplies none. The case that motivated the rule is PR #254, where the update *did* cost a round: it was refused `BEHIND` after `166c345` (`chore(release): v0.8.0`, #253) landed on `main`; round 1 reviewed `3e74045` (its marker records `at=3e74045`); the update commit `a2302de` (a merge of `166c345` into the PR) was then stamped as round 2 at 07:33:51Z, with a three-dot diff identical to the reviewed one — a round that this rule would have let through without one — and it merged as `bf616bd`. Whether `a2302de` came from `update-branch` through the API, `gh pr update-branch` or the UI button is not determinable from the PR.
 
 ```bash
 gh repo view --json squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed   # pick an allowed method, prefer squash
@@ -1039,6 +1053,7 @@ State plainly:
 - PR number and decision (merged / left for human), with the exact reason.
 - **The review round number and the chain status (`exact` / `approx` / `broken`)** — for a bootstrap, which of the three sources the starting number came from, whether the clamp applied, and that you stamped `B + 1`; for `approx`, *why* it is approx (bootstrap, reset, or self-asserted because the reviewer is the PR's author); for `broken`, which integrity check failed and which comments were involved.
 - **That you released the step 1a lock**, or — if you stood down — that another run held it and you consumed no round, posted nothing and stamped nothing.
+- If the merge went through step 5's BEHIND recovery: the reviewed head, the new head after the update, and the diff-check result (`empty`, or non-empty with the run ending there) — or which stop of the recovery ended the run, and that the follow-up comment was posted.
 - If this run stopped before step 4 (CI, mergeability, base branch), say so and that it was stamped with a **non-counting** stop marker, so it is clear no round was consumed.
 - If this was round 7+, that it was a post-escalation verification round (step 5b), and the three things that let you enter that row: the chain was `exact`, the URL of the **latest** stop comment at or above 6, and the changed head SHA or non-bot human comment since it.
 - **All four recurring families from step 4.1, named, each with what it found (including "nothing").**
