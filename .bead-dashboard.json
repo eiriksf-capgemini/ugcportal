@@ -1,7 +1,6 @@
 {
   "prefix": "ugcportal",
   "out": ".runtime/dashboard.html",
-  "releaseLabelPattern": "^v\\d+\\.\\d+\\.\\d+$",
   "releaseLabelGlob": "v*.*.*",
   "humanWaitPrLabels": [
     "needs-human-merge"
@@ -13,5 +12,5 @@
   "cmuxConfig": ".cmux/cmux.json",
   "cmuxWorkspace": "ugcportal dashboard",
   "cmuxAction": "ugcportal-dashboard",
-  "command": "sh scripts/dashboard.sh github:eiriksf-capgemini/bead-dashboard#26549cef52cd07c1d22cdde57d811af8aecaf351"
+  "command": "sh scripts/dashboard.sh github:eiriksf-capgemini/bead-dashboard#d138ddf1a1429321e36fd71a024e39173f7721f6"
 }
