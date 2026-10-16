@@ -34,14 +34,39 @@ export const TYPE_SECTIONS = [
 export const OTHER = "Other";
 export const WITHOUT_CHANGE = "Closed without a change";
 
-/** PR numbers from `gh-N,gh-M`; tokens that are not gh-<digits> are ignored. */
+/**
+ * Split `metadata.prs` (`gh-N,gh-M`) into PR numbers and malformed tokens.
+ * A blank or non-string value is absent: no numbers, nothing malformed. Any
+ * other token not matching /^gh-\d+$/ after trimming (`GH-12`, `12`,
+ * `gh-12a`, an empty token from a trailing comma) is malformed.
+ */
+export function splitPrs(prs) {
+  if (typeof prs !== "string" || prs.trim() === "") return { numbers: [], malformed: [] };
+  const numbers = [];
+  const malformed = [];
+  for (const raw of prs.split(",")) {
+    const t = raw.trim();
+    const m = /^gh-(\d+)$/.exec(t);
+    if (m) numbers.push(Number(m[1]));
+    else malformed.push(t);
+  }
+  return { numbers, malformed };
+}
+
 export function parsePrs(prs) {
-  if (typeof prs !== "string") return [];
-  return prs
-    .split(",")
-    .map((t) => /^\s*gh-(\d+)\s*$/.exec(t))
-    .filter(Boolean)
-    .map((m) => Number(m[1]));
+  return splitPrs(prs).numbers;
+}
+
+/**
+ * Version bump from the beads classified as shipped only (SKILL.md step 3).
+ * breaking=true -> major; else any feat -> minor; else patch.
+ */
+export function computeBump(shippedBeads) {
+  const breaking = shippedBeads.filter((b) => b.metadata?.breaking === "true").map((b) => b.id);
+  if (breaking.length) return { bump: "major", triggers: breaking };
+  const feats = shippedBeads.filter((b) => b.metadata?.cc_type === "feat").map((b) => b.id);
+  if (feats.length) return { bump: "minor", triggers: feats };
+  return { bump: "patch", triggers: [] };
 }
 
 /**
@@ -52,7 +77,7 @@ export function parsePrs(prs) {
 export function classify(bead) {
   const md = bead.metadata ?? {};
   const raw = typeof md.resolution === "string" ? md.resolution.trim() : "";
-  const hasPrs = parsePrs(md.prs).length > 0 || (typeof md.prs === "string" && md.prs.trim() !== "");
+  const hasPrs = typeof md.prs === "string" && md.prs.trim() !== "";
   if (raw === "") {
     return hasPrs
       ? { section: "shipped", resolution: "shipped", reason: "default: resolution absent, prs non-empty" }
@@ -92,8 +117,14 @@ export function render(beads, changelog, prStates) {
   const unreleased = beads.filter((b) => !b.metadata?.released_in);
   const B = unreleased.length;
   const dropped = [];
+  const malformed = [];
   const candidates = [];
   for (const b of unreleased) {
+    const bad = splitPrs(b.metadata?.prs).malformed;
+    if (bad.length > 0) {
+      malformed.push({ id: b.id, tokens: bad, raw: b.metadata.prs });
+      continue;
+    }
     const unmerged = parsePrs(b.metadata?.prs).filter((n) => prStates[String(n)] !== "MERGED");
     if (unmerged.length > 0) dropped.push({ id: b.id, unmerged });
     else candidates.push(b);
@@ -106,8 +137,10 @@ export function render(beads, changelog, prStates) {
   const repeatedPrs = [];
   const warnings = [];
   const tagged = [];
+  const shippedBeads = [];
   for (const b of candidates) {
     const c = classify(b);
+    if (c.section === "shipped") shippedBeads.push(b);
     const entry = { id: b.id, title: b.title, resolution: c.resolution, reason: c.reason };
     add(c.section === "without-change" ? WITHOUT_CHANGE : typeSection(b), entry);
     tagged.push(b.id);
@@ -121,9 +154,11 @@ export function render(beads, changelog, prStates) {
   const report = [
     ...repeatedPrs.map((r) => `PR #${r.pr} (${r.bead}) is already linked in an earlier release section: ${r.sections.join(", ")}`),
     ...warnings,
+    ...malformed.map((m) => `${m.id}: malformed prs "${m.raw}" -- excluded from this release; fix the bead, then re-run`),
     ...dropped.map((d) => `${d.id} dropped from this release: PR(s) not MERGED: ${d.unmerged.join(", ")}`),
   ];
-  return { A, B, C, rendered, tagged, sections, repeatedPrs, dropped, report };
+  const { bump, triggers } = computeBump(shippedBeads);
+  return { A, B, C, rendered, tagged, sections, repeatedPrs, dropped, malformed, bump, bumpTriggers: triggers, report };
 }
 
 export function format(result) {
@@ -132,6 +167,7 @@ export function format(result) {
     `of those, without released_in: ${result.B}`,
     `of those, every gh-N MERGED: ${result.C}`,
     `rendered entries: ${result.rendered}`,
+    `version bump (shipped beads only): ${result.bump}`,
   ];
   for (const [name, entries] of result.sections) {
     lines.push("", `### ${name}`);

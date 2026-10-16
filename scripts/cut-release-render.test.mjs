@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
-import { render, classify, format, WITHOUT_CHANGE } from "./cut-release-render.mjs";
+import { render, classify, format, computeBump, WITHOUT_CHANGE } from "./cut-release-render.mjs";
 
 const changelog = readFileSync(new URL("../CHANGELOG.md", import.meta.url), "utf8");
 
@@ -61,6 +61,47 @@ describe("cut-release render (ugcportal-xb68)", () => {
     const x = render([bead("ugcportal-q", { prs: "gh-424242" })], changelog, {});
     expect(x.C).toBe(0);
     expect(x.dropped).toHaveLength(1);
+  });
+
+  it("M1: only shipped beads contribute to the version bump", () => {
+    const wontFixFeat = bead("ugcportal-9pic", { cc_type: "feat", resolution: "wont-fix" });
+    const shippedFeat = bead("ugcportal-ship", { cc_type: "feat", prs: "gh-9001" });
+    const wontFixBreaking = bead("ugcportal-brk", { cc_type: "fix", resolution: "wont-fix", breaking: "true" });
+    expect(render([wontFixFeat], changelog, states).bump).toBe("patch");
+    expect(render([wontFixFeat, wontFixBreaking], changelog, states).bump).toBe("patch");
+    expect(render([wontFixFeat, shippedFeat], changelog, states).bump).toBe("minor");
+    expect(render([shippedFeat, bead("ugcportal-b", { prs: "gh-9001", breaking: "true" })], changelog, states).bump).toBe("major");
+    expect(computeBump([]).bump).toBe("patch");
+    expect(r.bump).toBe("minor"); // the shared fixture's only feat that shipped is ugcportal-ship
+  });
+
+  it("L2: a malformed prs token is excluded from C and reported, never classified shipped", () => {
+    for (const prs of ["GH-12", "12", "gh-12a", "gh-9001,12", "gh-9001,"]) {
+      const x = render([bead("ugcportal-bad", { prs })], changelog, states);
+      expect(x.C).toBe(0);
+      expect(x.rendered).toBe(0);
+      expect(x.malformed).toEqual([expect.objectContaining({ id: "ugcportal-bad" })]);
+      expect(x.report.join("\n")).toMatch(/ugcportal-bad: malformed prs ".*" -- excluded from this release; fix the bead, then re-run/);
+    }
+    // blank prs is absent, not malformed
+    expect(render([bead("ugcportal-blank", { prs: "  " })], changelog, states).malformed).toEqual([]);
+  });
+
+  it("L4: resolution is trimmed, blank is absent, and matching is case-sensitive", () => {
+    expect(classify(bead("a", { resolution: " wont-fix " })).resolution).toBe("wont-fix");
+    expect(classify(bead("a", { resolution: "  ", prs: "gh-1" })).section).toBe("shipped");
+    expect(classify(bead("a", { resolution: 7 })).resolution).toBe("none");
+    expect(classify(bead("a", { resolution: "Shipped", prs: "gh-1" })).unrecognised).toBe(true);
+  });
+
+  it("L5: K2 matches the exact PR number only", () => {
+    const log = "# Changelog\n\n## v1.0.0 - x\n\n- a — https://github.com/o/r/pull/1550\n- b — [#15](https://github.com/o/r/pull/15)\n";
+    const st = { 155: "MERGED", 1550: "MERGED", 15: "MERGED" };
+    expect(render([bead("a", { prs: "gh-155" })], log, st).repeatedPrs).toEqual([]);
+    expect(render([bead("a", { prs: "gh-15" })], log, st).repeatedPrs).toHaveLength(1);
+    const log2 = log + "- c — https://github.com/o/r/pull/155\n";
+    expect(render([bead("a", { prs: "gh-155" })], log2, st).repeatedPrs).toHaveLength(1);
+    expect(render([bead("a", { prs: "gh-1550" })], log2, st).repeatedPrs).toHaveLength(1);
   });
 
   it("format prints the figures and the report", () => {
