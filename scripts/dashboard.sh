@@ -1,31 +1,55 @@
 #!/bin/sh
-# Runs the dev dashboard (scripts/dev-dashboard.mjs) with Node on PATH.
+# Runs bead-dashboard (github.com/eiriksf-capgemini/bead-dashboard) through
+# npx, for a consumer repo's npm scripts and cmux layout. Copied from that
+# repo's examples/dashboard.sh; see its README, "Adding a consumer repo".
 #
-# Node is installed through nvm on this machine, and nvm only loads in a login
-# shell. A fresh cmux terminal, `npm run` from such a shell, or any non-login
-# shell therefore says "command not found: node" (or "npm"). This wrapper is
-# the one place that works around it: if node is not already on PATH, it puts
-# the newest nvm-installed Node first. package.json's `dashboard` scripts and
-# the cmux layout in .cmux/cmux.json all run through here, so the PATH logic
-# lives in exactly one file.
+# Usage: sh scripts/dashboard.sh <npm spec> [bead-dashboard arguments]
+#   e.g. sh scripts/dashboard.sh github:eiriksf-capgemini/bead-dashboard#<40-hex sha> --watch 30
 #
-# Usage: sh scripts/dashboard.sh [dev-dashboard.mjs arguments]
-#   sh scripts/dashboard.sh                         render once
-#   sh scripts/dashboard.sh --watch 30 --sidebar    the cmux refresh loop
-#   sh scripts/dashboard.sh --watch 30 --open --sidebar   what `npm run dashboard` runs
-set -eu
+# Two failures npx itself does not report, handled here:
+#   - node/npx not on PATH (nvm only loads in a login shell; a fresh cmux
+#     terminal is not one): put the newest nvm-installed Node first, or say
+#     so and exit 127.
+#   - the git fetch of the package fails (no network, no ssh-agent, no access
+#     to a private repo): npx exits 128 and prints nothing. Then the copy of
+#     the same pinned commit already in npm's npx cache is run, if there is
+#     one, and otherwise one line names the spec and the exit status.
+set -u
 
-cd "$(dirname "$0")/.."
+if [ $# -lt 1 ]; then
+  echo "usage: sh $0 <npm spec> [bead-dashboard arguments]" >&2
+  exit 2
+fi
+spec="$1"
+shift
 
-if ! command -v node >/dev/null; then
+if ! command -v npx >/dev/null; then
   # An unmatched glob stays literal, so test the result rather than trust it.
   newest="$(printf '%s\n' "$HOME"/.nvm/versions/node/*/bin | sort -V | tail -n 1)"
   if [ ! -d "$newest" ]; then
-    echo "dashboard: node is not on PATH and no nvm install was found under $HOME/.nvm/versions/node" >&2
+    echo "bead-dashboard: npx is not on PATH and no nvm install was found under $HOME/.nvm/versions/node" >&2
     exit 127
   fi
   PATH="$newest:$PATH"
   export PATH
 fi
 
-exec node scripts/dev-dashboard.mjs "$@"
+npx --yes "$spec" "$@"
+status=$?
+# 128 is git's exit status; bead-dashboard itself never exits with it.
+[ "$status" -eq 128 ] || exit "$status"
+
+sha="${spec##*#}"
+if printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$'; then
+  cache="$(npm config get cache)" || cache="$HOME/.npm"
+  for lock in "$cache"/_npx/*/node_modules/.package-lock.json; do
+    [ -f "$lock" ] || continue
+    grep -q "bead-dashboard.git#$sha\"" "$lock" || continue
+    bin="$(dirname "$lock")/.bin/bead-dashboard"
+    [ -x "$bin" ] || continue
+    echo "bead-dashboard: could not fetch $spec (exit 128); running the copy of $sha already in npm's cache" >&2
+    exec "$bin" "$@"
+  done
+fi
+echo "bead-dashboard: could not fetch $spec (exit 128); check ssh/gh access or network" >&2
+exit 128

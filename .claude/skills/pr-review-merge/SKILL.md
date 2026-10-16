@@ -102,6 +102,16 @@ If the changed files (`gh pr view --json files`) touch any of the following, thi
 
 If any of these are touched, still run the review (step 4) and post it as a normal comment, but explicitly state in the comment that this PR requires human approval/merge because it touches a sensitive path, and do not call `gh pr review --approve` or `gh pr merge`.
 
+**Mark the PR as waiting on a human (ugcportal-ub7y).** A comment alone leaves the PR findable only in chat. The label `needs-human-merge` means exactly one thing: **the latest round reviewed clean, and a human must merge because the PR touches a sensitive path**. It is applied only at that stop (the removal rule is below). A stop with a blocker, including the round-6 escalation (step 5, row 6: "a blocker here ends in escalation"), is not reviewed clean and gets no label. Two other zero-finding stops are **not labelled for their chain state**: an `approx` chain that reaches the "treat as 6" fallback (a run at round 7+ that fails condition 1 or 2 of step 5b stamps the non-counting `approx-cap` stop, step 5) and a `broken` chain (the non-counting `chain-broken` stop). Those two stamp no round comment, so the verdict marker has no round comment to sit in and `scripts/check-human-merge-labels.mjs`, which starts from the round marker, would read a correct label there as stale. They are tracked in ugcportal-osth; until it ships, those stops are findable only in chat. An `approx` chain that reaches round 6 *by counting* is not one of them: it stamps a counting `6` or `6 approx` marker like any round (step 5, step 5b), so its zero-finding stop is a round comment and is labelled under the sensitive-path rule below. **Precedence:** when a sensitive-path PR is also at one of the two non-counting stops, the sensitive-path stop governs: if the run reviewed clean, label it and put the verdict marker in the stop comment (the check lists that label as C until ugcportal-osth ships, because it starts from round comments); if it did not review clean, no label. At the sensitive-path reviewed-clean stop do two things, in this order: put the line `<!-- ugcportal-needs-human-merge -->` on a line of its own in the round comment (which says that a human must merge and **names the sensitive paths** that triggered the stop), and apply the GitHub label (it already exists on the repo; `gh label list` shows it):
+
+```bash
+gh pr edit <n> --add-label needs-human-merge
+```
+
+The reviewer run applies and removes this GitHub label. The bead label `stalled-on-human` is set by the **orchestrator**, not the reviewer run: the orchestrator owns the bead's lifecycle labels, so one writer sets and clears them, and step 6 carries the instruction. **Orchestrator briefing rule: an implementer brief never tells the implementer to apply `needs-human-merge` at open, and the implementer never pre-labels.** A label before any review would show the human "reviewed clean, merge me" for a PR nobody has reviewed; this sentence is in this skill only, so the orchestrator carries it into every implementer brief (`worker-implementer.md` needs the same line, which is outside this change). **Who removes the labels, and when (the one rule; step 5, step 6 and `worker-reviewer.md` point here).** The reviewer applies the GitHub label at a sensitive-path reviewed-clean stop and removes it (`gh pr edit <n> --remove-label needs-human-merge`, and asks the orchestrator to remove `stalled-on-human`) when a later round has a blocking *finding*; the sensitive-path gate itself never removes it. A label left on a blocked PR shows the human "reviewed clean, merge me" in `scripts/lib/dashboard-data.mjs`'s "Merge needed" list. A push after a labelled clean round makes the label stale: it sits on commits no round reviewed, and the check lists it as D. The next round then removes it (blocking findings) or re-applies it with a fresh verdict marker (reviewed clean). The orchestrator removes both labels when it closes the bead after the PR has merged (step 6).
+
+On 2026-10-16 all six of #280, #281, #282, #284, #285 and #286 were labelled 3 to 19 seconds after opening, before any review (#280, #284, #285 and #286 by the bot, #281 and #282 by `eiriksf-capgemini`). The orchestrator removed all six by hand at 14:47Z because none had been reviewed clean; by then #280, #282 and #284 had blocked rounds and the other three had none.
+
 ## 3. CI gate
 
 `gh pr checks <n>` reports only the **latest run per check name**. `.github/workflows/ci.yml` deliberately skips the "Lint, test, typecheck, build" job on a title/body-only `edited` event (`ugcportal-0an4`) — correct on its own — but that means any `gh pr edit --title`/`--body` after a green run creates a later run in which that job is `skipped`, and being latest, is the only thing `gh pr checks` shows. The failure that matters is not "a reviewer stops on a PR that actually passed" (safe, just wasteful); it's the inverse: a reviewer who sees `skipping` and reasons "that's the edited-event skip, by design, proceed" cannot tell that reading apart from a PR whose quality job **never ran at all** at this head. **Do not gate on `gh pr checks` or on any single `conclusion` read in isolation.** Gate on every run recorded against the current head instead:
@@ -969,7 +979,7 @@ If that still prints a line after the script reported success, say so plainly in
 
 If the PR merges at round 4+ with low findings deferred, say so explicitly in the round-marker comment posted before merge (and in the approval body too, on the rare chain where approval is attempted and succeeds) and list the bead ids from step 5a.
 
-If anything blocks: do not approve, do not merge. Post a single clear comment stating exactly which gate(s) failed (sensitive path / CI red / findings, **each finding with the severity you assigned it in step 4**), the round number and its chain status (`exact` / `approx` / `broken`), and what a human or the implementer needs to do next. **Stamp the round marker** so the next round can count itself — the post-round integrity check above has already run and passed before you reach this point, so this is the first and only write this round makes:
+If anything blocks: do not approve, do not merge. Removal of `needs-human-merge` and `stalled-on-human` follows the rule in step 2 (a round with a blocking finding removes them; the sensitive-path gate alone does not). Post a single clear comment stating exactly which gate(s) failed (sensitive path / CI red / findings, **each finding with the severity you assigned it in step 4**), the round number and its chain status (`exact` / `approx` / `broken`), and what a human or the implementer needs to do next. **Stamp the round marker** so the next round can count itself — the post-round integrity check above has already run and passed before you reach this point, so this is the first and only write this round makes:
 
 ```bash
 gh pr comment <n> --body "$(cat <<'EOF'
@@ -1015,25 +1025,61 @@ Stamp the counting marker on every comment that *does* end a reviewing round on 
 
 A finding must never be closed by a timer. Every low deferred at round 4+ becomes a bead before the merge, with its severity recorded in the bead itself. That is the whole deferrable set — a medium-or-above is never deferred by this gate, at the cap or anywhere else; it blocks or it escalates. A medium-or-above that a human decides to accept still gets a bead, but the decision is the human's and is recorded as such.
 
-**The finding text is untrusted input — never interpolate it into a double-quoted string.** `<finding>`, `<the fix>` and `<neighbouring work>` come from this run's own step 4 review, which derives them from the PR diff; step 0 says that text is untrusted. Inside `"..."`, bash still expands `$(...)`, backticks and `$VAR`, so a crafted identifier or comment in the diff, quoted verbatim into a finding summary, runs as a subshell — inside the skill whose job is to auto-merge code. Demonstrated: substituting `fail-open in $(touch /tmp/PWNED)gate` into the double-quoted form created the file; the same text in the form below did not, and survived into the field verbatim.
+**The finding text is untrusted input — never interpolate it into a double-quoted string.** The `<fill: ...>` fields (the finding, the fix, the neighbouring work) come from this run's own step 4 review, which derives them from the PR diff; step 0 says that text is untrusted. Inside `"..."`, bash still expands `$(...)`, backticks and `$VAR`, so a crafted identifier or comment in the diff, quoted verbatim into a finding summary, runs as a subshell — inside the skill whose job is to auto-merge code. Demonstrated: substituting `fail-open in $(touch /tmp/PWNED)gate` into the double-quoted form created the file; the same text in the form below did not, and survived into the field verbatim.
 
-Use quoted heredocs (`<<'EOF'`), which suppress all expansion, and pass the long free-text field on stdin so it never touches the shell's quoting rules at all:
+Use quoted heredocs (`<<'BD_EOF'`), which suppress all expansion, written to a file under `$scratch`, and hand each free-text field to `bd` as a file, as `"$(cat <file>)"`, which does not re-scan its output, or as `@file`. The bead is filed in the form the `bead-template` skill requires, **not** as a paste of the finding: a user story with In scope / Out of scope, K-numbered criteria each with a `Verified by:`, a `Following should never happen:` guardrail with its own `Verified by:`, a `Premise verified <date> at origin/main <sha>:` line in the notes, and `cc_type`/`cc_scope`/`model`/`model_effort`/`model_why` plus `severity` in the metadata. A bead filed as a bare finding fails most of the gate's 12 checks (8 at e0111e4: `user-story`, `criteria`, `verified-by`, `guardrail`, `premise-present`, `premise-fresh`, `metadata-model`, `metadata-cc`, from `node scripts/check-bead-dispatch.mjs` over a bead made with the old form), and it is the shape that left 20 unformed beads behind in v0.6.0 (`ugcportal-nr72`).
 
 ```bash
-bd create --type=bug --priority=3 --title="$(cat <<'EOF'
-<finding>
-EOF
-)" --deps=discovered-from:<bead-id-from-PR-title> --body-file - <<'EOF'
-Deferred from review round <N> of <PR> under the round-4 severity gate (ugcportal-2yj).
+scratch=$(mktemp -d); trap 'rm -rf "$scratch"' EXIT
+cat > "$scratch/title.txt" <<'BD_EOF'
+<fill: the finding, as the bead title>
+BD_EOF
+cat > "$scratch/desc.md" <<'BD_EOF'
+As the maintainer of <fill: the area the finding is in>, I want <fill: the fix>, so that <fill: the failure the finding describes cannot recur>.
 
+Deferred from review round <fill: N> of <fill: PR> (parent bead <fill: bead-id-from-PR-title>) under the round-4 severity gate (ugcportal-2yj).
 Severity: low
-Found by: step 4 finder angle <name> / recurring-family sweep family <1|2|3|4>
-In scope: <the fix>
-Out of scope: <neighbouring work>
-EOF
+Found by: step 4 finder angle <fill: name> / recurring-family sweep family <fill: 1|2|3|4>
+
+In scope: <fill: the fix>
+Out of scope: <fill: neighbouring work>; anything else in <fill: PR> or <fill: bead-id-from-PR-title>.
+BD_EOF
+cat > "$scratch/acc.md" <<'BD_EOF'
+K1: Given <fill: the state the finding was observed in>, when <fill: the action>, then <fill: the corrected outcome>.
+Verified by: <fill: the command or test that shows it, with the output that counts as passing>.
+
+K2: Following should never happen: <fill: the failure the finding describes>.
+Verified by: <fill: a mutation, or an input that used to trigger it, and the command showing it now fails loudly or is handled>.
+BD_EOF
+cat > "$scratch/notes.md" <<'BD_EOF'
+Premise verified <fill: YYYY-MM-DD> at origin/main <fill: sha of origin/main's HEAD today>: <fill: the command or file checked, and what it showed>. Checked against the PR head <fill: PR head sha> where the PR has not merged yet.
+BD_EOF
+cat > "$scratch/meta.json" <<'BD_EOF'
+{"cc_type":"fix","cc_scope":"<fill: scope of the PR>","severity":"low","model":"sonnet","model_effort":"medium","model_why":"<fill: one line, no double quote or backslash: why this tier fits the fix>"}
+BD_EOF
+
+grep -l '<fill' "$scratch"/* && { echo "unfilled placeholder" >&2; exit 1; }
+
+bd create "$(cat "$scratch/title.txt")" --type=bug --priority=3 --labels=<fill: release label the orchestrator names> \
+  --body-file "$scratch/desc.md" \
+  --acceptance="$(cat "$scratch/acc.md")" \
+  --notes="$(cat "$scratch/notes.md")" \
+  --deps=discovered-from:<fill: bead-id-from-PR-title> \
+  --metadata @"$scratch/meta.json"
 ```
 
-If any of that text could itself contain a line reading exactly `EOF`, change the delimiter (`<<'BD_EOF'`) rather than trimming the text.
+Every placeholder above is written `<fill: ...>` on purpose: the dispatch gate's `no-placeholder` check recognises `<fill...>`, `TODO` and `TBD` but not a bare `<the fix>`, so a placeholder left in the description or acceptance by a copy-paste miss fails the gate instead of filing a bead whose criteria read `<the fix>`. The gate reads only those two fields, so the `grep -l '<fill'` line before `bd create` covers every file under `$scratch`, the title, notes and `model_why` in the metadata included, and stops the block with exit 1 before a bead exists. Do not shorten the placeholder back.
+
+The title goes through a file rather than `bd create "$(cat <<'BD_EOF' ... BD_EOF )"`, and the metadata through `@file` rather than a single-quoted `--metadata='{...}'`. On macOS `/bin/bash` 3.2.57 the inline `$(cat <<'BD_EOF' ... )` form is parsed before the heredoc is read, so an unbalanced `)` in the finding ends the `$(` early and any backtick or `$(...)` after it executes (reproduced with a title containing `)` and `$(touch ...)`). A single-quoted JSON string ends at the first apostrophe, so `it's` in `model_why` ends the quote and a following `$(...)` runs. A quoted heredoc written to a file is read verbatim by both bash and zsh, and `"$(cat "$scratch/title.txt")"` does not re-scan its output. The five step-5 comment templates above still use the inline form; ugcportal-73bz moves them to the file form.
+
+
+The premise is the reviewer's, and it has to be verified rather than copied from the finding: re-run the check that showed the defect against the PR head (the defect may live only on the branch) and name `origin/main`'s current HEAD (`git rev-parse origin/main`), because the dispatch gate's `premise-fresh` check fails a premise that names any other commit. If the check no longer shows the defect, there is nothing to defer: say so in the round comment instead of filing.
+
+`<fill: scope of the PR>` is the PR title's scope. `<fill: release label the orchestrator names>` is the label the orchestrator's brief gives (for defects in v0.8.1 deliverables, `v0.8.1`); the new bead carries it so that release's sweep picks it up. If the brief names none, drop `--labels`.
+
+If any of that text could itself contain a line reading exactly `BD_EOF`, change the delimiter rather than trimming the text. This is the same rule, for the same reason, as `cut-release` step 7a.
+
+**Then run the dispatch gate over each new bead, and treat a non-zero exit as a bead that was not filed** — `node scripts/check-bead-dispatch.mjs <new-bead-id>; echo "exit $?"`. Fix the field it names with `bd update` and re-run until it exits 0. A zero exit means the fields are populated and well-formed, not that the criteria are right; the gate prints the substance checks it did not make, and the reviewer owns those.
 
 **Then read each new bead back before claiming it was filed** (`review-standards` section 6, mitigation 3). The `discovered-from` edge is the part that silently goes wrong: the recorded v0.7.0 instance is a `||` fallback whose second branch ran with the arguments **reversed**, *succeeded*, and recorded the graph edge backwards — a bead that reports as filed, with an edge pointing the wrong way, which no later step re-derives.
 
@@ -1043,7 +1089,7 @@ bd dep list <new-bead-id>
 # the same thing machine-readably, if you want to assert on it
 bd show <new-bead-id> --json | jq -r '.[0].dependencies[] | "\(.dependency_type) -> \(.id)"'
 # the fields the gate's safety property rests on
-node scripts/bd-verify-metadata.mjs <new-bead-id> cc_type=bug cc_scope=<scope>
+node scripts/bd-verify-metadata.mjs <new-bead-id> cc_type=fix cc_scope=<scope> severity=low
 ```
 
 **`bd show --json` and `bd list --json` do not describe a dependency the same way, and getting it wrong here prints a convincing false negative.** A `bd show` dependency entry is the full target bead — keyed `id`, `title`, … plus `dependency_type`. A `bd list` entry is an edge record — keyed `issue_id`, `depends_on_id`, `type`. Reading `.type` / `.depends_on_id` out of `bd show` yields `null -> null` on a perfectly correct edge, which reads as "the deferral did not record" and sends a clean PR to a human for nothing. That is this skill's own §4.4 shape, and it was live in an earlier draft of this very step until the read-back it prescribes was actually run against a real bead (`ugcportal-h0ef`, 2026-10-12). `bd dep list` is the form with no field names to get wrong, which is why it is listed first.
@@ -1095,6 +1141,12 @@ State plainly:
 - Bead ids filed in step 5a, if any — **each with the `discovered-from` edge you read back beside it**, in the direction it points, not just the id.
 - A findings list the orchestrator can turn into `findings_r<N>` (step 4a item 5): each finding with its family from step 4.1 (a finding may name two) and its severity, or a statement that the round was clean.
 - The `tokens_qa` figure and the `cost_ite_qa`/`cost_calls_qa` figures recorded in step 4a (or note that they were skipped, and why), and whether `bd-verify-metadata` confirmed they landed. "Recorded" without a read-back behind it is the claim, not the evidence.
+
+**If the PR was left for a human at the sensitive-path reviewed-clean stop (step 2), say so and give the orchestrator the bead instruction (ugcportal-ub7y).** A stop with a blocker, including the round-6 escalation, is not reviewed clean: no label, and a label already there is removed under step 2's removal rule. The `approx`-at-cap and `broken`-chain zero-finding stops are not labelled for their chain state (ugcportal-osth); step 2 gives the precedence when such a stop is also a sensitive-path one.
+
+- The GitHub label `needs-human-merge` is on the PR (you applied it; quote the `gh pr edit` output or `gh pr view <n> --json labels`), and the orchestrator runs, from the main checkout, `bd label add <bead-id> stalled-on-human`.
+- Removal when a later round blocks is the reviewer's, per step 2's rule. After the PR has merged, the orchestrator removes both when it closes the bead under `CLAUDE.md` Session Completion step 3: `gh pr edit <n> --remove-label needs-human-merge` and `bd label remove <bead-id> stalled-on-human`. No `pr-review-merge` run takes place after a human merges by hand, so this reviewer-run step cannot do it; until CLAUDE.md's step 3 says so, it is the orchestrator's habit, not a mechanism.
+- `node scripts/check-human-merge-labels.mjs` audits the labels on open PRs and prints its counts first (PRs examined, round-reviewed PRs, verdict-marker PRs, sensitive-path round-reviewed PRs, and the four classes). It starts from the round marker, not from the verdict marker alone, so a reviewer who skipped step 2's paragraph is still listed, on a human-authored PR as on a bot-authored one: A is a latest round with the verdict marker and no label; B is a sensitive-path round-reviewed PR with no label and no verdict marker, which is either a blocked round (correct) or a skipped marker, so a human reads its comment; C is a label with no verdict marker in the latest round, or with no round comment by a reviewer at all, a stale label; D is a label with a verdict marker whose round reviewed a different head than the PR's current one (a push since), read from the `at=` of the round's `ugcportal-measured` line or its `head <sha>`. A round comment counts only when the reviewing account (`gh api user`, `app/` prefix and case ignored) wrote it, as step 4b's counter keeps only the reviewer's markers; a PR the reviewer opened itself (human-authored, an `approx` chain) still has its round comments counted, and a comment by the bot that opened the PR is not a review. It exits 0 when nothing is listed, 1 when A, B, C or D is listed, and 2 when the reviewer login cannot be resolved or the PR list or a PR's comments or files hit the fetch limit and so a zero could not be trusted. It cannot tell a reviewed-clean PR with a skipped marker from a blocked one; B is where it says so. It reads open PRs only, so a stale label on a merged PR is not caught. It reads issue comments only (`gh pr list --json comments`), not review bodies, which matches where this skill writes its markers (`gh pr comment`); and a PR with 100 or more files, like one with 100 or more comments, exits 2 because a sensitive path past gh's window would be missed.
 
 If merged, confirm the merge actually happened (`gh pr view <n> --json state,mergedAt`) and confirm the result of the scoped sweep above — removed and the final `git ls-remote` check confirms it gone, or kept (naming the reason the script printed) and still present.
 

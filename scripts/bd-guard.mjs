@@ -15,7 +15,9 @@
  * Allowed: `--append-notes`, `--body-file`, single-quoted strings, QUOTED
  * heredoc bodies (`<<'EOF'`, `<<"EOF"`, `<<-'EOF'`, `<<-"EOF"`; the shell does
  * not expand those), and the repo's blessed form `"$(cat <<'EOF' ... EOF)"`
- * (cut-release/SKILL.md, pr-review-merge/SKILL.md, review-standards/SKILL.md).
+ * (cut-release/SKILL.md, review-standards/SKILL.md). pr-review-merge/SKILL.md
+ * step 5a no longer uses it: bd-guard.test.mjs extracts that block and checks
+ * bd-guard allows it, raw and with its placeholders filled.
  * Non-bd commands pass through untouched. Only statements whose command word
  * is `bd` are inspected; statements are split on unquoted newline ; & | (a
  * `&` that is part of `2>&1`, `>&` or `&>` does not split). Prefixes stripped
