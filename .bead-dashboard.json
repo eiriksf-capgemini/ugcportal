@@ -1,0 +1,11 @@
+{
+  "prefix": "ugcportal",
+  "out": ".runtime/dashboard.html",
+  "releaseLabelPattern": "^v\\d+\\.\\d+\\.\\d+$",
+  "releaseLabelGlob": "v*.*.*",
+  "humanWaitPrLabels": ["needs-human-merge"],
+  "humanWaitBeadLabels": ["stalled-on-human", "human-only"],
+  "cmuxConfig": ".cmux/cmux.json",
+  "cmuxWorkspace": "ugcportal dashboard",
+  "cmuxAction": "ugcportal-dashboard"
+}
