@@ -973,7 +973,7 @@ export function parseFindingsKey(value) {
  * until someone classifies it) and is carried separately as
  * `unstatedFindings`.
  *
- * Which key a round reads (L4): `findings_pr<number>_r<N>` always applies to
+ * Which key a round reads (L4): `findings_pr<number>_r<N>` is the key read for
  * that PR; the bare `findings_r<N>` applies only when `keysApply` (the bead
  * has one PR with marker rounds). A bare key skipped for that reason is
  * reported as `multi-pr`.

@@ -438,7 +438,7 @@ So this step is something the invoking orchestrator does after this run is over,
 
    This matters more here than anywhere else in this file, because nothing downstream ever cross-checks `tokens_qa` against another source. `cut-release`'s Cost Summary reads these fields and nothing else, so a write that silently did not land does not show up as an error — it shows up as a smaller, confident number in a release note.
 
-5. **Record the round's findings by family and severity (ugcportal-2jvh).** The **orchestrator** writes `findings_r<N>` from the reviewer's report, after the reviewer run has reported, from that report. The reason is that one writer owns the bead's QA record (the same writer as `tokens_qa`), so the two cannot disagree about which round they describe; it is not that the reviewer run could not write, since step 5a has it run `bd create`. The report must therefore list every finding with the family (step 4.1) and the severity the reviewer assigned it (step 6 asks for both). Value format, one string per round:
+5. **Record the round's findings by family and severity (ugcportal-2jvh).** The **orchestrator** writes `findings_r<N>` from the reviewer's report once the run has finished. The reason is that one writer owns the bead's QA record (the same writer as `tokens_qa`), so the two cannot disagree about which round they describe; it is not that the reviewer run could not write, since step 5a has it run `bd create`. The report must therefore list every finding with the family (step 4.1) and the severity the reviewer assigned it (step 6 asks for both). Value format, one string per round:
    ```
    findings_r<N>="f1:<n> f2:<n> f3:<n> f4:<n> med:<n> low:<n>"
    ```
