@@ -24,7 +24,12 @@ const DEFAULT_INSTALLATION_ID = "171866134";
 const BOT_LOGIN = "hal9000-agent-bot[bot]";
 const BOT_USER_ID = 343198806;
 
-const TOKEN_PATTERN = /^[A-Za-z0-9_-]+$/;
+// Allowlist for the token spliced into `eval`-ed export lines. '.' is safe
+// there: the shell does no expansion on it, it does not split words, and it is
+// not a comment character. Real installation tokens need it: as observed on
+// 2026-10-16 they are 383 characters, shaped ghs_<...>_<...>.<...>.<...> with
+// exactly two '.' (a JWT-like suffix).
+const TOKEN_PATTERN = /^[A-Za-z0-9._-]+$/;
 const EXPIRY_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
 
 const b64url = (buf) => Buffer.from(buf).toString("base64url");
