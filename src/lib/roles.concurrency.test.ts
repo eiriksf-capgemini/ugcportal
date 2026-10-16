@@ -25,6 +25,14 @@ import {
  * A second client on the same file, and Postgres at READ COMMITTED, are NOT
  * measured here; lu7's note that they behave differently is a claim, not a
  * finding of this file.
+ *
+ * ONE TEST, NOT TWO. A second shape was tried and dropped: a call issued while
+ * another transaction holds a count of 2 stays pending until that transaction
+ * commits. It also stays pending with the transaction removed from
+ * `setUserRole`, because the libsql client serialises queries while an
+ * interactive transaction is open, so asserting it could not fail and proved
+ * nothing about the transaction. The mutual-demotion test below is the one
+ * that fails without it.
  */
 
 const database = createTemporaryDatabase();
@@ -69,48 +77,5 @@ describe("setUserRole against concurrent calls on one client", () => {
     // Every one of the 40 rounds resolved to the same pair: no round in which
     // both calls read admins=2 and both wrote, and none that threw.
     expect(new Set(outcomes)).toEqual(new Set(["last_admin+updated"]));
-  });
-
-  it("a call issued while another transaction holds a count of 2 waits for it and then sees the post-commit count", async () => {
-    await seedTwoAdmins("hold");
-
-    let releaseHolder!: () => void;
-    const holderMayCommit = new Promise<void>((resolve) => {
-      releaseHolder = resolve;
-    });
-    let holderHasRead!: () => void;
-    const holderRead = new Promise<void>((resolve) => {
-      holderHasRead = resolve;
-    });
-
-    // The holder stands in for "the other concurrent demotion": it has read
-    // admins=2 and demotes b, but has not committed.
-    const holder = prisma.$transaction(async (tx) => {
-      expect(await tx.user.count({ where: { role: "ADMIN" } })).toBe(2);
-      holderHasRead();
-      await holderMayCommit;
-      await tx.user.update({ where: { id: "b-hold" }, data: { role: "USER" } });
-    });
-    await holderRead;
-
-    let settled = false;
-    const racer = setUserRole({
-      userId: "a-hold",
-      role: "USER",
-      actor: by("b-hold"),
-    }).finally(() => {
-      settled = true;
-    });
-
-    // Measures that the call does not complete while the holder is open (the
-    // same-client blocking c5bf99f found). It does not by itself discriminate
-    // the transaction: the first test is the one that fails without it.
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    expect(settled).toBe(false);
-
-    releaseHolder();
-    await holder;
-    expect(await racer).toBe("last_admin");
-    expect(await adminCount()).toBe(1);
   });
 });

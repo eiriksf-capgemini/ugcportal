@@ -31,11 +31,9 @@ export function isRole(value: unknown): value is Role {
  * file-backed SQLite database through `@prisma/adapter-libsql` and the
  * `prisma` singleton (the shape production has): two admins demoting each
  * other through two concurrent calls on that one client resolved, in all 40
- * rounds, to one "updated" and one "last_admin" with one admin left; and a
- * call issued while another transaction already held a count of 2 stayed
- * pending until that transaction committed, then read the post-commit
- * count. Run once by hand with the transaction removed, that file's first
- * test failed with zero admins left (not kept as a test), so on this client
+ * rounds, to one "updated" and one "last_admin" with one admin left. Run
+ * once by hand with the transaction removed, that test failed with zero
+ * admins left (the mutation is not kept), so on this client
  * the transaction is what closes the lockout. What is NOT measured: a second
  * client or process on the same database file, and Postgres at READ
  * COMMITTED. Neither is claimed here, and ugcportal-lu7's note that they
