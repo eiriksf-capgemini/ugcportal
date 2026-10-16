@@ -223,10 +223,18 @@ up counts the same history again on every pass. The rule, from now on:
   context size. Never add a second notification from the same agent to the
   first. Worked example: a resumed implementer notified 100k, then 150k, then
   180k records **180k** — not 430k.
+- If the agent's final pass got **no notification** (it has more passes in
+  `agent-pass-cost.mjs` than notifications), use that pass's `ctxEnd` from
+  the transcript instead — the same quantity, measured directly (section
+  1.2) — and say so in `tokens_impl_correction` (or `tokens_qa_note`).
+  `ugcportal-bdh` is the recorded case.
 - Across *distinct* agents (a fresh fix agent, one fresh reviewer per round),
   the per-agent figures are summed into `tokens_impl` / `tokens_qa` as before.
-  `tokens_qa_rN` holds round N's reviewer's figure; when round N resumed an
-  agent already counted, that agent's earlier figure is replaced, not added to.
+  The `ctx=` the command below prints is exactly this value for the agents
+  you list. `tokens_qa_rN` holds round N's reviewer's figure, and the
+  optional `tokens_qa_rN_agent` its agent id; when round N resumed an agent
+  already counted, that agent's figure from its most recent round is
+  replaced, not added to (`pr-review-merge` step 4a).
 - Set `tokens_impl_convention=last-per-agent` when you write `tokens_impl`
   under this rule. `tokens_impl_convention=summed-snapshots` marks a legacy
   value that added one agent's snapshots up; `scripts/release-cost-report.mjs`
@@ -239,9 +247,11 @@ up counts the same history again on every pass. The rule, from now on:
 
 **The cost fields are transcript-derived.** `scripts/agent-pass-cost.mjs`
 prices every pass of every subagent from its local transcript in input-token
-equivalents (ITE, its header defines the weights; proportional to price for
-one model, a relative measure across models, and a lower bound for the models
-section 1.2 names). Per side (`impl` = everything up to opening the PR,
+equivalents (ITE; its header defines the weights). ITE is proportional to
+price only for a model priced at those standard ratios — section 1.2 names
+`claude-opus-5-5` and `claude-fable-5-1` as models whose cheaper cache read
+it overstates — a relative measure across models, and a lower bound for the
+models whose transcripts under-record output (also section 1.2). Per side (`impl` = everything up to opening the PR,
 `qa` = review):
 
 - `cost_agents_impl` / `cost_agents_qa` — comma-separated agent ids (the
@@ -251,23 +261,36 @@ section 1.2 names). Per side (`impl` = everything up to opening the PR,
   ITE and API-call count summed over every pass of those agents. They are
   **recomputed whole from the agent list** each time they are written, never
   incremented by hand, so re-recording after a resumed pass does not count
-  its earlier passes twice.
-- `cost_note_impl` / `cost_note_qa` — which listed agents had no transcript
-  (`missing=` below), or `all transcripts present`. Work done inline in an
+  its earlier passes twice. **Write them only when the command prints
+  `missing=none`.** If it prints `INCOMPLETE` (some or all listed agents have
+  no transcript, including `passes=0`), write no `cost_ite_*`/`cost_calls_*`
+  key at all: a sum over the agents that have one is partial, and over none
+  it is a 0 that would read as a measured zero cost. A `cost_ite_*` that is 0
+  or not a positive integer is not read as ITE by the report anyway; it is
+  listed under Data gaps and the bead falls back to its `tokens_*`.
+- `cost_note_impl` / `cost_note_qa` — `all transcripts present`, or
+  `missing: <ids>` exactly as the command printed it. Work done inline in an
   orchestrator or human session has no agent id and is not in these keys; say
   so here when it was material.
 
 ```bash
 node scripts/agent-pass-cost.mjs --json /tmp/passes.json
-node -e 'const [f,ids]=process.argv.slice(1);const want=ids.split(",");const rows=JSON.parse(require("fs").readFileSync(f,"utf8")).filter((r)=>want.includes(r.agentId));const got=new Set(rows.map((r)=>r.agentId));console.log(`ite=${rows.reduce((a,r)=>a+r.ite,0)} calls=${rows.reduce((a,r)=>a+r.calls,0)} passes=${rows.length} missing=${want.filter((i)=>!got.has(i)).join(",")||"none"}`)' /tmp/passes.json <agent-id>,<agent-id>
-bd update <id> --set-metadata tokens_impl=180000 --set-metadata tokens_impl_convention=last-per-agent \
+# from the repo root; agentCostFromPasses is tested in scripts/release-cost-report.test.mjs
+node -e 'import("./scripts/release-cost-report.mjs").then((m)=>console.log(m.formatAgentCost(m.agentCostFromPasses(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")),process.argv[2].split(",")))))' /tmp/passes.json <agent-id>,<agent-id>
+# prints:  ite=<ite> calls=<calls> ctx=<ctx> agents=<n> passes=<n> missing=none
+#     or:  INCOMPLETE ... missing=<ids> -- write no cost_ite_*/cost_calls_*; ...
+# missing=none:
+bd update <id> --set-metadata tokens_impl=<ctx> --set-metadata tokens_impl_convention=last-per-agent \
   --set-metadata cost_agents_impl=<ids> --set-metadata cost_ite_impl=<ite> --set-metadata cost_calls_impl=<calls> \
   --set-metadata cost_note_impl="all transcripts present"
-node scripts/bd-verify-metadata.mjs <id> tokens_impl=180000 cost_ite_impl=<ite> cost_calls_impl=<calls>
+node scripts/bd-verify-metadata.mjs <id> tokens_impl=<ctx> cost_ite_impl=<ite> cost_calls_impl=<calls>
+# INCOMPLETE: tokens_impl from the last notification per agent by hand, and no cost_ite_*/cost_calls_*:
+bd update <id> --set-metadata tokens_impl=<figure> --set-metadata tokens_impl_convention=last-per-agent \
+  --set-metadata cost_agents_impl=<ids> --set-metadata cost_note_impl="missing: <ids from the output>"
 ```
 
-**How the two are read.** A bead carrying any `cost_ite_*` key is reported in
-ITE and its `tokens_*` are not read; a bead carrying only `tokens_*` is
+**How the two are read.** A bead carrying a `cost_ite_*` key that is a
+positive integer is reported in ITE and its `tokens_*` are not read; a bead carrying only `tokens_*` is
 reported as "context-size, not cost". `scripts/release-cost-report.mjs`
 (`costUnitOf`) and `cut-release` step 5a both keep the two in separate totals.
 Whoever records them: the implementer's figures are written by the
@@ -311,8 +334,10 @@ These are estimates, not measurements. The `cost_ite_impl`/`cost_ite_qa`
 figures above are the calibration signal (`tokens_impl`/`tokens_qa` are
 context size, not cost; see "Token cost metadata"): if a `sonnet` bead consistently costs what an
 `opus` bead costs, the estimate was wrong — fix the bead, and the guidance here.
-Nothing reads these fields automatically yet; they inform the human or agent
-picking a model before starting work.
+`scripts/release-cost-report.mjs`'s tier table reads `model` and shows both
+units per tier, the ITE figures in their own columns; nothing routes work on
+these fields automatically — they inform the human or agent picking a model
+before starting work.
 
 ```bash
 bd update <id> --set-metadata model=opus --set-metadata model_effort=xhigh \
