@@ -136,10 +136,11 @@ describe("main", () => {
 });
 
 describe("K4: no private key is ever tracked", () => {
-  it("git ls-files contains no .pem file", () => {
+  // git ls-files reads the whole index; 30s is the inherent-cost ceiling.
+  it("git ls-files contains no .pem file", { timeout: 30_000 }, () => {
     const files = execFileSync("git", ["ls-files"], {
       encoding: "utf8",
-      timeout: 30_000, // git ls-files reads the whole index; inherent cost
+      timeout: 30_000,
     })
       .split("\n")
       .filter(Boolean);
