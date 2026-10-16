@@ -231,8 +231,9 @@ up counts the same history again on every pass. The rule, from now on:
 - Across *distinct* agents (a fresh fix agent, one fresh reviewer per round),
   the per-agent figures are summed into `tokens_impl` / `tokens_qa` as before.
   The `ctx=` the command below prints is exactly this value for the agents
-  you list. `tokens_qa_rN` holds round N's reviewer's figure, and the
-  optional `tokens_qa_rN_agent` its agent id; when round N resumed an agent
+  you list. `tokens_qa_rN` holds round N's reviewer's figure, and
+  `tokens_qa_rN_agent` its agent id (write it every round: a round without
+  one makes the command print `INCOMPLETE`); when round N resumed an agent
   already counted, that agent's figure from its most recent round is
   replaced, not added to (`pr-review-merge` step 4a).
 - Set `tokens_impl_convention=last-per-agent` when you write `tokens_impl`
@@ -262,36 +263,50 @@ models whose transcripts under-record output (also section 1.2). Per side (`impl
   **recomputed whole from the agent list** each time they are written, never
   incremented by hand, so re-recording after a resumed pass does not count
   its earlier passes twice. **Write them only when the command prints
-  `missing=none`.** If it prints `INCOMPLETE` (some or all listed agents have
-  no transcript, including `passes=0`), write no `cost_ite_*`/`cost_calls_*`
-  key at all: a sum over the agents that have one is partial, and over none
-  it is a 0 that would read as a measured zero cost. A `cost_ite_*` that is 0
+  `missing=none uncovered=none`.** It prints `INCOMPLETE` instead when some
+  or all listed agents have no transcript (including `passes=0`), or when the
+  list does not cover what the bead already records: a `tokens_qa_rN` with no
+  `tokens_qa_rN_agent` in the list (a round recorded before agent ids were
+  kept), an agent already in `cost_agents_*` that the list leaves out, or a
+  `tokens_*` with no `cost_agents_*` at all. That last case is the impl side's
+  pre-rule shape — earlier passes run by agents nobody listed. Without this
+  check a list holding only the newest agent prints a complete-looking
+  `ctx=`/`ite=` for that agent alone. On `INCOMPLETE`, write no
+  `cost_ite_*`/`cost_calls_*` key at all and do **not** set `tokens_*` from
+  `ctx=`: a sum over part of the agents is partial, and over none it is a 0
+  that would read as a measured zero cost. Apply the per-agent rule to
+  `tokens_*` by hand instead, or first backfill the missing agent ids
+  (`tokens_qa_rN_agent`, `cost_agents_*`) from the transcripts and re-run. A `cost_ite_*` that is 0
   or not a positive integer is not read as ITE by the report anyway; it is
   listed under Data gaps and the bead falls back to its `tokens_*`.
-- `cost_note_impl` / `cost_note_qa` — `all transcripts present`, or
-  `missing: <ids>` exactly as the command printed it. Work done inline in an
+- `cost_note_impl` / `cost_note_qa` — `all transcripts present`, or the note
+  the `INCOMPLETE` line names (`missing: <ids>`, `pre-rule rounds without
+  agent ids: r1, r2`, `recorded agents dropped from the list: <ids>`). Work done inline in an
   orchestrator or human session has no agent id and is not in these keys; say
   so here when it was material.
 
 ```bash
 node scripts/agent-pass-cost.mjs --json /tmp/passes.json
-# from the repo root; agentCostFromPasses is tested in scripts/release-cost-report.test.mjs
-node -e 'import("./scripts/release-cost-report.mjs").then((m)=>console.log(m.formatAgentCost(m.agentCostFromPasses(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")),process.argv[2].split(",")))))' /tmp/passes.json <agent-id>,<agent-id>
-# prints:  ite=<ite> calls=<calls> ctx=<ctx> agents=<n> passes=<n> missing=none
-#     or:  INCOMPLETE ... missing=<ids> -- write no cost_ite_*/cost_calls_*; ...
-# missing=none:
+bd show <id> --json > /tmp/bead.json          # the bead's current metadata, for the coverage check
+# from the repo root; runAgentCost is tested in scripts/release-cost-report.test.mjs
+# (it ships with ugcportal-cii0's #261); all four arguments are required, side is impl or qa
+node -e 'import("./scripts/release-cost-report.mjs").then((m)=>console.log(m.runAgentCost(...process.argv.slice(1))))' /tmp/passes.json <agent-id>,<agent-id> /tmp/bead.json impl
+# prints:  ite=<ite> calls=<calls> ctx=<ctx> agents=<n> passes=<n> missing=none uncovered=none
+#     or:  INCOMPLETE ... missing=<ids> uncovered=<rounds> -- write no cost_ite_*/cost_calls_*, do not overwrite tokens_* ...
+# missing=none uncovered=none:
 bd update <id> --set-metadata tokens_impl=<ctx> --set-metadata tokens_impl_convention=last-per-agent \
   --set-metadata cost_agents_impl=<ids> --set-metadata cost_ite_impl=<ite> --set-metadata cost_calls_impl=<calls> \
   --set-metadata cost_note_impl="all transcripts present"
 node scripts/bd-verify-metadata.mjs <id> tokens_impl=<ctx> cost_ite_impl=<ite> cost_calls_impl=<calls>
-# INCOMPLETE: tokens_impl from the last notification per agent by hand, and no cost_ite_*/cost_calls_*:
+# INCOMPLETE: no cost_ite_*/cost_calls_*, tokens_impl by the per-agent rule by hand (never from ctx=):
 bd update <id> --set-metadata tokens_impl=<figure> --set-metadata tokens_impl_convention=last-per-agent \
-  --set-metadata cost_agents_impl=<ids> --set-metadata cost_note_impl="missing: <ids from the output>"
+  --set-metadata cost_agents_impl=<ids> --set-metadata cost_note_impl="<the note the output names>"
 ```
 
 **How the two are read.** A bead carrying a `cost_ite_*` key that is a
-positive integer is reported in ITE and its `tokens_*` are not read; a bead carrying only `tokens_*` is
-reported as "context-size, not cost". `scripts/release-cost-report.mjs`
+positive integer is reported in ITE and its `tokens_*` are not read; a bead
+with no accepted `cost_ite_*` figure (none, or only a 0 or malformed one) is
+reported from its `tokens_*` as "context-size, not cost". `scripts/release-cost-report.mjs`
 (`costUnitOf`) and `cut-release` step 5a both keep the two in separate totals.
 Whoever records them: the implementer's figures are written by the
 orchestrator from the implementer's completion notification and transcript;
