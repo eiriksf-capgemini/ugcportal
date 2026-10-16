@@ -10,8 +10,10 @@ import {
  * last-admin count (ugcportal-5bkn).
  *
  * The docstring above `setUserRole` used to say the shared transaction means
- * the count "can't be read stale". Nothing measured that: ugcportal-lu7's own
- * close notes flagged it as unmeasured, and ugcportal-yzo7's probe (c5bf99f,
+ * the count "can't be read stale". Nothing measured that: ugcportal-lu7's
+ * close notes assert the opposite (that the transaction does not make the
+ * count non-stale) by reasoning from how the adapter opens transactions,
+ * also without measuring, and ugcportal-yzo7's probe (c5bf99f,
  * see `recordPrice` in src/lib/curation-price-write.ts) tested a competing
  * write while a transaction was open, not two calls to this function. This
  * file is the measurement for THIS function's shape.

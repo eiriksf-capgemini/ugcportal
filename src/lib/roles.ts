@@ -16,7 +16,10 @@ export type RoleChangeActor =
  * request, not an exceptional condition, and the caller renders it.
  */
 export type SetUserRoleOutcome =
-  "updated" | "unchanged" | "user_not_found" | "last_admin";
+  | "updated"
+  | "unchanged"
+  | "user_not_found"
+  | "last_admin";
 
 export function isRole(value: unknown): value is Role {
   return value === "USER" || value === "ADMIN";
@@ -25,20 +28,19 @@ export function isRole(value: unknown): value is Role {
 /**
  * Change a user's role and record who did it.
  *
- * THE COUNT AND THE WRITE SHARE A TRANSACTION, and what is measured about
- * that is narrower than "can't be read stale". Measured in
+ * THE COUNT AND THE WRITE SHARE A TRANSACTION, and what is measured about that
+ * is narrower than "can't be read stale". Measured in
  * src/lib/roles.concurrency.test.ts (ugcportal-5bkn), against a real
- * file-backed SQLite database through `@prisma/adapter-libsql` and the
- * `prisma` singleton (the shape production has): two admins demoting each
- * other through two concurrent calls on that one client resolved, in all 40
- * rounds, to one "updated" and one "last_admin" with one admin left. Run
- * once by hand with the transaction removed, that test failed with zero
- * admins left (the mutation is not kept), so on this client
- * the transaction is what closes the lockout. What is NOT measured: a second
- * client or process on the same database file, and Postgres at READ
- * COMMITTED. Neither is claimed here, and ugcportal-lu7's note that they
- * behave differently is a claim, not a finding (that note says a deferred
- * transaction lets two concurrent demotions both read admins=2 and the
+ * file-backed SQLite database through `@prisma/adapter-libsql` and the `prisma`
+ * singleton (the shape production has): two admins demoting each other through
+ * two concurrent calls on that one client resolved, in all 40 rounds, to one
+ * "updated" and one "last_admin" with one admin left. Run once by hand with the
+ * transaction removed, that test failed with zero admins left (the mutation is
+ * not kept), so on this client the transaction is what closes the lockout. What
+ * is NOT measured: a second client or process on the same database file, and
+ * Postgres at READ COMMITTED. Neither is claimed here, and ugcportal-lu7's note
+ * that they behave differently is a claim, not a finding (that note says a
+ * deferred transaction lets two concurrent demotions both read admins=2 and the
  * second write is rejected as SQLITE_BUSY_SNAPSHOT, a 500 rather than
  * "last_admin"; none of that was tested). If the app ever runs more than one
  * process against one database, re-measure before relying on this.
