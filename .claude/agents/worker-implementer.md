@@ -116,8 +116,10 @@ suite has repeatedly exceeded, and the ceiling is `600000`. A command expected
 to run longer than about eight minutes (the full suite on a cold worktree or a
 loaded machine, Playwright, a cold build or image build) starts with
 `run_in_background`, its output redirected to a file, and you poll that file
-from this same turn: a bounded `until` loop in a foreground call, or the
-Monitor tool, repeated until the command has exited. A turn that stops while a
+from this same turn with a bounded `until` loop in a foreground call, repeated
+until the command has exited. The Monitor tool is not that poll: it returns at
+once and delivers its events as notifications, so a worker could only wait on
+it by ending its turn — it is an orchestrator-side tool. A turn that stops while a
 background task runs loses the result — the task finishing does not re-invoke
 a dispatched worker, so the run ends having done no work (`bd memories
 never-end-an-agent-turn-waiting-on-a-background-task`; `ugcportal-fbng`, the

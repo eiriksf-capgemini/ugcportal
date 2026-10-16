@@ -113,8 +113,10 @@ cd /tmp/wt-<short> && date +%s > /tmp/vitest-<bead-id>.start && VITEST_MAX_FORKS
 i=0; until grep -q '^exit ' /tmp/vitest-<bead-id>.log || [ $i -ge 54 ]; do sleep 10; i=$((i+1)); done; echo "$(( $(date +%s) - $(cat /tmp/vitest-<bead-id>.start) ))s since start, $(wc -c < /tmp/vitest-<bead-id>.log) bytes"; tail -5 /tmp/vitest-<bead-id>.log
 ```
 
-The Monitor tool is the other in-turn poll: arm it on the same `until grep -q
-'^exit '` condition and re-arm it on each expiry. The measured basis is the
+The bounded `until` loop is the only in-turn poll a worker has. The Monitor
+tool is an orchestrator-side tool, not a wait available to a worker: it
+returns at once and delivers events as notifications, which a worker could
+only receive by ending its turn. The measured basis is the
 `ugcportal-fbng` catalogue: entry A19 of 2026-10-14 for the foreground
 stalls, and the 2026-10-09 B-side entry for the turns that ended on a
 background wait.
