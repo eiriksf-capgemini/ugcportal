@@ -16,21 +16,38 @@ export type RoleChangeActor =
  * request, not an exceptional condition, and the caller renders it.
  */
 export type SetUserRoleOutcome =
-  | "updated"
-  | "unchanged"
-  | "user_not_found"
-  | "last_admin";
+  "updated" | "unchanged" | "user_not_found" | "last_admin";
 
 export function isRole(value: unknown): value is Role {
   return value === "USER" || value === "ADMIN";
 }
 
 /**
- * Change a user's role and record who did it. The read and the write share a
- * transaction so the last-admin count can't be read stale: two admins
- * demoting each other at the same moment would otherwise each see two admins
- * and leave the instance with none — locked out of every admin surface, with
- * only the bootstrap env var left to recover.
+ * Change a user's role and record who did it.
+ *
+ * THE COUNT AND THE WRITE SHARE A TRANSACTION, and what is measured about
+ * that is narrower than "can't be read stale". Measured in
+ * src/lib/roles.concurrency.test.ts (ugcportal-5bkn), against a real
+ * file-backed SQLite database through `@prisma/adapter-libsql` and the
+ * `prisma` singleton (the shape production has): two admins demoting each
+ * other through two concurrent calls on that one client resolved, in all 40
+ * rounds, to one "updated" and one "last_admin" with one admin left; and a
+ * call issued while another transaction already held a count of 2 stayed
+ * pending until that transaction committed, then read the post-commit
+ * count. Run once by hand with the transaction removed, that file's first
+ * test failed with zero admins left (not kept as a test), so on this client
+ * the transaction is what closes the lockout. What is NOT measured: a second
+ * client or process on the same database file, and Postgres at READ
+ * COMMITTED. Neither is claimed here, and ugcportal-lu7's note that they
+ * behave differently is a claim, not a finding (that note says a deferred
+ * transaction lets two concurrent demotions both read admins=2 and the
+ * second write is rejected as SQLITE_BUSY_SNAPSHOT, a 500 rather than
+ * "last_admin"; none of that was tested). If the app ever runs more than one
+ * process against one database, re-measure before relying on this.
+ *
+ * The lockout this guards: two admins demoting each other at the same moment
+ * would each see two admins and leave the instance with none, locked out of
+ * every admin surface, with only the bootstrap env var left to recover.
  *
  * Note that the caller must already have established that it is allowed to do
  * this; nothing here checks the session (see requireAdmin in
