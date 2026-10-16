@@ -1,0 +1,28 @@
+name: Compose images
+
+# Resolves every registry image in docker-compose.yml anonymously (token plus
+# manifest HEAD, never docker pull) so a registry that stops serving an image
+# without credentials is found between releases, not at the next
+# `docker compose up` (ugcportal-vtgz).
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+
+      - run: node scripts/check-compose-images.mjs docker-compose.yml
