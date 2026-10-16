@@ -334,8 +334,8 @@ round 4 an unsettled plausible medium blocks exactly as a confirmed one
 does. Both late-round defects that motivated the rule presented as
 unconfirmed plausible mediums before anyone ran them down.
 
-**The gate's lenient band has never been legitimately reached in this
-repo.** (It was applied by mistake three times in v0.5.0 — PRs #60, #61,
+**As of 2026-10-16, before the first bot-authored PR (#277), the gate's
+lenient band had never been legitimately reached in this repo.** (It was applied by mistake three times in v0.5.0 — PRs #60, #61,
 #75 — which is a separate defect, not an exception to this.) Until
 `ugcportal-62b6` the reviewer and the PR author were the same GitHub account,
 so every marker chain computed as `approx` rather than `exact`, and an
