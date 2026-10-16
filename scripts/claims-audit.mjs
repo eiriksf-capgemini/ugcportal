@@ -311,7 +311,7 @@ const COVERAGE_UNIVERSAL_RE = /\b(?:catch(?:es)?|sees?|covers?|detects?|flags?|f
 //
 // Narrowing verbs are catch / detect / notice / recognise / see / cover /
 // inspect / look at, plus, after "only", check / scan / read / match / find.
-// Every one of them is as often about a person or a request ("an anonymous
+// Any of them can be about a person or a request instead ("an anonymous
 // visitor cannot see an unpublished row", "an attacker cannot detect
 // whether an account exists"), so the subject must be an instrument: the
 // word directly before the absolute word (before the verb, for "<verb> no
@@ -325,14 +325,15 @@ const COVERAGE_UNIVERSAL_RE = /\b(?:catch(?:es)?|sees?|covers?|detects?|flags?|f
 // all: in "the test asserts that it cannot see the draft" it is what the
 // test asserts about, not the test.
 //
-// Limitation evidence is a limitation of an instrument, never a guarantee
-// phrased negatively ("a NaN date does not reach the sellable branch" is
-// not evidence): does not / is not / won't (and their siblings) + a
-// narrowing verb or reach / report / flag, "blind to" (one is / are / was /
-// were / be / stays / remains before it skipped) and "still passes", each
-// with an instrument subject by the rule above; "not covered / reported / caught / seen / detected by" +
-// up to three words + an instrument noun; or an N1 or N3 match elsewhere in
-// the window whose own conditions hold.
+// Limitation evidence has to be phrased as a limitation of an instrument,
+// so that a guarantee phrased negatively ("a NaN date does not reach the
+// sellable branch") does not count. It is: does not / is not / won't (and
+// their siblings) + a narrowing verb or reach / report / flag, "blind to"
+// (one is / are / was / were / be / stays / remains before it skipped) and
+// "still passes", each with an instrument subject by the rule above; "not
+// covered / reported / caught / seen / detected by" + up to three words +
+// an instrument noun; or an N1 or N3 match elsewhere in the window whose
+// own conditions hold.
 //
 // The window is the line itself plus the comment or prose line directly
 // above and below it in the same file or body, when there is one
