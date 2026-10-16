@@ -5,8 +5,10 @@
  * `"database"` session strategy, so a session is nothing more than a `Session`
  * row plus a cookie carrying that row's `sessionToken`. This module writes a
  * throwaway `User` and `Session` straight into the local SQLite file the dev
- * server reads, and hands back the cookie for the spec to put in its browser
- * context. The server then resolves it through its ordinary `auth()` path —
+ * server reads, and hands back the cookie. The root suite calls it once per
+ * run from its globalSetup (e2e/signed-in-setup.ts), and
+ * e2e/signed-in-fixture.ts puts that cookie into the browser context of each
+ * test that asks to be signed in. The server then resolves it through its ordinary `auth()` path —
  * the same adapter lookup and the same per-request policy check
  * (`enforceLiveSessionPolicy`, src/lib/live-session.ts) every real session
  * goes through. Nothing is skipped on the server side, and nothing is added
@@ -52,6 +54,9 @@ export const E2E_SESSION_ID_PREFIX = "e2e-0wh6-";
  * `__Secure-authjs.session-token`; the guard below only permits an http
  * loopback base URL, so this is the one name that can apply. */
 export const E2E_SESSION_COOKIE = "authjs.session-token";
+
+/** Auth.js's default session `maxAge`, 30 days. */
+export const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** src/lib/prisma.ts's own fallback when DATABASE_URL is unset. */
 const DEFAULT_DATABASE_URL = "file:./dev.db";
@@ -117,10 +122,19 @@ export async function seedSession({ db, env, baseURL, name = "E2E Signed In", no
   const sessionId = `${E2E_SESSION_ID_PREFIX}session-${randomUUID()}`;
   const sessionToken = randomBytes(32).toString("hex");
   const stamp = now.toISOString();
-  // One hour: long enough for any single test, short enough that a row a
-  // crashed run failed to clean up is dead before anyone could find a use
-  // for it.
-  const expires = new Date(now.getTime() + 60 * 60 * 1000).toISOString();
+  // A full Auth.js session lifetime (its default `maxAge`, which
+  // src/lib/auth.ts does not override), and not shorter on purpose. @auth/core
+  // rewrites a database session's expiry on any request where
+  // `expires - maxAge + updateAge` (updateAge: 24 hours) has already passed
+  // (lib/actions/session.js). Any expiry shorter than maxAge - updateAge
+  // makes that true on EVERY signed-in request, so each page load becomes a
+  // write to the one SQLite file every parallel worker's pages are reading
+  // — the SQLITE_BUSY shape e2e/signed-in-setup.ts exists to avoid. Nor
+  // would a short expiry stay short: the first request extends it to maxAge.
+  // A row a crashed run leaves behind is therefore live that long, and only
+  // on a server whose allowlist names E2E_SIGNED_IN_EMAIL (see the vitest
+  // guard's "refused by a server that has not allowlisted it" cases).
+  const expires = new Date(now.getTime() + SESSION_MAX_AGE_MS).toISOString();
 
   // `email` left NULL on the User: User.email is unique, and specs run in
   // parallel, each with its own user. The identity the live-session check

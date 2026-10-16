@@ -9,6 +9,7 @@ import {
   E2E_SESSION_COOKIE,
   E2E_SESSION_ID_PREFIX,
   E2E_SIGNED_IN_EMAIL,
+  SESSION_MAX_AGE_MS,
   assertSessionSeedingPermitted,
   seedSession,
 } from "./e2e-session-seeding.mjs";
@@ -74,6 +75,17 @@ describe("seedSession: refuses before writing anything (K3)", () => {
     expect(sessionArgs[4]).toBe(E2E_SIGNED_IN_EMAIL);
   });
 
+  it("expires a full 30-day maxAge out, so serving the session never makes the server write", async () => {
+    // @auth/core updates the row on a request once `expires - maxAge +
+    // updateAge` is in the past; anything shorter than maxAge - updateAge
+    // (29 days) turns every signed-in page load into a write.
+    const db = fakeDb();
+    const now = new Date("2026-10-16T00:00:00.000Z");
+    await seedSession({ db, ...LOCAL, now });
+    expect(SESSION_MAX_AGE_MS).toBe(30 * 24 * 60 * 60 * 1000);
+    expect(db.statements[1].args[3]).toBe("2026-11-15T00:00:00.000Z");
+  });
+
   it("cleanup deletes only the rows it created", async () => {
     const db = fakeDb();
     const seeded = await seedSession({ db, ...LOCAL });
@@ -101,7 +113,7 @@ describe("seedSession: refuses before writing anything (K3)", () => {
       const db = fakeDb();
       await expect(seedSession({ db, ...where })).rejects.toThrow(message);
       expect(db.statements).toEqual([]);
-      // The fixture's own up-front check gives the same answer.
+      // e2e/signed-in-setup.ts's own up-front check gives the same answer.
       expect(() => assertSessionSeedingPermitted(where)).toThrow(message);
     });
   }
@@ -158,7 +170,7 @@ const SPECIFIER_PATTERNS = [
   /\bimport\s*\(\s*["']([^"']+)["']/g,
   /\brequire\s*\(\s*["']([^"']+)["']/g,
 ];
-const TEST_ONLY_NAMES = ["e2e-session-seeding", "signed-in-fixture"];
+const TEST_ONLY_NAMES = ["e2e-session-seeding", "signed-in-fixture", "signed-in-setup"];
 
 function listSourceFiles(dir) {
   const out = [];
@@ -172,7 +184,7 @@ function listSourceFiles(dir) {
 
 /** Every import specifier in `srcDir`, and those that reach test-only code:
  * a relative path resolving under `<root>/e2e`, or any specifier naming the
- * seeding module or the fixture. */
+ * seeding module, the setup or the fixture. */
 function scanForTestOnlyImports(root, srcDir) {
   const files = listSourceFiles(srcDir);
   const specifiers = [];
@@ -212,15 +224,17 @@ describe("no module under src/ imports the seeding code (K3, the build half)", (
     fs.writeFileSync(path.join(src, "app", "api", "x", "route.ts"), 'const m = await import("../../../../scripts/lib/e2e-session-seeding.mjs");\n');
     fs.writeFileSync(path.join(src, "c.tsx"), 'export { x } from "../e2e/has-horizontal-scroll";\n');
     fs.writeFileSync(path.join(src, "d.js"), 'require("@/scripts/e2e-session-seeding");\n');
+    fs.writeFileSync(path.join(src, "e.ts"), 'import setup from "@/../e2e/signed-in-setup";\n');
     fs.writeFileSync(path.join(src, "clean.ts"), 'import { prisma } from "@/lib/prisma";\nimport "./side-effect";\n');
 
     const { files, offending } = scanForTestOnlyImports(tmp, src);
-    expect(files).toHaveLength(5);
+    expect(files).toHaveLength(6);
     expect(offending.sort()).toEqual([
       "src/a.ts -> ../e2e/signed-in-fixture",
       "src/app/api/x/route.ts -> ../../../../scripts/lib/e2e-session-seeding.mjs",
       "src/c.tsx -> ../e2e/has-horizontal-scroll",
       "src/d.js -> @/scripts/e2e-session-seeding",
+      "src/e.ts -> @/../e2e/signed-in-setup",
     ]);
   });
 

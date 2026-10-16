@@ -70,6 +70,12 @@ describe("playwright.config.ts: the seeded identity's allowlist (ugcportal-0wh6)
     expect((await webServerEnv("./playwright.config"))?.["ALLOWED_SIGNIN_EMAILS"]).toBe(E2E_SIGNED_IN_EMAIL);
   });
 
+  it("the root suite seeds the session through e2e/signed-in-setup.ts as its globalSetup", async () => {
+    vi.resetModules();
+    const mod = (await import("./playwright.config")) as { default: { globalSetup?: unknown } };
+    expect(mod.default.globalSetup).toBe("./e2e/signed-in-setup.ts");
+  });
+
   it("the production-build suite (e2e/production) does not allowlist it", async () => {
     const env = (await webServerEnv("./e2e/production/playwright.config")) ?? {};
     // NODE_ENV read back first, so this is demonstrably that config's env.

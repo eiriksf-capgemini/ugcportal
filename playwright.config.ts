@@ -30,6 +30,9 @@ export default defineConfig({
   // each other depending on worker order. Run that one explicitly with
   // `npm run test:e2e:alcohol-commerce`.
   testIgnore: ["**/production/**", "**/seeded/**"],
+  // ugcportal-0wh6: seeds the one signed-in session e2e/signed-in-fixture.ts
+  // hands to the tests that ask for it, and removes it after the run.
+  globalSetup: "./e2e/signed-in-setup.ts",
   fullyParallel: true,
   retries: 0,
   reporter: [["list"]],
