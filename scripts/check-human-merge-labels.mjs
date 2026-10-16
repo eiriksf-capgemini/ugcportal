@@ -13,6 +13,15 @@
  * exactly the marker, so a comment that quotes a marker inside prose is not
  * a verdict (L1).
  *
+ * Reach: only ISSUE comments are read (`gh pr list --json comments`), not
+ * review bodies. That matches where the skill writes the markers: step 5
+ * stamps the round marker and step 2 the verdict marker in an issue comment
+ * (`gh pr comment`), never in a review body. The label is applied only at the
+ * sensitive-path reviewed-clean stop (step 2). The `approx`-at-cap and
+ * broken-chain zero-finding stops stamp a non-round `ugcportal-review-stop`
+ * comment, are not labelled by this check's PR, and so are not read here
+ * (ugcportal-osth).
+ *
  *   A  latest round comment carries the verdict marker line
  *      `<!-- ugcportal-needs-human-merge -->` but the PR has no label.
  *   B  PR is round-reviewed, touches a sensitive path (step 2's list), has no
@@ -27,8 +36,8 @@
  *
  * Usage:  node scripts/check-human-merge-labels.mjs
  * Exit:   0 nothing listed; 1 any of A/B/C listed; 2 the data was truncated
- *         (PR list at its limit, or a PR whose comments hit gh's 100-comment
- *         window), so a zero could not be trusted.
+ *         (PR list at its limit, or a PR whose comments or files hit gh's
+ *         100-item window), so a zero could not be trusted.
  *
  * It prints its counts first (review-standards section 6): a bare "nothing"
  * from a filter that matched nothing reads as clean.
@@ -44,6 +53,8 @@ export const ROUND_MARKER_RE = /^<!-- ugcportal-review-round: [0-9]+( approx)? -
 export const PR_LIST_LIMIT = 200;
 /** `gh pr list --json comments` fetches comments(first: 100). */
 export const COMMENT_WINDOW = 100;
+/** `gh pr list --json files` fetches files(first: 100). */
+export const FILE_WINDOW = 100;
 
 const SENSITIVE_PATH_RES = [
   /^\.claude\/settings(\.local)?\.json$/,
@@ -90,9 +101,11 @@ export function classifyPrs(prs) {
   const sensitiveNoLabelNoVerdict = []; // B
   const staleLabel = []; // C
   const truncatedComments = [];
+  const truncatedFiles = [];
   for (const pr of prs) {
     const comments = pr.comments ?? [];
     if (comments.length >= COMMENT_WINDOW) truncatedComments.push(pr.number);
+    if ((pr.files ?? []).length >= FILE_WINDOW) truncatedFiles.push(pr.number);
     const latest = latestRoundComment(comments);
     if (!latest) continue;
     roundReviewed++;
@@ -114,6 +127,7 @@ export function classifyPrs(prs) {
     sensitiveNoLabelNoVerdict,
     staleLabel,
     truncatedComments,
+    truncatedFiles,
   };
 }
 
@@ -132,12 +146,14 @@ export function formatReport(r) {
     out.push(`  C #${n}: carries ${LABEL} but its latest round comment has no verdict marker (stale label?)`);
   for (const n of r.truncatedComments)
     out.push(`  TRUNCATED #${n}: ${COMMENT_WINDOW} comments hit gh's window, the latest round comment may be missing`);
+  for (const n of r.truncatedFiles)
+    out.push(`  TRUNCATED #${n}: ${FILE_WINDOW} files hit gh's window, a sensitive path past it would be missed`);
   return out.join("\n");
 }
 
 /** @param {ReturnType<typeof classifyPrs>} r @param {boolean} listTruncated */
 export function exitCode(r, listTruncated) {
-  if (listTruncated || r.truncatedComments.length > 0) return 2;
+  if (listTruncated || r.truncatedComments.length > 0 || r.truncatedFiles.length > 0) return 2;
   const listed = r.unlabelledClean.length + r.sensitiveNoLabelNoVerdict.length + r.staleLabel.length;
   return listed > 0 ? 1 : 0;
 }

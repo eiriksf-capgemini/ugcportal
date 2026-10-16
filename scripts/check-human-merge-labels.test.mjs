@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   COMMENT_WINDOW,
+  FILE_WINDOW,
   LABEL,
   PR_LIST_LIMIT,
   VERDICT_MARKER,
@@ -78,6 +79,29 @@ describe("classifyPrs", () => {
   });
 });
 
+describe("round marker forms", () => {
+  it("accepts the approx round marker", () => {
+    const approx = { body: `<!-- ugcportal-review-round: 3 approx -->\n${VERDICT_MARKER}\nclean` };
+    const r = classifyPrs([pr(20, [], [approx])]);
+    expect(r.roundReviewed).toBe(1);
+    expect(r.unlabelledClean).toEqual([20]);
+  });
+
+  it("accepts CRLF bodies (web-UI comments)", () => {
+    const crlf = { body: `${ROUND}\r\n${VERDICT_MARKER}\r\nclean` };
+    const r = classifyPrs([pr(21, [], [crlf])]);
+    expect(r.roundReviewed).toBe(1);
+    expect(r.unlabelledClean).toEqual([21]);
+  });
+
+  it("a non-round stop comment is not a round comment (step 2 labels only the sensitive-path stop)", () => {
+    const stop = { body: `<!-- ugcportal-review-stop: chain-broken -->\n${VERDICT_MARKER}` };
+    const r = classifyPrs([pr(22, label, [blocked, stop])]);
+    // the latest ROUND comment is the blocked one, so the label is listed as C: the skill never labels this stop
+    expect(r.staleLabel).toEqual([22]);
+  });
+});
+
 describe("isSensitivePath", () => {
   it.each([
     [".claude/skills/a/b.md", true],
@@ -86,6 +110,15 @@ describe("isSensitivePath", () => {
     [".github/workflows/ci.yml", true],
     ["src/app/api/auth/x.ts", true],
     ["a/b/my-secret.txt", true],
+    ["a/b/my-credentials.json", true],
+    [".claude/settings.local.json", true],
+    ["docker-compose.yml", true],
+    ["deploy/docker-compose.yml", true],
+    ["certs/server.pem", true],
+    ["certs/server.key", true],
+    ["src/lib/auth.ts", true],
+    [".env", true],
+    ["apps/web/.env.local", true],
     ["src/app/page.tsx", false],
     ["scripts/check-human-merge-labels.mjs", false],
     [".claude/agents/worker-reviewer.md", false],
@@ -137,6 +170,13 @@ describe("exitCode / run", () => {
     const t = io([pr(1, [], many)]);
     expect(run(t.args)).toBe(2);
     expect(t.logs[0]).toContain("TRUNCATED #1");
+  });
+
+  it("exits 2 when a PR's files hit the window", () => {
+    const many = Array.from({ length: FILE_WINDOW }, (_, i) => ({ path: `src/f${i}.ts` }));
+    const t = io([pr(1, [], [chatter], many)]);
+    expect(run(t.args)).toBe(2);
+    expect(t.logs[0]).toContain("TRUNCATED #1: 100 files");
   });
 
   it("exitCode ranks truncation above a listed PR", () => {
