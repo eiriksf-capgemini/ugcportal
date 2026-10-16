@@ -66,12 +66,14 @@ import {
   median,
   outcomeOf,
   parseChangelogMembership,
+  parseFindingsKey,
   parsePrs,
   parseRoundsFromCloseReason,
   readCodeSpans,
   readRoundChain,
   spliceGenerated,
   tailRounds,
+  withFindingsKeys,
 } from "./release-cost-report.mjs";
 
 const loadFixture = (name) => JSON.parse(fs.readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8"));
@@ -1179,5 +1181,96 @@ describe("controls table (ugcportal-md4c)", () => {
     const out = renderControlsTable(priced, catchesByControl([]), { dir: "/d" });
     expect(CONTROLS.map((c) => c.name)).toEqual(["review-round-markers", "claims-audit", "sweep-candidates", "dispatch-gate", "premise-audit"]);
     for (const c of CONTROLS) expect(out).toContain(`| ${c.name} |`);
+  });
+});
+
+describe("findings_rN keys (ugcportal-2jvh)", () => {
+  const round = (n, medium, low, stated = true) => ({ n, at: "2026-10-16T00:00:00Z", medium, low, stated, findings: null, mediumLabels: [], lowLabels: [], addenda: 0 });
+  const pr = (number, rounds) => ({
+    number,
+    title: "t",
+    state: "MERGED",
+    mergedAt: "2026-10-16T00:00:00Z",
+    author: "bot",
+    chain: { status: "exact", highest: rounds.length, ns: rounds.map((r) => r.n), stops: [], self: false },
+    rounds,
+    lastRoundBody: "",
+    extras: [],
+    inlineCount: 0,
+    inlineLabelled: { medium: 0, low: 0, unstated: 0 },
+    inlineBursts: 0,
+  });
+  // Prose says r1 = 1 medium + 1 low, r2 = clean. Keys (bead A) say r1 = 3 medium + 2 low.
+  const keyed = { id: "ugcportal-kkk1", title: "keyed", metadata: { cc_type: "feat", prs: "gh-901", findings_r1: "f1:2 f2:0 f3:3 f4:0 med:3 low:2", findings_r2: "f1:0 f2:0 f3:0 f4:0 med:0 low:0" } };
+  const prosy = { id: "ugcportal-kkk2", title: "prose", metadata: { cc_type: "feat", prs: "gh-902" } };
+  const analyses = () => new Map([[901, pr(901, [round(1, 1, 1), round(2, 0, 0)])], [902, pr(902, [round(1, 1, 1), round(2, 0, 0)])]]);
+  const beads = [keyed, prosy];
+  const release = { version: "v9.9.9", ids: beads.map((b) => b.id), entries: new Map(beads.map((b) => [b.id, { title: b.title, type: "Features" }])) };
+  const rows = buildRows(release, new Map(beads.map((b) => [b.id, b])), analyses());
+  const row = (id) => rows.find((r) => r.id === id);
+
+  it("parseFindingsKey reads the six fields, the optional unstated, and rejects everything else as null", () => {
+    expect(parseFindingsKey("f1:2 f2:0 f3:1 f4:0 med:1 low:2")).toEqual({ f1: 2, f2: 0, f3: 1, f4: 0, med: 1, low: 2, unstated: 0 });
+    expect(parseFindingsKey("f1:0 f2:0 f3:0 f4:0 med:0 low:0 unstated:2")).toMatchObject({ unstated: 2 });
+    for (const bad of [undefined, null, 3, "", "f1:2 f3:1 med:1 low:2", "f1:a f2:0 f3:0 f4:0 med:0 low:0", "f1:1 f2:0 f3:0 f4:0 med:0 low:0 extra:1"]) expect(parseFindingsKey(bad)).toBeNull();
+  });
+
+  it("a bead carrying keys reports per-round severity from the keys, not the prose parse", () => {
+    const r = row("ugcportal-kkk1");
+    expect(r.mediumsByRound).toBe("r1:3");
+    expect(r.mediums).toBe(3);
+    expect(r.lowsLabelled).toBe(2);
+    expect(r.roundsFromKeys).toBe(2);
+    expect(r.roundsFromProse).toBe(0);
+  });
+
+  it("a bead without keys keeps the prose figures and counts its rounds as fallbacks", () => {
+    const r = row("ugcportal-kkk2");
+    expect(r.mediumsByRound).toBe("r1:1");
+    expect(r.mediums).toBe(1);
+    expect(r.roundsFromKeys).toBe(0);
+    expect(r.roundsFromProse).toBe(2);
+  });
+
+  it("the report says how many rounds came from keys and which beads fell back, so a zero is visible", () => {
+    const report = renderReport({ releases: ["v9.9.9"], rowsByRelease: new Map([["v9.9.9", rows]]), membershipChecks: [], unmerged: [], generatedAt: "2026-10-16", reviewer: "x", prCount: 0 });
+    expect(report).toContain("rounds whose severity came from `findings_rN` keys: 2; rounds that fell back to the prose parse: 2 -- kkk2 (2)");
+    expect(report).toContain("| 2 / 2 |");
+  });
+
+  it("does not mutate the shared PR analysis (a PR can belong to two beads)", () => {
+    const shared = analyses();
+    buildRows(release, new Map(beads.map((b) => [b.id, b])), shared);
+    expect(shared.get(901).rounds[0]).toMatchObject({ medium: 1, low: 1 });
+    expect(shared.get(901).rounds[0].source).toBeUndefined();
+  });
+
+  it("a malformed key falls back to the prose figure and is listed, never read as zeros", () => {
+    const out = withFindingsKeys(pr(1, [round(1, 2, 0)]), { findings_r1: "med:2" });
+    expect(out.rounds[0]).toMatchObject({ source: "prose", fallbackReason: "malformed", medium: 2 });
+  });
+
+  it("guardrail: an all-zero key on a round whose verdict states findings is inconsistent, not clean", () => {
+    const out = withFindingsKeys(pr(1, [round(1, 1, 2)]), { findings_r1: "f1:0 f2:0 f3:0 f4:0 med:0 low:0" });
+    expect(out.rounds[0]).toMatchObject({ source: "prose", fallbackReason: "inconsistent", medium: 1, low: 2 });
+    const b = { id: "ugcportal-kkk3", title: "x", metadata: { prs: "gh-903", findings_r1: "f1:0 f2:0 f3:0 f4:0 med:0 low:0" } };
+    const rel = { version: "v9.9.9", ids: [b.id], entries: new Map([[b.id, { title: "x", type: "Features" }]]) };
+    const rs = buildRows(rel, new Map([[b.id, b]]), new Map([[903, pr(903, [round(1, 1, 2)])]]));
+    expect(rs[0].keyFallbacks).toEqual(["r1 inconsistent"]);
+    const report = renderReport({ releases: ["v9.9.9"], rowsByRelease: new Map([["v9.9.9", rs]]), membershipChecks: [], unmerged: [], generatedAt: "2026-10-16", reviewer: "x", prCount: 0 });
+    expect(report).toContain("present but not used, prose kept (1): kkk3 (r1 inconsistent)");
+  });
+
+  it("an all-zero key on a clean round is trusted", () => {
+    const out = withFindingsKeys(pr(1, [round(1, 0, 0)]), { findings_r1: "f1:0 f2:0 f3:0 f4:0 med:0 low:0" });
+    expect(out.rounds[0]).toMatchObject({ source: "keys", medium: 0, low: 0, stated: true });
+  });
+
+  it("a bead with two PRs that both have rounds cannot be keyed by round number, so it stays on prose", () => {
+    const b = { id: "ugcportal-kkk4", title: "x", metadata: { prs: "gh-901,gh-902", findings_r1: "f1:0 f2:0 f3:0 f4:0 med:9 low:0" } };
+    const rel = { version: "v9.9.9", ids: [b.id], entries: new Map([[b.id, { title: "x", type: "Features" }]]) };
+    const rs = buildRows(rel, new Map([[b.id, b]]), analyses());
+    expect(rs[0].roundsFromKeys).toBe(0);
+    expect(rs[0].mediums).toBe(2);
   });
 });

@@ -438,6 +438,20 @@ So this step is something the invoking orchestrator does after this run is over,
 
    This matters more here than anywhere else in this file, because nothing downstream ever cross-checks `tokens_qa` against another source. `cut-release`'s Cost Summary reads these fields and nothing else, so a write that silently did not land does not show up as an error — it shows up as a smaller, confident number in a release note.
 
+5. **Record the round's findings by family and severity (ugcportal-2jvh).** The **orchestrator** writes `findings_r<N>` from the reviewer's report, the same way and at the same time it writes `tokens_qa_r<N>` — the reviewer run cannot write its own metadata, so this key is never written by the run that produced the findings. The report must therefore list every finding with the family (step 4.1) and the severity the reviewer assigned it (step 6 asks for both). Value format, one string per round:
+   ```
+   findings_r<N>="f1:<n> f2:<n> f3:<n> f4:<n> med:<n> low:<n>"
+   ```
+   - `f1`-`f4`: how many findings the reviewer put under each of the four recurring families of step 4.1. A finding the reviewer names under two families counts in **both**, so `f1+f2+f3+f4` can exceed the number of findings; `med` and `low` count each finding once.
+   - `med`: findings of medium severity or above. `low`: findings the reviewer called low. A finding whose severity the reviewer did not state is counted under `low` only if the reviewer said low; otherwise append ` unstated:<n>` (the field is omitted when `n` is 0) rather than guessing.
+   - A clean round is `f1:0 f2:0 f3:0 f4:0 med:0 low:0`. A round that blocked on findings is never recorded as all zeros: `scripts/release-cost-report.mjs` reports that combination as inconsistent and keeps the prose figure instead.
+   - Example: a round with two family-1 lows and one family-3 medium is `findings_r2="f1:2 f2:0 f3:1 f4:0 med:1 low:2"`.
+   ```bash
+   bd update <bead-id> --set-metadata findings_r<N>="f1:<n> f2:<n> f3:<n> f4:<n> med:<n> low:<n>"
+   node scripts/bd-verify-metadata.mjs <bead-id> findings_r<N>="f1:<n> f2:<n> f3:<n> f4:<n> med:<n> low:<n>"
+   ```
+   This record does not depend on the token-cost conditions of item 1: findings are recorded whenever the round reached step 4, measurable subagent or not. A bead with no `findings_rN` keys is still read from the verdict prose by the release cost report, which says how many rounds fell back to that.
+
 **The reviewer run itself never calls `bd update --set-metadata tokens_qa`, `tokens_qa_note` or any `cost_*_qa` key.** It cannot see its own final token total before it has finished running, and guessing one here would be exactly the duration-based estimate this step has always forbidden. This applies regardless of whether the PR ends up merged or left for a human — the QA cost was incurred either way, and recording it is the invoking orchestrator's job once the total is known, not this run's.
 
 ## 4b. Which review round is this?
@@ -1075,6 +1089,7 @@ State plainly:
 - **Step 4.4**: the `<!-- ugcportal-measured: … -->` line exactly as you posted it, so the head and the baseline are in the report whether or not the trigger fired — and, for every delta you report anywhere in this round, the baseline figure and the command that produced it, measured by you on the same tree; for every absence, the path and the commit you read it at.
 - Findings with **the severity you assigned each one** (step 4's angles don't produce one on their own — see step 4's closing paragraph), and which were fixed versus deferred.
 - Bead ids filed in step 5a, if any — **each with the `discovered-from` edge you read back beside it**, in the direction it points, not just the id.
+- A findings list the orchestrator can turn into `findings_r<N>` (step 4a item 5): each finding with its family from step 4.1 (a finding may name two) and its severity, or a statement that the round was clean.
 - The `tokens_qa` figure and the `cost_ite_qa`/`cost_calls_qa` figures recorded in step 4a (or note that they were skipped, and why), and whether `bd-verify-metadata` confirmed they landed. "Recorded" without a read-back behind it is the claim, not the evidence.
 
 If merged, confirm the merge actually happened (`gh pr view <n> --json state,mergedAt`) and confirm the result of the scoped sweep above — removed and the final `git ls-remote` check confirms it gone, or kept (naming the reason the script printed) and still present.
