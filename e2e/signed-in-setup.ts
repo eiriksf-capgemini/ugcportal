@@ -18,10 +18,12 @@ import { loadDevEnvFiles } from "../scripts/lib/env-files.mjs";
  * the server's session read, and their cleanup failed the same way, leaving
  * rows behind. Seeded here, the write happens after the dev server is up
  * (Playwright runs its plugin setup, `webServer` included, before
- * globalSetup: `createGlobalSetupTasks` in playwright/lib/runner) but before any test sends
- * it a request, and nothing in the run writes to it again until teardown. A
- * session that lives the full Auth.js maxAge is also never rewritten by the
- * server when it is read (see seedSession's comment).
+ * globalSetup: `createGlobalSetupTasks` in
+ * node_modules/playwright/lib/runner/index.js) but before any test sends it
+ * a request, and the signed-in tests do not write it again until teardown:
+ * a session seeded a full Auth.js maxAge out is not rewritten by the server
+ * on read during its first day (see seedSession's comment and the vitest
+ * "expires a full 30-day maxAge out" case).
  *
  * A REFUSAL IS RECORDED, NOT THROWN. seedSession refuses a production
  * NODE_ENV, a remote DATABASE_URL or a non-loopback base URL. Throwing here

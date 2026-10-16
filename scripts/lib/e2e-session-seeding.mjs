@@ -29,9 +29,10 @@
  * ALLOWED_SIGNIN_EMAILS, using the address recorded on the session row
  * (`signInEmail`). The seeded row records E2E_SIGNED_IN_EMAIL, and the root
  * playwright.config.ts sets the ALLOWED_SIGNIN_EMAILS of the dev server it
- * starts to exactly that address. A server it did not start (UGCPORTAL_E2E_REUSE_SERVER=1)
- * will not have it, and refuses the seeded session: the signed-in specs then
- * fail on a signed-out page rather than passing on one.
+ * starts to exactly that address. A server it did not start
+ * (UGCPORTAL_E2E_REUSE_SERVER=1) does not get that setting, and unless its own
+ * configuration happens to list the address it refuses the seeded session:
+ * the signed-in specs then fail on a signed-out page rather than pass.
  *
  * A plain .mjs file, not TypeScript under e2e/, for the reason
  * e2e/seeded/alcohol-commerce.spec.ts gives for its own raw SQL: Playwright
@@ -126,14 +127,15 @@ export async function seedSession({ db, env, baseURL, name = "E2E Signed In", no
   // src/lib/auth.ts does not override), and not shorter on purpose. @auth/core
   // rewrites a database session's expiry on any request where
   // `expires - maxAge + updateAge` (updateAge: 24 hours) has already passed
-  // (lib/actions/session.js). Any expiry shorter than maxAge - updateAge
+  // (node_modules/@auth/core/lib/actions/session.js). Any expiry shorter than maxAge - updateAge
   // makes that true on EVERY signed-in request, so each page load becomes a
   // write to the one SQLite file every parallel worker's pages are reading
   // — the SQLITE_BUSY shape e2e/signed-in-setup.ts exists to avoid. Nor
   // would a short expiry stay short: the first request extends it to maxAge.
-  // A row a crashed run leaves behind is therefore live that long, and only
-  // on a server whose allowlist names E2E_SIGNED_IN_EMAIL (see the vitest
-  // guard's "refused by a server that has not allowlisted it" cases).
+  // A row a crashed run leaves behind is therefore live that long, and is
+  // accepted only by a server whose sign-in configuration permits
+  // E2E_SIGNED_IN_EMAIL (see the vitest guard's "refused by a server that
+  // has not allowlisted it" cases).
   const expires = new Date(now.getTime() + SESSION_MAX_AGE_MS).toISOString();
 
   // `email` left NULL on the User: User.email is unique, and specs run in
