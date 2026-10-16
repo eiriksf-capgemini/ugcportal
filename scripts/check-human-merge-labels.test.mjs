@@ -4,46 +4,142 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { LABEL, VERDICT_MARKER, classifyPrs, formatReport } from "./check-human-merge-labels.mjs";
+import {
+  COMMENT_WINDOW,
+  LABEL,
+  PR_LIST_LIMIT,
+  VERDICT_MARKER,
+  classifyPrs,
+  exitCode,
+  formatReport,
+  isSensitivePath,
+  run,
+} from "./check-human-merge-labels.mjs";
 
-const verdict = { body: `${VERDICT_MARKER}\nReviewed clean; a human must merge: touches .claude/skills/` };
+const ROUND = "<!-- ugcportal-review-round: 1 -->";
+const clean = { body: `${ROUND}\n${VERDICT_MARKER}\nReviewed clean; a human must merge` };
+const blocked = { body: `${ROUND}\nBlocking: 2 findings` };
 const chatter = { body: "LGTM" };
+const sens = [{ path: ".claude/skills/x/SKILL.md" }];
+const plain = [{ path: "src/a.ts" }];
+const label = [{ name: LABEL }];
 
-const fixture = [
-  { number: 1, labels: [{ name: LABEL }], comments: [verdict] },
-  { number: 2, labels: [{ name: "bug" }], comments: [verdict] },
-  { number: 3, labels: [], comments: [chatter] },
-];
+const pr = (number, labels, comments, files = plain) => ({ number, labels, comments, files });
 
 describe("classifyPrs", () => {
-  it("flags the verdict PR without the label and not the labelled one", () => {
-    const r = classifyPrs(fixture.slice(0, 2));
-    expect(r).toEqual({ examined: 2, withVerdict: 2, unlabelled: [2] });
+  it("A: latest round has the verdict marker and no label", () => {
+    const r = classifyPrs([pr(1, [], [clean]), pr(2, label, [clean])]);
+    expect(r.unlabelledClean).toEqual([1]);
+    expect(r.clean).toBe(2);
+    expect(r.roundReviewed).toBe(2);
   });
 
-  it("does not count a PR with no verdict comment", () => {
-    const r = classifyPrs(fixture);
-    expect(r.examined).toBe(3);
-    expect(r.withVerdict).toBe(2);
-    expect(r.unlabelled).toEqual([2]);
+  it("B: a sensitive round-reviewed PR with neither marker nor label is listed (the skipped-paragraph case)", () => {
+    const r = classifyPrs([pr(3, [], [blocked], sens), pr(4, [], [blocked], plain)]);
+    expect(r.sensitiveNoLabelNoVerdict).toEqual([3]);
+    expect(r.sensitiveReviewed).toBe(1);
   });
 
-  it("reports zero unlabelled when every verdict PR is labelled, with the counts still non-zero", () => {
-    const r = classifyPrs([fixture[0]]);
-    expect(r).toEqual({ examined: 1, withVerdict: 1, unlabelled: [] });
+  it("C: a label whose latest round comment has no verdict marker is stale", () => {
+    const r = classifyPrs([pr(5, label, [clean, { body: "<!-- ugcportal-review-round: 2 -->\nBlocking" }])]);
+    expect(r.staleLabel).toEqual([5]);
+    expect(r.unlabelledClean).toEqual([]);
   });
 
-  it("tolerates missing labels/comments", () => {
-    expect(classifyPrs([{ number: 9 }])).toEqual({ examined: 1, withVerdict: 0, unlabelled: [] });
+  it("uses the LATEST round comment: an old verdict followed by a blocked round is not a verdict", () => {
+    const r = classifyPrs([pr(6, [], [clean, { body: "<!-- ugcportal-review-round: 2 -->\nBlocking" }])]);
+    expect(r.unlabelledClean).toEqual([]);
+    expect(r.clean).toBe(0);
+  });
+
+  it("does not treat a comment that merely quotes the marker as a verdict (L1)", () => {
+    const quoting = { body: `${ROUND}\nBlocking: put \`${VERDICT_MARKER}\` in the comment` };
+    const r = classifyPrs([pr(7, [], [quoting])]);
+    expect(r.clean).toBe(0);
+    expect(r.unlabelledClean).toEqual([]);
+    // and a round marker that is not the first line is not a round comment
+    const notFirst = { body: `intro\n${ROUND}\n${VERDICT_MARKER}` };
+    expect(classifyPrs([pr(8, [], [notFirst])]).roundReviewed).toBe(0);
+  });
+
+  it("matches the label by exact name, not by prefix (near-miss label does not count)", () => {
+    const r = classifyPrs([pr(9, [{ name: "needs-review" }], [clean]), pr(10, [{ name: "needs-human-merge-2" }], [clean])]);
+    expect(r.unlabelledClean).toEqual([9, 10]);
+  });
+
+  it("ignores PRs with no round comment and tolerates missing fields", () => {
+    const r = classifyPrs([pr(11, [], [chatter], sens), { number: 12 }]);
+    expect(r).toMatchObject({ examined: 2, roundReviewed: 0, clean: 0, unlabelledClean: [], sensitiveNoLabelNoVerdict: [], staleLabel: [] });
+  });
+
+  it("flags a PR at gh's comment window", () => {
+    const many = Array.from({ length: COMMENT_WINDOW }, () => chatter);
+    expect(classifyPrs([pr(13, [], many)]).truncatedComments).toEqual([13]);
   });
 });
 
+describe("isSensitivePath", () => {
+  it.each([
+    [".claude/skills/a/b.md", true],
+    [".claude/settings.json", true],
+    ["CLAUDE.md", true],
+    [".github/workflows/ci.yml", true],
+    ["src/app/api/auth/x.ts", true],
+    ["a/b/my-secret.txt", true],
+    ["src/app/page.tsx", false],
+    ["scripts/check-human-merge-labels.mjs", false],
+    [".claude/agents/worker-reviewer.md", false],
+  ])("%s -> %s", (p, expected) => expect(isSensitivePath(p)).toBe(expected));
+});
+
 describe("formatReport", () => {
-  it("prints the counts before any PR line", () => {
-    const out = formatReport(classifyPrs(fixture)).split("\n");
-    expect(out[0]).toContain("PRs examined: 3");
-    expect(out[0]).toContain("with a verdict comment");
-    expect(out[0]).toContain("unlabelled among those: 1");
-    expect(out[1]).toContain("#2");
+  it("prints the exact counts line before any PR line", () => {
+    const r = classifyPrs([pr(1, [], [clean]), pr(3, [], [blocked], sens), pr(5, label, [blocked]), pr(14, [], [chatter])]);
+    const out = formatReport(r).split("\n");
+    expect(out[0]).toBe(
+      `PRs examined: 4; round-reviewed (latest round marker): 3; latest round carries ${VERDICT_MARKER}: 1; ` +
+        "sensitive-path among round-reviewed: 1; A (verdict, no label): 1; B (sensitive, no label, no verdict): 1; C (label, no verdict): 1",
+    );
+    expect(out[1]).toContain("A #1");
+    expect(out[2]).toContain("B #3");
+    expect(out[3]).toContain("C #5");
+  });
+});
+
+describe("exitCode / run", () => {
+  const io = (prs) => {
+    const logs = [];
+    const warns = [];
+    return { logs, warns, args: { listPrs: () => prs, log: (s) => logs.push(s), warn: (s) => warns.push(s) } };
+  };
+
+  it("exits 0 when nothing is listed, and still prints the counts", () => {
+    const t = io([pr(1, label, [clean])]);
+    expect(run(t.args)).toBe(0);
+    expect(t.logs[0]).toContain("PRs examined: 1; round-reviewed (latest round marker): 1;");
+  });
+
+  it("exits 1 for each of A, B and C", () => {
+    expect(run(io([pr(1, [], [clean])]).args)).toBe(1);
+    expect(run(io([pr(2, [], [blocked], sens)]).args)).toBe(1);
+    expect(run(io([pr(3, label, [blocked])]).args)).toBe(1);
+  });
+
+  it("exits 2 and warns when the PR list hits its limit, even with nothing listed", () => {
+    const prs = Array.from({ length: PR_LIST_LIMIT }, (_, i) => pr(i + 1, [], [chatter]));
+    const t = io(prs);
+    expect(run(t.args)).toBe(2);
+    expect(t.warns[0]).toContain("may be truncated");
+  });
+
+  it("exits 2 when a PR's comments hit the window", () => {
+    const many = Array.from({ length: COMMENT_WINDOW }, () => chatter);
+    const t = io([pr(1, [], many)]);
+    expect(run(t.args)).toBe(2);
+    expect(t.logs[0]).toContain("TRUNCATED #1");
+  });
+
+  it("exitCode ranks truncation above a listed PR", () => {
+    expect(exitCode(classifyPrs([pr(1, [], [clean])]), true)).toBe(2);
   });
 });

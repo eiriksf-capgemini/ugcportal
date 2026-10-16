@@ -102,13 +102,13 @@ If the changed files (`gh pr view --json files`) touch any of the following, thi
 
 If any of these are touched, still run the review (step 4) and post it as a normal comment, but explicitly state in the comment that this PR requires human approval/merge because it touches a sensitive path, and do not call `gh pr review --approve` or `gh pr merge`.
 
-**Mark the PR as waiting on a human (ugcportal-ub7y).** A comment alone leaves the PR findable only in chat. At this stop, once the review has reached a clean verdict (no blocking finding), do two things, in this order: put the line `<!-- ugcportal-needs-human-merge -->` in the comment, which says that a human must merge and **names the sensitive paths** that triggered the stop, and apply the GitHub label (it already exists on the repo; `gh label list` shows it):
+**Mark the PR as waiting on a human (ugcportal-ub7y).** A comment alone leaves the PR findable only in chat. The label `needs-human-merge` means exactly one thing: **the latest round reviewed clean, and a human must merge**. It is applied only on a reviewed-clean verdict, and it is removed by any later round that blocks (step 5). The reviewed-clean stops are: a sensitive-path PR whose round has no blocking finding; an `approx` chain at the round cap with zero findings; and a `broken` chain with zero findings. A stop with a blocker, including the round-6 escalation (step 5, row 6: "a blocker here ends in escalation"), is not reviewed clean and gets no label. At a reviewed-clean stop do two things, in this order: put the line `<!-- ugcportal-needs-human-merge -->` on a line of its own in the round comment (which says that a human must merge and **names the sensitive paths** that triggered the stop), and apply the GitHub label (it already exists on the repo; `gh label list` shows it):
 
 ```bash
 gh pr edit <n> --add-label needs-human-merge
 ```
 
-The reviewer run applies this GitHub label. The bead label `stalled-on-human` is set by the **orchestrator**, not the reviewer run, because a reviewer's `bd` access is limited; step 6 carries that instruction. A PR that also has blocking findings is not "reviewed clean": it gets the normal blocking comment and no label until a later round is clean. The same label and the same two orchestrator instructions apply wherever else a reviewed-clean PR is left for a human to merge (for example the round-6 escalation stop in step 5).
+The reviewer run applies and removes this GitHub label; the implementer never pre-labels at open. The bead label `stalled-on-human` is set by the **orchestrator**, not the reviewer run: the orchestrator owns the bead's lifecycle labels, so one writer sets and clears them, and step 6 carries the instruction. If the PR is later blocked by a new round, remove the label: `gh pr edit <n> --remove-label needs-human-merge`, and ask the orchestrator to remove `stalled-on-human` (a label left on a blocked PR shows the human "reviewed clean, merge me" in `scripts/lib/dashboard-data.mjs`'s "Merge needed" list; on 2026-10-16 the orchestrator removed it by hand from six PRs, #280, #281, #282, #284, #285 and #286, for this reason). The same label and the same two orchestrator instructions apply at the other reviewed-clean stops named above.
 
 ## 3. CI gate
 
@@ -959,7 +959,7 @@ If that still prints a line after the script reported success, say so plainly in
 
 If the PR merges at round 4+ with low findings deferred, say so explicitly in the round-marker comment posted before merge (and in the approval body too, on the rare chain where approval is attempted and succeeds) and list the bead ids from step 5a.
 
-If anything blocks: do not approve, do not merge. Post a single clear comment stating exactly which gate(s) failed (sensitive path / CI red / findings, **each finding with the severity you assigned it in step 4**), the round number and its chain status (`exact` / `approx` / `broken`), and what a human or the implementer needs to do next. **Stamp the round marker** so the next round can count itself — the post-round integrity check above has already run and passed before you reach this point, so this is the first and only write this round makes:
+If anything blocks: do not approve, do not merge. A blocking round also removes a `needs-human-merge` label if the PR carries one (`gh pr edit <n> --remove-label needs-human-merge`) and asks the orchestrator to remove `stalled-on-human` from the bead; the label means "latest round reviewed clean" (step 2). Post a single clear comment stating exactly which gate(s) failed (sensitive path / CI red / findings, **each finding with the severity you assigned it in step 4**), the round number and its chain status (`exact` / `approx` / `broken`), and what a human or the implementer needs to do next. **Stamp the round marker** so the next round can count itself — the post-round integrity check above has already run and passed before you reach this point, so this is the first and only write this round makes:
 
 ```bash
 gh pr comment <n> --body "$(cat <<'EOF'
@@ -1085,20 +1085,11 @@ State plainly:
 - Bead ids filed in step 5a, if any — **each with the `discovered-from` edge you read back beside it**, in the direction it points, not just the id.
 - The `tokens_qa` figure and the `cost_ite_qa`/`cost_calls_qa` figures recorded in step 4a (or note that they were skipped, and why), and whether `bd-verify-metadata` confirmed they landed. "Recorded" without a read-back behind it is the claim, not the evidence.
 
-**If the PR was left for a human (sensitive path, step 2, or an escalation stop), say so and give the orchestrator the bead instruction (ugcportal-ub7y):** the GitHub label `needs-human-merge` is on the PR (you applied it, quote the `gh pr edit` output or `gh pr view <n> --json labels`), and the orchestrator runs, from the main checkout:
+**If the PR was left for a human at a reviewed-clean stop (step 2: sensitive path, or an `approx`/`broken` chain with zero findings), say so and give the orchestrator the bead instruction (ugcportal-ub7y).** A stop with a blocker, including the round-6 escalation, is not reviewed clean: no label, and a label already there is removed (step 5).
 
-```bash
-bd label add <bead-id> stalled-on-human
-```
-
-When that PR later merges and the bead closes, the orchestrator removes both labels (a merged PR keeps its labels otherwise, and the bead would stay on the "needs you" lists):
-
-```bash
-gh pr edit <n> --remove-label needs-human-merge
-bd label remove <bead-id> stalled-on-human
-```
-
-`node scripts/check-human-merge-labels.mjs` is the check that catches a PR left in chat only: it lists open PRs whose comment carries the `<!-- ugcportal-needs-human-merge -->` marker but that lack the label, and prints its counts (PRs examined, PRs with a verdict comment, unlabelled among those) before any zero is trusted. Read the counts, not only the absence of a list.
+- The GitHub label `needs-human-merge` is on the PR (you applied it; quote the `gh pr edit` output or `gh pr view <n> --json labels`), and the orchestrator runs, from the main checkout, `bd label add <bead-id> stalled-on-human`.
+- Removal happens only when the orchestrator closes the bead under `CLAUDE.md` Session Completion step 3, after the PR has merged: `gh pr edit <n> --remove-label needs-human-merge` and `bd label remove <bead-id> stalled-on-human`. No `pr-review-merge` run takes place after a human merges by hand, so this reviewer-run step cannot do it; until CLAUDE.md's step 3 says so, it is the orchestrator's habit, not a mechanism.
+- `node scripts/check-human-merge-labels.mjs` audits the labels on open PRs and prints its counts first (PRs examined, round-reviewed PRs, verdict-marker PRs, sensitive-path round-reviewed PRs, and the three classes). It starts from the round marker, not from the verdict marker alone, so a reviewer who skipped step 2's paragraph is still listed: A is a latest round with the verdict marker and no label; B is a sensitive-path round-reviewed PR with no label and no verdict marker, which is either a blocked round (correct) or a skipped marker, so a human reads its comment; C is a label with no verdict marker in the latest round, a stale label. It exits 0 when nothing is listed, 1 when A, B or C is listed, and 2 when the PR list or a PR's comments hit the fetch limit and so a zero could not be trusted. It cannot tell a reviewed-clean PR with a skipped marker from a blocked one; B is where it says so. It reads open PRs only, so a stale label on a merged PR is not caught.
 
 If merged, confirm the merge actually happened (`gh pr view <n> --json state,mergedAt`) and confirm the result of the scoped sweep above — removed and the final `git ls-remote` check confirms it gone, or kept (naming the reason the script printed) and still present.
 
