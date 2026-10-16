@@ -1095,6 +1095,8 @@ describe("controls table (ugcportal-md4c)", () => {
     { id: "ugcportal-a3", metadata: { caught_by: "bogus-control" } },
     { id: "ugcportal-a4", metadata: { cc_type: "fix" } },
     { id: "ugcportal-a5" },
+    { id: "ugcportal-a6", metadata: { caught_by: "claims-audit,claims-audit" } },
+    { id: "ugcportal-a7", metadata: { caught_by: "Dispatch-Gate" } },
   ];
 
   it("K1: each control's runs, cost, wall clock, orchestrator share and examined/matched pair", () => {
@@ -1103,8 +1105,8 @@ describe("controls table (ugcportal-md4c)", () => {
     expect(ca).toMatchObject({ runs: 3, ite: 9000, seconds: 60, orchRuns: 1, orchIte: 1000, examined: 4, matched: 2, lowerBound: false });
     expect(dg).toMatchObject({ runs: 1, ite: 2000, seconds: 4, orchRuns: 1, orchIte: 2000, examined: 4, matched: 1 });
     const out = controlsSection(beads, dir, null, controls);
-    expect(out).toContain("| claims-audit | 3 | 9,000 | 60 s | 11% of cost (1 of 3 runs) | 2 | 4 examined / 2 matched |");
-    expect(out).toContain("| dispatch-gate | 1 | 2,000 | 4 s | 100% of cost (1 of 1 runs) | 1 | 4 examined / 1 matched |");
+    expect(out).toContain("| claims-audit | 3 | 9,000 | 60 s | 11% of cost (1 of 3 runs) | 3 | 4 examined / 2 matched |");
+    expect(out).toContain("| dispatch-gate | 1 | 2,000 | 4 s | 100% of cost (1 of 1 runs) | 2 | 4 examined / 1 matched |");
   });
 
   it("the --before window ends the control's window", () => {
@@ -1114,8 +1116,8 @@ describe("controls table (ugcportal-md4c)", () => {
 
   it("K2: catches are counted per control from caught_by, several values allowed, unknown values reported", () => {
     const { counts, unrecognised } = catchesByControl(beads, controls);
-    expect(counts.get("claims-audit")).toEqual(["ugcportal-a1", "ugcportal-a2"]);
-    expect(counts.get("dispatch-gate")).toEqual(["ugcportal-a2"]);
+    expect(counts.get("claims-audit")).toEqual(["ugcportal-a1", "ugcportal-a2", "ugcportal-a6"]); // a6 names it twice, counted once
+    expect(counts.get("dispatch-gate")).toEqual(["ugcportal-a2", "ugcportal-a7"]); // a7 is written Dispatch-Gate
     expect(counts.get("sweep-candidates")).toEqual([]);
     expect(unrecognised).toEqual([{ id: "ugcportal-a3", value: "bogus-control" }]);
     const out = controlsSection(beads, fixture(), null, controls);
@@ -1138,6 +1140,37 @@ describe("controls table (ugcportal-md4c)", () => {
     fs.writeFileSync(path.join(dir, "s4.jsonl"), `${jsonl(turn("z1", "2026-10-10T13:00:00Z", 10, "node scripts/claims-audit.mjs"))}\n{"type":"assis`);
     const out = controlsSection([], dir, null, controls.slice(0, 1));
     expect(out).toMatch(/\| claims-audit \| >=4 \| >=9,010 \|/);
+    expect(out).toContain("LOWER BOUND");
+  });
+
+  it("a matching call with missing usage is counted as bad usage and marks every control scanned over that input a lower bound", () => {
+    const dir = fixture();
+    fs.writeFileSync(path.join(dir, "s5.jsonl"), jsonl({ type: "assistant", timestamp: "2026-10-10T13:00:00Z", message: { id: "b1", usage: {}, content: [{ type: "tool_use", id: "u-b1", input: { command: "node scripts/claims-audit.mjs" } }] } }));
+    const c = priceControl(controls[0], dir);
+    expect(c).toMatchObject({ lowerBound: true, runs: 4, ite: 9000, skipped: { badUsage: 1, unpriced: 1, unreadable: 0, malformedLines: 0 } });
+    const out = controlsSection([], dir, null, controls);
+    expect(out).toMatch(/\| claims-audit \| >=4 \| >=9,000 \| >=60 s \|/);
+    expect(out).toContain("LOWER BOUND (input was skipped or unpriced; `>=`): claims-audit, dispatch-gate, sweep-candidates.");
+    expect(out).toMatch(/\| dispatch-gate \| >=1 \| >=2,000 \|/);
+  });
+
+  it("a matching call whose turn has no message id is unpriced, and that alone marks the lower bound", () => {
+    // scanTool counts an id-less entry as bad usage too; the unpriced branch is tested directly with an injected scan result
+    const scan = () => ({ rows: [{ who: "a1", calls: 1, ite: 0, seconds: 0 }], filesExamined: 2, unreadable: 0, malformedLines: 0, badUsage: 0, unpriced: 1 });
+    const c = priceControl(controls[0], "/unused", null, scan);
+    expect(c.lowerBound).toBe(true);
+    const out = renderControlsTable([c], catchesByControl([], controls));
+    expect(out).toMatch(/\| claims-audit \| >=1 \| >=0 \| >=0 s \|/);
+    expect(out).toContain("LOWER BOUND");
+    const bad = priceControl(controls[0], "/unused", null, () => ({ rows: [{ who: "a1", calls: 1, ite: 5, seconds: 0 }], filesExamined: 2, unreadable: 0, malformedLines: 0, badUsage: 1, unpriced: 0 }));
+    expect(bad.lowerBound).toBe(true);
+  });
+
+  it("a zero-match row with skipped input prints the skipped counts, not only a boolean", () => {
+    const dir = fixture();
+    fs.writeFileSync(path.join(dir, "s6.jsonl"), `${jsonl(turn("z", "2026-10-10T13:00:00Z", 1, "ls"))}\n{"type":"assis`);
+    const out = controlsSection([], dir, null, controls.slice(2));
+    expect(out).toContain("0 of 5 files matched (0 files skipped unreadable, 1 malformed lines, 0 entries with bad usage, 0 calls unpriced)");
     expect(out).toContain("LOWER BOUND");
   });
 

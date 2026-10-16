@@ -71,8 +71,8 @@
  * docs/process/cost-performance-claims-v0.7.0-2026-10-16.md Appendix A used.
  * Examined/matched come straight from scanTool's reach fields, not recomputed.
  * A control whose pattern matched no call prints "0 of N files matched", not
- * a bare 0 (review-standards section 6; asserted by the "guardrail" test). Windowing: agent-pass-cost has an
- * upper bound only, so `--before <iso>` ends the window and there is NO lower
+ * a bare 0 (review-standards section 6; asserted by the "guardrail" test).
+ * Windowing: agent-pass-cost has an upper bound only, so `--before <iso>` ends the window and there is NO lower
  * bound; the table says so. Orchestrator share = ITE of calls the parent
  * sessions ran / ITE of all matching calls.
  *
@@ -86,7 +86,7 @@
  *   node scripts/bd-verify-metadata.mjs <id> caught_by=<control>
  * Controls with no command pattern (premise-audit: agents, not commands) show
  * catches only.
-
+ *
  * Usage:
  *   node scripts/release-cost-report.mjs [options]
  *     --releases v0.4.0,v0.5.0   releases to compare (CHANGELOG headings)
@@ -98,9 +98,9 @@
  *     --write <report.md>        replace the block between the generated markers in that file
  *     --json <out.json>          also dump the computed dataset
  *     --transcripts <dir>        add the controls table, pricing transcripts in <dir>
-     --controls-only            print only the controls table (needs bd, or --beads)
-     --before <iso>             end of the controls window (no lower bound exists)
-     --allow-unmerged           report instead of exit 2 on an unmerged `prs` entry
+ *     --controls-only            print only the controls table (needs bd, or --beads)
+ *     --before <iso>             end of the controls window (no lower bound exists)
+ *     --allow-unmerged           report instead of exit 2 on an unmerged `prs` entry
  *
  * Self-test: npm test -- runs scripts/release-cost-report.test.mjs (vitest)
  * against the pure functions exported below.
@@ -1685,7 +1685,7 @@ export function catchesByControl(beads, controls = CONTROLS) {
     const raw = b?.metadata?.[CAUGHT_BY_KEY];
     if (raw === undefined || raw === null || String(raw).trim() === "") continue;
     for (const v of String(raw).split(",").map((x) => x.trim().toLowerCase()).filter(Boolean)) {
-      if (counts.has(v)) counts.get(v).push(b.id);
+      if (counts.has(v)) { if (!counts.get(v).includes(b.id)) counts.get(v).push(b.id); }
       else unrecognised.push({ id: b.id, value: v });
     }
   }
@@ -1703,6 +1703,7 @@ export function priceControl(control, dir, before = null, scan = scanTool) {
     runs: sumOf(t.rows, "calls"), ite: sumOf(t.rows, "ite"), seconds: sumOf(t.rows, "seconds"),
     orchRuns: sumOf(orch, "calls"), orchIte: sumOf(orch, "ite"),
     examined: t.filesExamined, matched: t.rows.length,
+    skipped: { unreadable: t.unreadable, malformedLines: t.malformedLines, badUsage: t.badUsage, unpriced: t.unpriced },
     lowerBound: t.badUsage > 0 || t.unpriced > 0 || t.unreadable > 0 || t.malformedLines > 0,
   };
 }
@@ -1710,16 +1711,17 @@ export function priceControl(control, dir, before = null, scan = scanTool) {
 export function renderControlsTable(priced, catches, { dir, before } = {}) {
   const headers = ["Control", "Runs", "Cost (ITE)", "Wall clock", "Orchestrator share", "Catches", "Files examined / matched"];
   const rows = priced.map((p) => {
+    const sk = p.priced && p.lowerBound ? ` (${p.skipped.unreadable} files skipped unreadable, ${p.skipped.malformedLines} malformed lines, ${p.skipped.badUsage} entries with bad usage, ${p.skipped.unpriced} calls unpriced)` : "";
     const nCatch = String(catches.counts.get(p.control.name)?.length ?? 0);
     if (!p.priced) return [p.control.name, "n/a", "n/a", "n/a", "n/a", nCatch, "n/a (no command pattern; agents, not commands)"];
     if (p.matched === 0) {
-      return [p.control.name, "0 (pattern matched nothing)", "— (nothing matched)", "—", "—", nCatch, `0 of ${p.examined} files matched`];
+      return [p.control.name, "0 (pattern matched nothing)", "— (nothing matched)", "—", "—", nCatch, `0 of ${p.examined} files matched${sk}`];
     }
     const lb = p.lowerBound ? ">=" : "";
     return [
       p.control.name, `${lb}${fmt(p.runs)}`, `${lb}${fmt(p.ite)}`, `${lb}${fmt(p.seconds)} s`,
       p.ite > 0 ? `${pct(p.orchIte, p.ite)} of cost (${fmt(p.orchRuns)} of ${fmt(p.runs)} runs)` : `${fmt(p.orchRuns)} of ${fmt(p.runs)} runs`,
-      nCatch, `${fmt(p.examined)} examined / ${fmt(p.matched)} matched`,
+      nCatch, `${fmt(p.examined)} examined / ${fmt(p.matched)} matched${sk}`,
     ];
   });
   const out = [
