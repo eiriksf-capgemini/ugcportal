@@ -8,7 +8,7 @@
 # silently never running. Uses shell builtins only so it works with an empty PATH.
 case $0 in */*) dir=${0%/*} ;; *) dir=. ;; esac
 guard="$dir/bd-guard.mjs"
-node=$(command -v node 2>/dev/null)
+node=$(command -v node)
 if [ -z "$node" ] && [ -r "$HOME/.nvm/alias/default" ]; then
   read -r v < "$HOME/.nvm/alias/default"
   v=${v#v}
