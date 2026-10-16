@@ -29,7 +29,7 @@ Beads filed from this document: `ugcportal-cii0` (P1), `ugcportal-8r06`, `ugcpor
 
 Before testing anything, the unit. `tokens_impl` and `tokens_qa` are filled from the `subagent_tokens` figure of each task-notification. The transcripts let that figure be checked against the agent's own API usage:
 
-- Of 1,960 notifications compared, **1,952 are within 5%, and 1,896 within 2%, of the context size of the agent's last API call** (input + cache read + cache write + output). On the 142 resumed agents that got one notification per pass, every pass matches.
+- Of 1,961 notifications compared, **1,953 are within 5%, and 1,896 within 2%, of the context size of the agent's last API call** (input + cache read + cache write + output). On the 142 resumed agents that got one notification per pass, every pass matches.
 - So the figure is a **snapshot of the context window at the end of the run**, not the tokens the run processed. A run of 72 calls ending at 155k of context reads about 6.7M tokens from cache along the way (`lskg`'s first pass).
 - For a resumed agent the snapshots are **cumulative**, and the beads use two incompatible conventions. Of 86 resumed implementers mapped to exactly one bead, **14 beads record the sum of the cumulative snapshots** (`ei7 o7l e15 t0y egp jsc 44q bdh nffp 6uc2 7g2o z4nh jain a3hj`) and **40 record the last one**; 32 fit neither (several agents, hand estimates). `pr-review-merge` step 4a tells a reviewer to add "this run's reported total" to the existing `tokens_qa`, which is the summing convention.
 
@@ -137,7 +137,7 @@ The live case the brief offered agrees: PR #252 (`ugcportal-3ssw`) blocked at ro
 **(b) Test.**
 
 - **Attribution**, recounted from the `fbng` notes: 67 line-start labels, one of which (`A23`, line 518) is a back-reference, so **66 entries: A 37, B 11, C 18**, with A13-A19 each used twice — the retrospective's table, reproduced.
-- **Fan-out**, re-measured on A1 (the stale "204 files / 4553 tests" baseline) by reading the first prompt of every subagent transcript: **12 briefs carried it as the current baseline**, 2026-10-08 15:53Z to 17:08Z (implementers for `i40s`, `i7lr`, `74w-a`; reviewers of #192-#195; fix rounds of #193-#195), and 4 later briefs (17:48Z on) quote it as stale. The catalogue says five. The defect fanned out more than recorded.
+- **Fan-out**, re-measured on A1 (the stale "204 files / 4553 tests" baseline) by reading the first prompt of every subagent transcript: **12 briefs carried it as the current baseline**, 2026-10-08 15:53Z to 17:08Z (implementers for `i40s`, `i7lr`, `74w` (the "74w-a" curation-triage agent); reviewers of #192-#195; fix rounds of #193-#195), and 4 later briefs (17:48Z on) quote it as stale. The catalogue says five. The defect fanned out more than recorded.
 - **"Nine of nine"**: the catalogue's A29 says "nine errors in" and that briefs asking the agent to re-derive caught them; the nine are not listed as one set with their catcher, so the ratio is **asserted, not re-measured**.
 - **What an orchestrator control costs to run**: an orchestrator API call costs a mean 79k ITE (598.2M over 7,579 calls), a subagent call 26k (2,348.6M over the 91,722 calls of the 2,774 passes). The same control costs about three times as much per run when the orchestrator runs it inline: the dispatch gate's 25 orchestrator runs cost 2.05M ITE, about 82k a run.
 
@@ -240,11 +240,11 @@ cd <worktree>
 node scripts/release-cost-report.mjs --releases v0.5.0,v0.6.0,v0.7.0 --beads /tmp/l6t5/beads.json \
   --cache /tmp/l6t5/ghcache --json /tmp/l6t5/costreport.json --allow-unmerged > /tmp/l6t5/costreport.md
 node scripts/agent-pass-cost.mjs --before 2026-10-16T00:00:00Z --json /tmp/l6t5/passes.json
-#   reach: 16 sessions with subagents, 1750 agent files, 1750 parsed, 0 unreadable, 2774 passes starting before 2026-10-16T00:00:00Z
+#   reach: 16 sessions with subagents, 1752 agent files, 1752 parsed, 0 skipped unreadable, 0 malformed lines skipped, 0 assistant entries with missing/invalid usage, 2774 passes starting before 2026-10-16T00:00:00Z
 cd /tmp/l6t5 && node analysis.mjs        # appendix B; prints sections 1-4
 ```
 
-Control prices (section 7), one command each; each prints a reach line (files examined, files matched) and a `TOTAL` line:
+Control prices (section 7), one command each; each prints a reach line (files examined, files skipped as unreadable, malformed lines skipped, assistant entries with missing or invalid usage, files matched) and a `TOTAL` line, marked `(lower bound)` when anything was skipped:
 
 ```bash
 B=2026-10-16T00:00:00Z

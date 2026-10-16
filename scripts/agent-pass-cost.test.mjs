@@ -4,11 +4,18 @@
  * input-token-equivalent weighting, the task-notification reader and the
  * tool-call pricer. Fixtures are shaped like the real Claude Code transcript
  * lines the script reads (a subagent's `agent-<id>.jsonl` and its parent
- * session's task-notification text); the filesystem walk is not exercised.
+ * session's task-notification text). The filesystem walk (scan, scanTool) is
+ * exercised on small fixture trees written to a temp directory, for the
+ * skip-and-count behaviour of unreadable files, malformed lines and usage
+ * blocks that are missing or not numeric.
  */
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
-import { ctxOf, iteOf, notificationTotals, parsePasses, roleOf, toolCallCost } from "./agent-pass-cost.mjs";
+import { afterEach, describe, expect, it } from "vitest";
+
+import { ctxOf, iteOf, notificationTotals, parsePasses, roleOf, scan, scanTool, toolCallCost, validUsage } from "./agent-pass-cost.mjs";
 
 const usage = (o) => ({ input_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 10, ...o });
 const asst = (id, ts, u, content = []) => ({ type: "assistant", timestamp: ts, message: { id, usage: u, content } });
@@ -83,11 +90,95 @@ describe("toolCallCost", () => {
       { type: "user", timestamp: "2026-10-14T11:00:04Z", message: { content: [{ type: "tool_result", tool_use_id: "u1" }, { type: "tool_result", tool_use_id: "u2" }] } },
       asst("t2", "2026-10-14T11:00:05Z", usage({ cache_read_input_tokens: 100000 }), [{ type: "tool_use", id: "u3", input: { command: "ls" } }]),
     ];
-    expect(toolCallCost(entries, /check-bead-dispatch/)).toEqual({ calls: 2, turns: 1, ite: 10000, seconds: 8 });
-    expect(toolCallCost(entries, /no-such-command/)).toEqual({ calls: 0, turns: 0, ite: 0, seconds: 0 });
+    expect(toolCallCost(entries, /check-bead-dispatch/)).toEqual({ calls: 2, turns: 1, ite: 10000, seconds: 8, unpriced: 0, badUsage: 0 });
+    expect(toolCallCost(entries, /no-such-command/)).toEqual({ calls: 0, turns: 0, ite: 0, seconds: 0, unpriced: 0, badUsage: 0 });
     // --before drops calls issued at or after the cutoff
     expect(toolCallCost(entries, /check-bead-dispatch/, "2026-10-14T11:00:00Z").calls).toBe(0);
     expect(toolCallCost(entries, /check-bead-dispatch/, "2026-10-14T11:00:01Z").calls).toBe(2);
+  });
+});
+
+describe("notificationTotals, a long notification", () => {
+  it("reads the figure of a notification longer than 20,000 characters", () => {
+    const body = `<usage><subagent_tokens>151604</subagent_tokens></usage>${"x".repeat(30000)}`;
+    const text = `<task-notification>\\n<task-id>a47e</task-id>\\n${body}\\n</task-notification>`;
+    expect(notificationTotals(text).get("a47e")).toEqual([151604]);
+  });
+});
+
+describe("missing or non-numeric usage is counted, not zero-filled", () => {
+  const bad = [
+    asst("b1", "2026-10-15T09:00:06Z", undefined),
+    asst("b2", "2026-10-15T09:00:07Z", { output_tokens: 5 }),
+    asst("b3", "2026-10-15T09:00:08Z", usage({ input_tokens: Number.NaN })),
+    asst("b4", "2026-10-15T09:00:09Z", usage({ cache_read_input_tokens: "12" })),
+  ];
+  it("validUsage requires every numeric field", () => {
+    expect(validUsage(usage({}))).toBe(true);
+    expect(validUsage(undefined)).toBe(false);
+    expect(validUsage({ output_tokens: 5 })).toBe(false);
+    expect(validUsage(usage({ input_tokens: Number.NaN }))).toBe(false);
+  });
+  it("parsePasses counts each such entry and leaves it out of every figure", () => {
+    const stats = { badUsage: 0 };
+    const passes = parsePasses([prompt("2026-10-15T09:00:00Z", "go"), asst("g1", "2026-10-15T09:00:05Z", usage({ input_tokens: 100, output_tokens: 10 })), ...bad], stats);
+    expect(stats.badUsage).toBe(4);
+    expect(passes[0].calls).toBe(1);
+    expect(passes[0].ctxEnd).toBe(110); // not the 5 of the output-only block
+  });
+  it("toolCallCost counts the entries and reports a matching call it could not price", () => {
+    const entries = [asst("t1", "2026-10-14T11:00:00Z", { output_tokens: 5 }, [{ type: "tool_use", id: "u1", input: { command: "check-bead-dispatch" } }])];
+    expect(toolCallCost(entries, /check-bead-dispatch/)).toMatchObject({ calls: 1, turns: 0, ite: 0, unpriced: 1, badUsage: 1 });
+  });
+});
+
+describe("scan and scanTool over a transcript directory", () => {
+  const dirs = [];
+  afterEach(() => { for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true }); });
+  const jsonl = (...entries) => entries.map((e) => JSON.stringify(e)).join("\n");
+  const call = (id, ts) => asst(id, ts, usage({ cache_read_input_tokens: 1000, output_tokens: 0, input_tokens: 0 }), [{ type: "tool_use", id: `u-${id}`, input: { command: "node scripts/check-bead-dispatch.mjs" } }]);
+  function tree() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "apc-test-"));
+    dirs.push(dir);
+    return dir;
+  }
+
+  it("scanTool keeps the good lines of a file with a truncated last line and counts the bad one", () => {
+    const dir = tree();
+    for (const s of ["s1", "s2"]) fs.writeFileSync(path.join(dir, `${s}.jsonl`), `${jsonl(call("m1", "2026-10-14T11:00:00Z"))}\n{"type":"assistant","mess`);
+    const r = scanTool(dir, /check-bead-dispatch/);
+    expect(r).toMatchObject({ filesExamined: 2, unreadable: 0, malformedLines: 2 });
+    expect(r.rows.reduce((a, x) => a + x.calls, 0)).toBe(2);
+    expect(r.rows.reduce((a, x) => a + x.ite, 0)).toBe(200);
+  });
+
+  it("scanTool counts a file it cannot read as skipped, never as examined", () => {
+    const dir = tree();
+    fs.writeFileSync(path.join(dir, "ok.jsonl"), jsonl(call("m1", "2026-10-14T11:00:00Z")));
+    fs.mkdirSync(path.join(dir, "dir-not-file.jsonl"));
+    const r = scanTool(dir, /check-bead-dispatch/);
+    expect(r).toMatchObject({ files: 2, filesExamined: 1, unreadable: 1 });
+  });
+
+  it("scan keeps the good lines of a subagent file with a truncated last line, counts it, and marks the rows a lower bound", () => {
+    const dir = tree();
+    const sub = path.join(dir, "s1", "subagents");
+    fs.mkdirSync(sub, { recursive: true });
+    fs.writeFileSync(path.join(sub, "agent-a1.jsonl"), `${jsonl(prompt("2026-10-15T09:00:00Z", "go"), asst("m1", "2026-10-15T09:00:05Z", usage({ output_tokens: 10 })))}\n{"type":"assis`);
+    const { rows, reach } = scan(dir);
+    expect(reach).toMatchObject({ parsed: 1, unreadable: 0, malformedLines: 1 });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].lowerBound).toBe(true);
+  });
+
+  it("scan counts assistant entries with missing usage and marks the rows a lower bound", () => {
+    const dir = tree();
+    const sub = path.join(dir, "s1", "subagents");
+    fs.mkdirSync(sub, { recursive: true });
+    fs.writeFileSync(path.join(sub, "agent-a1.jsonl"), jsonl(prompt("2026-10-15T09:00:00Z", "go"), asst("m1", "2026-10-15T09:00:05Z", usage({})), asst("m2", "2026-10-15T09:00:06Z", undefined)));
+    const { rows, reach } = scan(dir);
+    expect(reach.badUsage).toBe(1);
+    expect(rows[0]).toMatchObject({ calls: 1, lowerBound: true });
   });
 });
 
