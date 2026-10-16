@@ -109,12 +109,27 @@ and correct pushes are refused (`bd memories cap-vitest-workers-when-many-agents
 which measured the cap at 3; 2 is the same rule with more headroom, and capping
 lower is not the failure mode).
 
-Run the suite in the **foreground** with `timeout: 600000`. The default Bash
-timeout is two minutes, which the suite has repeatedly exceeded — and inventing
-a recovery for that is how agents end up backgrounding it. **Never end a turn
-waiting on a background task** — the task finishing does not re-invoke you, so the turn ends
-having done no work and the task sits unfinished until someone nudges it
-(`bd memories never-end-an-agent-turn-waiting-on-a-background-task`).
+**Long commands: a foreground call carries an explicit timeout, and anything
+that may outrun one runs in the background and is polled in-turn.** Give every
+foreground Bash call its own `timeout` — the default is two minutes, which the
+suite has repeatedly exceeded, and the ceiling is `600000`. A command expected
+to run longer than about eight minutes (the full suite on a cold worktree or a
+loaded machine, Playwright, a cold build or image build) starts with
+`run_in_background`, its output redirected to a file, and you poll that file
+from this same turn with a bounded `until` loop in a foreground call, repeated
+until the command has exited. The Monitor tool is not that poll: it returns at
+once and delivers its events as notifications, so a worker could only wait on
+it by ending its turn — it is an orchestrator-side tool. A turn that stops while a
+background task runs loses the result — the task finishing does not re-invoke
+a dispatched worker, so the run ends having done no work (`bd memories
+never-end-an-agent-turn-waiting-on-a-background-task`; `ugcportal-fbng`, the
+2026-10-09 B-side entry). Silence is not progress either: when a foreground
+call hits its timeout, or a poll's bound runs out with the output file no
+longer growing, report a stall — the command, the elapsed time and the last
+lines of its output — rather than waiting it out or re-running it blind
+(`ugcportal-fbng` entry A19 of 2026-10-14: four reviewer runs on #244/#245 sat
+with no output for ten minutes inside foreground calls). The two command forms
+are written out in `.claude/skills/dispatch-bead/SKILL.md` section 2.
 
 Do not spawn subagents or forks of your own. The memory behind this
 (`bd memories nested-fork-reports-go-to-the-top-session`) says a nested fork's
@@ -161,13 +176,47 @@ your working tree. Run them with work uncommitted and they sweep an empty diff
 and print zero — which reads as "clean" and means "I looked at nothing"
 (`bd memories sweep-scripts-diff-committed-head-not-your-working-tree`).
 
-**Push with the pre-push suite skipped**, since CI re-verifies every push and is
+**Author the PR as the bot, not as the human login.** Before any `git push` or
+`gh pr create`, mint the `hal9000-agent-bot[bot]` installation token, so the PR
+author differs from the reviewing identity (the human `gh` login) and the
+review chain in `pr-review-merge` step 4b can read `exact`
+(`ugcportal-62b6`). The gitignored `hal9000.pem` in the main checkout is used only through the env var, never copied or
+printed, and a token is never printed beyond its 5-character prefix:
+
+```bash
+export PATH="$HOME/.nvm/versions/node/v24.20.0/bin:$PATH"
+eval "$(GH_APP_PRIVATE_KEY_PATH=/Users/eiriksf/code/ugcportal/hal9000.pem node scripts/gh-app-token.mjs --env)"
+```
+
+The `--env` exports set `GH_TOKEN`/`GITHUB_TOKEN` and the
+`GIT_AUTHOR_*`/`GIT_COMMITTER_*` of the bot, so commits made in that shell are
+authored and committed by the bot. **Shell state does not persist between Bash
+calls**, so the `eval` must START every Bash call that commits, pushes or runs
+`gh pr create`: in a call without it `GH_TOKEN` is empty, git falls back to the
+human identity, and `gh pr create` silently opens a human-authored PR (an
+`approx` chain, with no error). One call is the eval plus the commit, another the
+eval plus the push, another the eval plus `gh pr create`. The repo remote is SSH and does not carry the token, so push over HTTPS.
+Push with the pre-push suite skipped, since CI re-verifies every push and is
 authoritative; the worker cap above still governs everything you run locally
 (`bd memories agent-pushes-skip-the-pre-push-suite`):
 
 ```bash
-UGCPORTAL_PREPUSH=skip git push -u origin <branch>
+UGCPORTAL_PREPUSH=skip git -c credential.helper= \
+  -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64)" \
+  push https://github.com/eiriksf-capgemini/ugcportal.git HEAD:refs/heads/<branch>
 ```
+
+Then `gh pr create`, in a call that starts with the same `eval`, so the PR
+author is the bot. Right after it, assert the author, again after the same
+`eval` or with no token set (either works):
+`gh pr view <n> --json author -q .author.login` must print
+`app/hal9000-agent-bot`; anything else is a failed step, so fix it before
+reporting the PR. Three things to know: the token lasts one hour, so
+re-run the `eval` before a later push; `gh api user` fails under it
+(`Resource not accessible by integration`), which is expected, so do not use
+it to check who you are; and never use this token to review, approve or merge,
+because the reviewer stays on the human login (`worker-reviewer.md` is
+unchanged).
 
 **Measure, do not quote.** A baseline for a gate is measured by you at the base
 commit your brief names. A number you did not read is not a number you may

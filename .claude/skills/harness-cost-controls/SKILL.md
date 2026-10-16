@@ -25,10 +25,10 @@ not a replacement.
 ## 1. Name the model on every worker-shaped subagent spawn
 
 **Root cause:** the built-in `general-purpose` agent type has no definition
-file of its own (unlike the ten repo agent types under `.claude/agents/` in
-the environment where this was measured — that directory does not exist in
-*this* repo's own tree, confirmed by `git ls-files | grep .claude/agents`
-returning nothing here). With no definition to read a `model:` from,
+file of its own (unlike the repo agent types under `.claude/agents/` in
+the environment where this was measured — this repo tracks only three there
+(`worker-analyst.md`, `worker-implementer.md`, `worker-reviewer.md`, per `git
+ls-files .claude/agents`), none of them for `general-purpose`). With no definition to read a `model:` from,
 `general-purpose` **inherits whatever tier the parent orchestrator is running
 on**. An orchestrator running on Opus that spawns `general-purpose` without a
 `model` argument for a worker-shaped task (implementation round, fix round,
@@ -184,6 +184,15 @@ single avoided TTL-expiry rewrite at this context size is worth several
 than leaving it parked mid-task. If a gap is unavoidable, the 1-hour cache
 tier is frequently the *correct* choice at high context sizes, not a cost to
 economize away.
+
+### Fix rounds: resume or fresh
+
+Whether a fix round resumes the agent that made the most recent pass or goes
+to a fresh agent is
+decided by the context it carries and how long it has been idle. The rule, its
+figures, the one-line per-round record and the condition for changing it are
+in `.claude/skills/dispatch-bead/SKILL.md` section 5 (ugcportal-8r06); this
+subsection holds none of them, so there is one place to edit.
 
 ## 4. Re-running the measurement
 
