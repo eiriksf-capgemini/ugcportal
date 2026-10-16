@@ -20,8 +20,8 @@
     "test:e2e:commercial-link-consent": "playwright test --config=e2e/seeded/playwright.config.ts commercial-link-consent.spec.ts",
     "docker:qa:build": "bash scripts/build-qa-image.sh",
     "postinstall": "prisma generate",
-    "dashboard": "npx --yes github:eiriksf-capgemini/bead-dashboard --watch 30 --open --sidebar",
-    "dashboard:workspace": "npx --yes github:eiriksf-capgemini/bead-dashboard --workspace"
+    "dashboard": "sh scripts/dashboard.sh github:eiriksf-capgemini/bead-dashboard#4f09f669de46512064a9ee9f5de06cfaf478877b --watch 30 --open --sidebar",
+    "dashboard:workspace": "sh scripts/dashboard.sh github:eiriksf-capgemini/bead-dashboard#4f09f669de46512064a9ee9f5de06cfaf478877b --workspace"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.11.3",

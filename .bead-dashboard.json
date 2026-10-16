@@ -3,9 +3,15 @@
   "out": ".runtime/dashboard.html",
   "releaseLabelPattern": "^v\\d+\\.\\d+\\.\\d+$",
   "releaseLabelGlob": "v*.*.*",
-  "humanWaitPrLabels": ["needs-human-merge"],
-  "humanWaitBeadLabels": ["stalled-on-human", "human-only"],
+  "humanWaitPrLabels": [
+    "needs-human-merge"
+  ],
+  "humanWaitBeadLabels": [
+    "stalled-on-human",
+    "human-only"
+  ],
   "cmuxConfig": ".cmux/cmux.json",
   "cmuxWorkspace": "ugcportal dashboard",
-  "cmuxAction": "ugcportal-dashboard"
+  "cmuxAction": "ugcportal-dashboard",
+  "command": "sh scripts/dashboard.sh github:eiriksf-capgemini/bead-dashboard#4f09f669de46512064a9ee9f5de06cfaf478877b"
 }
