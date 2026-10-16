@@ -39,9 +39,10 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 1. **File issues for remaining work** - Create beads for anything that needs follow-up
 2. **Run quality gates** (if code changed) - Tests, linters, builds
 3. **Update issue status** - Close finished work, update in-progress items. When
-   closing a bead whose work is done, set `cc_type`/`cc_scope`/`prs` and a
-   best-effort `tokens_impl` estimate (see "Token cost metadata" below);
-   `tokens_qa` is recorded separately by `pr-review-merge` once review runs.
+   closing a bead whose work is done, set `cc_type`/`cc_scope`/`prs`,
+   `tokens_impl` and the transcript-derived `cost_*_impl` keys (see "Token
+   cost metadata" below); `tokens_qa` and `cost_*_qa` are recorded separately
+   by `pr-review-merge` once review runs.
    Once a bead's PR has actually merged, closing it also means cleaning up
    after it — the origin branch and the implementer's local worktree and
    branch (ugcportal-nvg0) — not just flipping the bead's status.
@@ -204,32 +205,140 @@ bd update <id> --set-metadata cc_type=feat --set-metadata cc_scope=gallery --set
 
 ### Token cost metadata
 
-Two more metadata fields track the cost of a bead, in tokens, alongside
-`cc_type`/`cc_scope`/`prs`:
+Two kinds of field track what a bead cost, alongside `cc_type`/`cc_scope`/`prs`,
+and they are in **different units that must never be added together**
+(ugcportal-cii0):
 
-- `tokens_impl` — cost of building the feature (everything up to opening
-  the PR). This is the agent run total reported in the completion notification
-  when the implementation run finishes, accumulated across passes with a
-  count in `tokens_impl_passes` and a `tokens_impl_note` tracking revisions.
-  The accumulated total is a best-effort approximation: agent run totals are
-  reported figures from completion notifications, summed by hand.
-- `tokens_qa` — cost of the post-implementation QA/review pass. This is the
-  `pr-review-merge` reviewer agent's own token total from its completion
-  notification, recorded by the invoking orchestrator after review runs (see
-  `.claude/skills/pr-review-merge/SKILL.md` step 4a). Each review round
-  accumulates into the bead's `tokens_qa` metadata with per-round keys
-  (`tokens_qa_r1`, `tokens_qa_r2`, etc.) and a `tokens_qa_note` explaining
-  the accumulation. The reviewer run itself never calls `bd update --set-metadata
-  tokens_qa` — it cannot read its own final token total while executing, and
-  would have no completion notification to draw an exact figure from. The
-  accumulated total is a best-effort approximation, not a metered ledger, since
-  `bd` has no compare-and-swap for metadata fields; if multiple review passes
-  land their `tokens_qa` updates around the same time, re-read with `bd show`
-  immediately before writing.
+**The old fields, `tokens_impl` / `tokens_qa`, are context size, not cost.**
+They are filled from the `subagent_tokens` figure of a completion
+notification, and that figure is the agent's context size at its last API
+call, not the tokens the run processed: measured against the agents' own
+transcripts in
+`docs/process/cost-performance-claims-v0.7.0-2026-10-16.md` section 1.2,
+which also gives how far it understates the priced cost. For a resumed agent
+each notification is a cumulative snapshot of the same context, so adding them
+up counts the same history again on every pass. The rule, from now on:
+
+- Per agent, record **only its last notification's figure** — its final
+  context size. Never add a second notification from the same agent to the
+  first. Worked example: a resumed implementer notified 100k, then 150k, then
+  180k records **180k** — not 430k.
+- If the agent's final pass got **no notification** (it has more passes in
+  `agent-pass-cost.mjs` than notifications), use that pass's `ctxEnd` from
+  the transcript instead — the same quantity, measured directly (section
+  1.2) — and say so in `tokens_impl_correction` (or `tokens_qa_note`).
+  `ugcportal-bdh` is the recorded case.
+- Across *distinct* agents (a fresh fix agent, one fresh reviewer per round),
+  the per-agent figures are summed into `tokens_impl` / `tokens_qa` as before.
+  The `ctx=` the command below prints is exactly this value for the agents
+  you list. `tokens_qa_rN` holds round N's reviewer's figure, and
+  `tokens_qa_rN_agent` its agent id (write it every round: a round without
+  one makes the command print `INCOMPLETE`); when round N resumed an agent
+  already counted, that agent's figure from its most recent round is
+  replaced, not added to (`pr-review-merge` step 4a).
+- Set `tokens_impl_convention=last-per-agent` when you write `tokens_impl`
+  under this rule. `tokens_impl_convention=summed-snapshots` marks a legacy
+  value that added one agent's snapshots up; `scripts/release-cost-report.mjs`
+  does not count a `tokens_impl` so flagged. When a summed value is corrected,
+  keep the old one in `tokens_impl_summed_was`. All 14 beads section 1.2
+  lists as summed were corrected this way in ugcportal-cii0.
+- `tokens_impl_passes` and `tokens_impl_note` keep their old meaning (pass
+  count, prose). A per-pass difference of two snapshots measures how much the
+  context grew in that pass, not what the pass cost (same document, section 3).
+
+**The cost fields are transcript-derived.** `scripts/agent-pass-cost.mjs`
+prices every pass of every subagent from its local transcript in input-token
+equivalents (ITE; its header defines the weights). ITE is proportional to
+price only for a model priced at those standard ratios — section 1.2 names
+`claude-opus-5-5` and `claude-fable-5-1` as models whose cheaper cache read
+it overstates — a relative measure across models, and a lower bound for the
+models whose transcripts under-record output (also section 1.2). Per side (`impl` = everything up to opening the PR,
+`qa` = review):
+
+- `cost_agents_impl` / `cost_agents_qa` — comma-separated agent ids (the
+  `<task-id>` of each completion notification) of every agent that worked on
+  that side.
+- `cost_ite_impl` / `cost_ite_qa` and `cost_calls_impl` / `cost_calls_qa` —
+  ITE and API-call count summed over every pass of those agents. They are
+  **recomputed whole from the agent list** each time they are written, never
+  incremented by hand, so re-recording after a resumed pass does not count
+  its earlier passes twice. **Write them only when the command prints
+  `missing=none uncovered=none`.** It prints `INCOMPLETE` instead when some
+  or all listed agents have no transcript (including `passes=0`), or when the
+  list does not cover what the bead already records: a side an earlier
+  recording marked incomplete (below), whatever the list now holds; a
+  `tokens_qa_rN` with no `tokens_qa_rN_agent` (a round recorded before agent
+  ids were kept) or with one that is not in the list; an agent already in
+  `cost_agents_*` that the list leaves out; or a `tokens_*` with no
+  `cost_agents_*` (and, for qa, no rounds) at all. That last case is the impl
+  side's pre-rule shape — earlier passes run by agents nobody listed. Without
+  this check a list holding only the newest agent prints a complete-looking
+  `ctx=`/`ite=` for that agent alone. On `INCOMPLETE`, write no
+  `cost_ite_*`/`cost_calls_*` key, **unset** any an earlier complete
+  recording left there (it misses at least the agents recorded since), and do
+  **not** set `tokens_*` from `ctx=`: a sum over part of the agents is
+  partial, and over none it is a 0 that would read as a measured zero cost.
+  Apply the per-agent rule to `tokens_*` by hand instead, or — before any
+  `INCOMPLETE` write — first backfill the missing agent ids
+  (`tokens_qa_rN_agent`, `cost_agents_*`) from the transcripts and re-run. A
+  `cost_ite_*` that is 0 or not a positive integer is not read as ITE by the
+  report anyway; it is listed under Data gaps and the bead falls back to its
+  `tokens_*`.
+- `cost_coverage_impl` / `cost_coverage_qa` — the mark an `INCOMPLETE`
+  recording leaves: set it to the marker the output names (an existing marker
+  is printed back unchanged). The `cost_agents_*` that write records holds
+  only the agents known so far, and would otherwise read on the next
+  recording as a list covering the whole figure, so the next `ctx=` would
+  overwrite `tokens_*` with part of it (ugcportal-cii0 M3). While a side
+  carries any `cost_coverage_*` — or a `cost_note_*` that does not begin
+  `all transcripts present` — every later recording prints `INCOMPLETE`, and
+  the report reads no `cost_ite_*` on that side even if one is left there (it
+  is listed under Data gaps). **Only a human clears it**, after backfilling
+  every earlier agent id and correcting `tokens_*`:
+  `bd update <id> --unset-metadata cost_coverage_<side> --unset-metadata cost_note_<side>`,
+  then re-run. A recording never removes it.
+- `cost_note_impl` / `cost_note_qa` — `all transcripts present`, or the note
+  the `INCOMPLETE` line names: one or more of, joined by `; `,
+  `missing: <ids>`, `marked incomplete by an earlier recording: <key>`,
+  `rounds without agent ids: r1, r2`, `rounds whose agents are not in the
+  list: r3`, `recorded agents dropped from the list: <ids>`,
+  `tokens_<side> recorded before cost_agents_<side>`. Work done inline in an
+  orchestrator or human session has no agent id and is not in these keys; say
+  so here when it was material.
 
 ```bash
-bd update <id> --set-metadata tokens_impl=42000 --set-metadata tokens_qa=107768
+node scripts/agent-pass-cost.mjs --json /tmp/passes.json
+bd show <id> --json > /tmp/bead.json          # the bead's current metadata, for the coverage check
+# from the repo root; runAgentCost is tested in scripts/release-cost-report.test.mjs
+# (it ships with ugcportal-cii0's #261); all four arguments are required, side is impl or qa
+node -e 'import("./scripts/release-cost-report.mjs").then((m)=>console.log(m.runAgentCost(...process.argv.slice(1))))' /tmp/passes.json <agent-id>,<agent-id> /tmp/bead.json impl
+# prints:  ite=<ite> calls=<calls> ctx=<ctx> agents=<n> passes=<n> missing=none uncovered=none
+#     or:  INCOMPLETE ... missing=<ids> uncovered=<what> -- write no cost_ite_*/cost_calls_* and unset any already there, do not overwrite tokens_* ...
+# missing=none uncovered=none:
+bd update <id> --set-metadata tokens_impl=<ctx> --set-metadata tokens_impl_convention=last-per-agent \
+  --set-metadata cost_agents_impl=<ids> --set-metadata cost_ite_impl=<ite> --set-metadata cost_calls_impl=<calls> \
+  --set-metadata cost_note_impl="all transcripts present"
+node scripts/bd-verify-metadata.mjs <id> tokens_impl=<ctx> cost_ite_impl=<ite> cost_calls_impl=<calls>
+# INCOMPLETE: no cost_ite_*/cost_calls_* (old ones removed), the side marked, tokens_impl by the per-agent rule by hand (never from ctx=):
+bd update <id> --set-metadata tokens_impl=<figure> --set-metadata tokens_impl_convention=last-per-agent \
+  --set-metadata cost_agents_impl=<ids> --set-metadata cost_note_impl="<the note the output names>" \
+  --set-metadata cost_coverage_impl="<the marker the output names>" --unset-metadata cost_ite_impl --unset-metadata cost_calls_impl
+node scripts/bd-verify-metadata.mjs <id> tokens_impl=<figure> cost_coverage_impl="<the marker>"   # and its printed keyset has no cost_ite_impl / cost_calls_impl
 ```
+
+**How the two are read.** A bead carrying a `cost_ite_*` key that is a
+positive integer, on a side not marked incomplete, is reported in ITE and its `tokens_*` are not read; a bead
+with no accepted `cost_ite_*` figure (absent, 0, malformed, or on a side marked incomplete) is
+reported from its `tokens_*` as "context-size, not cost". `scripts/release-cost-report.mjs`
+(`costUnitOf`) and `cut-release` step 5a both keep the two in separate totals.
+Whoever records them: the implementer's figures are written by the
+orchestrator from the implementer's completion notification and transcript;
+`tokens_qa` and the `cost_*_qa` keys by the orchestrator that invoked
+`pr-review-merge`, per that skill's step 4a — the reviewer run itself never
+writes them, since it cannot read its own final figure while executing. Both
+are best-effort records, not a metered ledger: `bd` has no compare-and-swap
+for metadata fields, so re-read with `bd show` immediately before writing if
+another pass may be landing its own update.
 
 ### Model-fit metadata
 
@@ -259,11 +368,14 @@ Rough tier guidance used for the existing backlog:
 | `opus`   | multi-system integration, security/money correctness, third-party API quirks, anything with a wide blast radius |
 | `fable`  | judgment over code — security and architecture reviews, legal/GDPR rights analysis |
 
-These are estimates, not measurements. The `tokens_impl`/`tokens_qa` figures
-above are the calibration signal: if a `sonnet` bead consistently costs what an
+These are estimates, not measurements. The `cost_ite_impl`/`cost_ite_qa`
+figures above are the calibration signal (`tokens_impl`/`tokens_qa` are
+context size, not cost; see "Token cost metadata"): if a `sonnet` bead consistently costs what an
 `opus` bead costs, the estimate was wrong — fix the bead, and the guidance here.
-Nothing reads these fields automatically yet; they inform the human or agent
-picking a model before starting work.
+`scripts/release-cost-report.mjs`'s tier table reads `model` and shows both
+units per tier, the ITE figures in their own columns; nothing routes work on
+these fields automatically — they inform the human or agent picking a model
+before starting work.
 
 ```bash
 bd update <id> --set-metadata model=opus --set-metadata model_effort=xhigh \
