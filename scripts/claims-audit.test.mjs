@@ -18,9 +18,13 @@
  * -- because the guardrail was gated on "is the tree dirty" rather than
  * "did the read succeed" (round 2 H1).
  *
- * Each fixture is shaped like a real finding from the v0.5.0 review rounds
- * (docs/process/review-rounds-v0.5.0.md, Part 1) or from this PR's own
- * review rounds, named in the test title.
+ * The ugcportal-wzgw fixtures are shaped like real findings from the v0.5.0
+ * review rounds (docs/process/review-rounds-v0.5.0.md, Part 1) or from that
+ * PR's own review rounds, named in the test title. The scope-limiting
+ * fixtures (ugcportal-fgcb) are real sentences from PRs #199 and #200, plus
+ * the bead's own K1 example, in
+ * scripts/fixtures/claims-audit-scope-limiting.json, each with its source;
+ * the constructed sentences beside them are labelled as such in the test.
  *
  * PR body mode (ugcportal-bn94) gets its own describe blocks below: pure
  * fixtures for auditBodyText/findQuotedSpans/tokenStillInDiff/
@@ -53,8 +57,10 @@ import {
   findPathReferences,
   findQuotedSpans,
   findSentenceContaining,
+  isScopeLimiting,
   parseArgs,
   referenceExists,
+  scopeLimitingReachLine,
   splitIntoSentences,
   tokenStillInDiff,
 } from "./claims-audit.mjs";
@@ -220,6 +226,263 @@ describe("auditContent", () => {
 
   it("ignores a file type it does not know how to read", () => {
     expect(auditContent("binary-ish", "image.png", null, NO_EXISTING_FILES)).toEqual([]);
+  });
+});
+
+// ugcportal-fgcb: real sentences from PRs #199/#200, with the comment id
+// and commit each came from (see the fixture's own "$comment").
+const SCOPE_FIXTURE = JSON.parse(
+  fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "claims-audit-scope-limiting.json"), "utf8"),
+);
+const windowOf = (entry) => ({ before: entry.before, after: entry.after });
+const scopeEntry = (form) => {
+  const entry = SCOPE_FIXTURE.scopeLimiting.find((e) => e.form === form);
+  if (entry === undefined) throw new Error(`no fixture entry with form ${JSON.stringify(form)}`);
+  return entry;
+};
+
+describe("scope-limiting recategorisation (ugcportal-fgcb K1)", () => {
+  it("the fixture has a SCOPE-LIMITING entry for each construction K1 names, or a recorded search that found none", () => {
+    // Only entries EXPECTED to be recategorised count: an ABSOLUTE pin that
+    // happens to contain "no other" says nothing about the narrowing form
+    // (round 1 L1). A construction with no real narrowing sentence in
+    // #199/#200 must say so, with the search's reach, rather than pass by
+    // borrowing a guarantee's label.
+    const recategorised = SCOPE_FIXTURE.scopeLimiting.filter((e) => e.expected === "SCOPE-LIMITING");
+    const searchedWithoutOne = new Map((SCOPE_FIXTURE.searchedWithoutANarrowingSentence ?? []).map((r) => [r.construction, r]));
+    for (const construction of ["only covers", "cannot see", "never", "nothing else", "no other"]) {
+      const entries = recategorised.filter((e) => e.form.includes(construction));
+      const absence = searchedWithoutOne.get(construction);
+      if (absence === undefined) {
+        expect(entries, `no SCOPE-LIMITING entry and no recorded search for ${JSON.stringify(construction)}`).not.toHaveLength(0);
+      } else {
+        expect(entries).toHaveLength(0);
+        expect(absence.searched.length).toBeGreaterThan(0);
+        expect(absence.reach.length).toBeGreaterThan(0);
+      }
+    }
+    expect(recategorised.length).toBeGreaterThanOrEqual(4);
+    // Without this, an entry that never contained "only"/"cannot"/... would
+    // pass the per-entry test below by never having been ABSOLUTE at all.
+    for (const e of recategorised) expect(e.text).toMatch(/\b(only|cannot|never|nothing else|no other)\b/i);
+  });
+
+  for (const entry of SCOPE_FIXTURE.scopeLimiting) {
+    const where = entry.source.commentId ? `PR #${entry.source.pr}, comment ${entry.source.commentId}` : entry.source.bead ?? `PR #${entry.source.pr}`;
+    it(`${entry.form} -> ${entry.expected} (${where})`, () => {
+      const categories = classifyClaimLine(entry.text, windowOf(entry));
+      expect(categories).toContain(entry.expected);
+      // ABSOLUTE and SCOPE-LIMITING are exclusive: a line is one or the other.
+      expect(categories).not.toContain(entry.expected === "ABSOLUTE" ? "SCOPE-LIMITING" : "ABSOLUTE");
+    });
+  }
+
+  it("reads a wrapped sentence in the window of its neighbours: the same line alone stays ABSOLUTE", () => {
+    const entry = scopeEntry("nothing else (its verb wrapped onto the next line)");
+    expect(classifyClaimLine(entry.text, windowOf(entry))).toContain("SCOPE-LIMITING");
+    expect(classifyClaimLine(entry.text)).toContain(entry.expectedWithoutWindow);
+    expect(entry.expectedWithoutWindow).toBe("ABSOLUTE");
+  });
+
+  it("FIXTURE MUTATION: the 'cannot see' sentence turned into 'this guard catches every reader' is flagged ABSOLUTE", () => {
+    const entry = scopeEntry("cannot see");
+    const mutated = { ...entry, text: "this guard catches every reader" };
+    const categories = classifyClaimLine(mutated.text, windowOf(mutated));
+    expect(categories).toContain("ABSOLUTE");
+    expect(categories).not.toContain("SCOPE-LIMITING");
+  });
+
+  it("FIXTURE MUTATION: the bead's own sentence with its limiting clause swapped for a universal one is flagged ABSOLUTE", () => {
+    const entry = scopeEntry("only covers + cannot see");
+    expect(classifyClaimLine(entry.text)).toEqual(["SCOPE-LIMITING"]);
+    // Dropping the limiting clause leaves a bare "only covers", which the
+    // rule does not recategorise on its own.
+    expect(classifyClaimLine("this guard only covers named imports")).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine(entry.text.replace("it cannot see a namespace import", "it catches every reader"))).toEqual(["ABSOLUTE"]);
+  });
+
+  it("one absolute word outside every narrowing form keeps the whole line ABSOLUTE", () => {
+    const entry = scopeEntry("cannot see");
+    expect(classifyClaimLine(`${entry.text} It never fails on any path.`, windowOf(entry))).toContain("ABSOLUTE");
+    expect(classifyClaimLine(`${entry.text} It never fails on any path.`, windowOf(entry))).not.toContain("SCOPE-LIMITING");
+  });
+
+  it("does not recategorise a guarantee about what a person or request can see", () => {
+    // Access-control guarantees use the same words; after "cannot", "see"
+    // needs an instrument subject (guard, scan, test, ...) or a pronoun
+    // directly before the absolute word.
+    expect(classifyClaimLine("an anonymous visitor cannot see an unpublished row")).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine("only admins can see the queue; a curator does not see it")).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine("the guard cannot see an unpublished row")).toEqual(["SCOPE-LIMITING"]);
+  });
+
+  it("a pronoun subject counts only when an instrument noun is earlier in the window", () => {
+    expect(classifyClaimLine("it cannot see a namespace import")).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine("it cannot see a namespace import", { before: "This scan answers who names the constant." })).toEqual(["SCOPE-LIMITING"]);
+  });
+
+  it("'never' narrows only with other limitation evidence in the window", () => {
+    expect(classifyClaimLine("the scan never sees a namespace import")).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine("the scan never sees a namespace import, so the guard still passes")).toEqual(["SCOPE-LIMITING", "TEMPORAL"]);
+  });
+
+  it("'no other' narrows only as a statement about an instrument", () => {
+    expect(classifyClaimLine("the scan sees no other shape; a namespace import is not covered")).toEqual(["SCOPE-LIMITING"]);
+    expect(classifyClaimLine("no other guard catches a hand-written where")).toEqual(["SCOPE-LIMITING"]);
+    expect(classifyClaimLine("a clearance covers the layer it names and no other")).toEqual(["ABSOLUTE"]);
+  });
+
+  it("skips one adverb before the absolute word, and no more", () => {
+    expect(classifyClaimLine("the guard deliberately cannot see a draft")).toEqual(["SCOPE-LIMITING"]);
+    expect(classifyClaimLine("the guard quite deliberately cannot see a draft")).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine("the scan only ever sees named imports; it does not see a namespace import")).toEqual(["SCOPE-LIMITING"]);
+  });
+
+  // Round 1 (issue comment 6212969131) found M1-M4 below: real guarantees,
+  // reachable as SCOPE-LIMITING. The sentences are constructed, each the
+  // reviewer's own reproduction unless the test says otherwise.
+  it("M4: a pronoun cannot borrow an instrument noun from AFTER it in the window", () => {
+    expect(classifyClaimLine("The public projection strips previewKey, so it cannot see the draft row (see the test).")).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine("so it cannot see the draft row", { after: "The test pins this." })).toEqual(["ABSOLUTE"]);
+  });
+
+  it("M4: an 'it' opening a 'that' clause is what the clause is about, not the instrument before it", () => {
+    expect(classifyClaimLine("the test asserts that it cannot see the draft")).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine("the test asserts it cannot see the draft")).toEqual(["SCOPE-LIMITING"]);
+  });
+
+  it("KNOWN ERROR, pinned: an 'it' or 'this' counts as an instrument whenever an instrument noun appears before it", () => {
+    // Named in the comment above findScopeLimitingSpans; pinned so a fix to
+    // it is visible here.
+    expect(classifyClaimLine("the test passed, and it cannot see the draft row")).toEqual(["SCOPE-LIMITING"]);
+  });
+
+  it("M2: a detection verb needs an instrument subject too, after 'cannot' and after 'never'", () => {
+    expect(classifyClaimLine("an attacker cannot detect whether an account exists")).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine("the user cannot notice that a watermark was applied")).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine("Moderators review uploads; the uploader cannot recognise who flagged it")).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine("the user never notices the redirect; the hook does not see it")).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine("the scan cannot detect a namespace import")).toEqual(["SCOPE-LIMITING"]);
+  });
+
+  it("M3: 'nothing else' needs an instrument limitation elsewhere in the window", () => {
+    expect(classifyClaimLine("The signing key is read here and nothing else sees it")).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine("nothing else covers the refund path")).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine("the scan does not see a namespace import, and nothing else catches it")).toEqual(["SCOPE-LIMITING"]);
+  });
+
+  it("round 2 N1: the relative 'never' form takes neither 'who' nor a narrowing verb", () => {
+    // The reviewer's reproduction (issue comment 6213645250): a person-subject
+    // access guarantee beside an unrelated instrument limitation.
+    expect(classifyClaimLine("an anonymous visitor who never sees a draft row", { before: "the lint rule does not see server actions, so" })).toEqual(["ABSOLUTE"]);
+  });
+
+  it("round 3 R3-1: a relative 'that'/'which' subject counts only when the word right before it is an instrument noun", () => {
+    // The reviewer's reproductions (issue comment 6213867739), plus the one
+    // the round-2 fix pass reported.
+    expect(classifyClaimLine("an anonymous visitor that cannot see a draft row", { before: "the lint rule runs on every file" })).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine("The guard rejects a request that cannot see the admin token")).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine("a reader that never sees the constant", { before: "the lint rule does not see server actions, so" })).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine("a scanner that cannot see server actions")).toEqual(["SCOPE-LIMITING"]);
+  });
+
+  it("KNOWN ERROR, pinned: a runtime component named in INSTRUMENT_NOUN_RE reads as an instrument", () => {
+    // Named in the comment above findScopeLimitingSpans (round 2 N2); pinned
+    // so a fix to it is visible here.
+    expect(classifyClaimLine("the tenant filter cannot see another tenant's rows")).toEqual(["SCOPE-LIMITING"]);
+  });
+
+  it("M1: 'that/which never' takes only a mention verb", () => {
+    expect(classifyClaimLine("The expiry gate is the one check that never fails open:", { after: "a NaN date does not reach the sellable branch." })).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine("a gate which never lets an expired listing sell, since an expired row does not reach it")).toEqual(["ABSOLUTE"]);
+    // The evidence here IS an instrument limitation, so only the verb
+    // restriction keeps this one ABSOLUTE.
+    expect(classifyClaimLine("a session that never expires is rejected", { before: "the hook does not see the cookie" })).toEqual(["ABSOLUTE"]);
+  });
+
+  it("M1: 'that/which never' needs limitation evidence besides itself", () => {
+    expect(classifyClaimLine("a reader that never mentions the constant is rejected")).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine("the scan is blind to a reader that never mentions the constant")).toEqual(["SCOPE-LIMITING"]);
+  });
+
+  it("M1: limitation evidence must be a limitation of an instrument, not a guarantee phrased negatively", () => {
+    // "does not reach", "is blind to", "still passes" and a passive "not
+    // seen" are the evidence forms; each counts only for an instrument.
+    expect(classifyClaimLine("a request that never mentions the token does not reach the handler")).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine("the visitor is blind to the draft, and nothing else sees it")).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine("the request still passes, and nothing else catches it")).toEqual(["ABSOLUTE", "TEMPORAL"]);
+    expect(classifyClaimLine("the draft row is not seen, and nothing else sees it")).toEqual(["ABSOLUTE"]);
+    expect(classifyClaimLine("a namespace import is not caught by the scan, and nothing else catches it")).toEqual(["SCOPE-LIMITING"]);
+  });
+
+  it("isScopeLimiting is false for a line with no absolute word at all", () => {
+    expect(isScopeLimiting("the scan does not see a namespace import")).toBe(false);
+    expect(classifyClaimLine("the scan does not see a namespace import")).toEqual([]);
+  });
+
+  it("auditContent passes each line's neighbours as its window, across a block comment", () => {
+    const entry = scopeEntry("nothing else (its verb wrapped onto the next line)");
+    const content = ["/*", ` * ${entry.before}`, ` * ${entry.text}`, ` * ${entry.after}`, " */", "const a = 1;", ""].join("\n");
+    const out = auditContent(content, "a.ts", null, NO_EXISTING_FILES);
+    const line3 = out.find((c) => c.line === 3);
+    expect(line3.categories).toContain("SCOPE-LIMITING");
+    expect(line3.categories).not.toContain("ABSOLUTE");
+  });
+
+  it("auditContent reads the window across consecutive // line comments too", () => {
+    const entry = scopeEntry("nothing else (its verb wrapped onto the next line)");
+    const content = [`// ${entry.before}`, `// ${entry.text}`, `// ${entry.after}`, "const a = 1;", ""].join("\n");
+    const out = auditContent(content, "a.ts", new Set([2]), NO_EXISTING_FILES);
+    expect(out).toHaveLength(1);
+    expect(out[0].categories).toEqual(["SCOPE-LIMITING", "TEMPORAL"]);
+  });
+
+  it("auditBodyText passes each body line's neighbours as its window", () => {
+    const entry = scopeEntry("nothing else (its verb wrapped onto the next line)");
+    const out = auditBodyText([entry.before, entry.text, entry.after].join("\n"));
+    expect(out.find((c) => c.line === 2).categories).toEqual(["SCOPE-LIMITING", "TEMPORAL"]);
+    // A blank line between is a paragraph break, not a neighbour.
+    const split = auditBodyText([entry.text, "", entry.after].join("\n"));
+    expect(split.find((c) => c.line === 1).categories).toEqual(["ABSOLUTE", "TEMPORAL"]);
+  });
+});
+
+describe("scope-limiting recategorisation does not go blind to real overclaims (ugcportal-fgcb K3)", () => {
+  it("pins at least three historical true positives, each with its PR, comment id and text", () => {
+    expect(SCOPE_FIXTURE.truePositives.length).toBeGreaterThanOrEqual(3);
+    for (const tp of SCOPE_FIXTURE.truePositives) {
+      expect([199, 200]).toContain(tp.source.pr);
+      expect(tp.source.commentId).toBeGreaterThan(0);
+      expect(tp.text.length).toBeGreaterThan(0);
+      expect(tp.commentQuote.length).toBeGreaterThan(0);
+    }
+  });
+
+  for (const tp of SCOPE_FIXTURE.truePositives) {
+    it(`still flags ${tp.finding} as ${tp.expected} (PR #${tp.source.pr}, comment ${tp.source.commentId})`, () => {
+      const categories = classifyClaimLine(tp.text, windowOf(tp));
+      expect(categories).toContain(tp.expected);
+      for (const also of tp.alsoExpected ?? []) expect(categories).toContain(also);
+      expect(categories).not.toContain("SCOPE-LIMITING");
+    });
+  }
+
+  it("still flags each true positive when audited as a real comment block, neighbours included", () => {
+    for (const tp of SCOPE_FIXTURE.truePositives.filter((t) => t.source.kind === "file")) {
+      const content = ["/*", ` * ${tp.before}`, ` * ${tp.text}`, ` * ${tp.after}`, " */", "const a = 1;", ""].join("\n");
+      const line3 = auditContent(content, "a.ts", null, NO_EXISTING_FILES).find((c) => c.line === 3);
+      expect(line3.categories).toContain(tp.expected);
+      expect(line3.categories).not.toContain("SCOPE-LIMITING");
+    }
+  });
+});
+
+describe("scopeLimitingReachLine (ugcportal-fgcb K2)", () => {
+  it("prints the recategorised count, with an explicit 0", () => {
+    expect(scopeLimitingReachLine([])).toBe("recategorised from ABSOLUTE to SCOPE-LIMITING (listed below, not counted under ABSOLUTE): 0");
+    expect(scopeLimitingReachLine([{ categories: ["ABSOLUTE"] }, { categories: ["SCOPE-LIMITING", "TEMPORAL"] }, { categories: ["SCOPE-LIMITING"] }])).toBe(
+      "recategorised from ABSOLUTE to SCOPE-LIMITING (listed below, not counted under ABSOLUTE): 2",
+    );
   });
 });
 
@@ -1155,5 +1418,35 @@ describe("--body end-to-end, real git repo (ugcportal-bn94)", () => {
     expect(error).toBeDefined();
     expect(error.status).not.toBe(0);
     expect(error.stderr ?? "").toMatch(/empty -- nothing to audit/);
+  });
+});
+
+describe("scope-limiting reach line end-to-end, real git repo (ugcportal-fgcb K2)", { timeout: 30_000 }, () => {
+  const REACH_RE = (n) => new RegExp(`^recategorised from ABSOLUTE to SCOPE-LIMITING \\(listed below, not counted under ABSOLUTE\\): ${n}$`, "m");
+
+  it("file mode prints a non-zero count on the K1 fixture and an explicit 0 without one", () => {
+    const { writeFile, runScript } = makeFixtureRepo();
+    const entry = SCOPE_FIXTURE.scopeLimiting.find((e) => e.form === "only covers + cannot see");
+    writeFile("guard.ts", `// ${entry.text}\nconst a = 1;\n`);
+    const withOut = runScript();
+    expect(withOut).toMatch(REACH_RE(1));
+    expect(withOut).toMatch(/^by category: ABSOLUTE 0, MEASUREMENT 0, TEMPORAL 0, HISTORY 0, REFERENCE not found 0, SCOPE-LIMITING 1$/m);
+    expect(withOut).toContain(`guard.ts:1 [SCOPE-LIMITING] ${entry.text}`);
+
+    writeFile("guard.ts", "// this guard catches every reader\nconst a = 1;\n");
+    const withoutOut = runScript();
+    expect(withoutOut).toMatch(REACH_RE(0));
+    expect(withoutOut).toMatch(/^by category: ABSOLUTE 1, MEASUREMENT 0, TEMPORAL 0, HISTORY 0, REFERENCE not found 0, SCOPE-LIMITING 0$/m);
+  });
+
+  it("body mode prints the same reach line, 0 included", () => {
+    const { runScriptStdin } = makeFixtureRepo();
+    const entry = scopeEntry("only covers + cannot see");
+    const withOut = runScriptStdin(["--body"], `${entry.text}\n`);
+    expect(withOut).toMatch(REACH_RE(1));
+    expect(withOut).toMatch(/SCOPE-LIMITING 1$/m);
+    const withoutOut = runScriptStdin(["--body"], "This never fails on any path.\n");
+    expect(withoutOut).toMatch(REACH_RE(0));
+    expect(withoutOut).toMatch(/^by category: ABSOLUTE 1, .*SCOPE-LIMITING 0$/m);
   });
 });

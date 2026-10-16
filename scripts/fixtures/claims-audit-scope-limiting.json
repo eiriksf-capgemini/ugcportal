@@ -1,0 +1,235 @@
+{
+  "$comment": "ugcportal-fgcb. Real sentences from PRs #199 and #200, each with where it came from. `source.kind` `file`: a comment line of the file at the PR commit named, fetched with `gh api repos/eiriksf-capgemini/ugcportal/contents/<path>?ref=<commit>` and stripped of its comment markers; `before`/`after` are its neighbouring lines, the window auditContent passes to classifyClaimLine. `body`: a line of the PR description. `comment`: a sentence of a review comment. `commentId` is the issue comment (`gh api repos/eiriksf-capgemini/ugcportal/issues/<pr>/comments`) that found or verified the sentence, with `commentQuote` copied from it verbatim. Fetched 2026-10-16.",
+  "scopeLimiting": [
+    {
+      "form": "cannot see",
+      "expected": "SCOPE-LIMITING",
+      "commentQuote": "They are overwhelmingly three things: statements of what a guard does *not* catch (findings 2 and 3's fix)",
+      "source": {
+        "pr": 200,
+        "kind": "file",
+        "commit": "e2f46a1acd983f31b1bde9655cd4859a5e3490bb",
+        "path": "src/lib/test-support/media-fixtures.ts",
+        "line": 101,
+        "commentId": 6070699194
+      },
+      "before": "BY NAME in src/lib/attestation-write-paths.test.ts rather than written in",
+      "text": "a shape that scan cannot see (ugcportal-3ae). The allowance is narrow on",
+      "after": "purpose: this module is test-only by construction, and the same file now"
+    },
+    {
+      "form": "never (relative clause after 'blind to')",
+      "expected": "SCOPE-LIMITING",
+      "commentQuote": "They are overwhelmingly three things: statements of what a guard does *not* catch (findings 2 and 3's fix)",
+      "source": {
+        "pr": 200,
+        "kind": "file",
+        "commit": "e2f46a1acd983f31b1bde9655cd4859a5e3490bb",
+        "path": "src/lib/public-media.consumers.test.ts",
+        "line": 37,
+        "commentId": 6070699194
+      },
+      "before": "out (ugcportal-3ae review round 1, findings 2 and 3). This scan answers",
+      "text": "\"who uses the constant\", so it is blind to a reader that never mentions",
+      "after": "it: an anonymous query that hand-writes `where: { publishedAt: { not:"
+    },
+    {
+      "form": "nothing else (its verb wrapped onto the next line)",
+      "expected": "SCOPE-LIMITING",
+      "expectedWithoutWindow": "ABSOLUTE",
+      "commentQuote": "They are overwhelmingly three things: statements of what a guard does *not* catch (findings 2 and 3's fix)",
+      "source": {
+        "pr": 200,
+        "kind": "file",
+        "commit": "e2f46a1acd983f31b1bde9655cd4859a5e3490bb",
+        "path": "src/lib/public-media.consumers.test.ts",
+        "line": 40,
+        "commentId": 6070699194
+      },
+      "before": "null } }` instead of spreading the scope is not in the set the map is",
+      "text": "compared against, and `toEqual` therefore still passes. Nothing else",
+      "after": "catches that shape either — `MediaAnonymousScope` in"
+    },
+    {
+      "form": "never + nothing else (PR body table row): limitation prose the rule does NOT recategorise, because the instrument is named only in the table header four lines up, outside the window (a known miss, pinned so a change to it is deliberate)",
+      "expected": "ABSOLUTE",
+      "commentQuote": "They are overwhelmingly three things: statements of what a guard does *not* catch (findings 2 and 3's fix)",
+      "source": {
+        "pr": 200,
+        "kind": "body",
+        "line": 55,
+        "fetchedWith": "gh pr view 200 --json body -q .body",
+        "commentId": 6070699194
+      },
+      "before": "| `import * as publicMedia` … `where: publicMedia.PUBLIC_MEDIA_SCOPE` | **yes, since this round** — it was not before |",
+      "text": "| a hand-written `where` that never mentions the constant | **no**, and nothing else catches it either |"
+    },
+    {
+      "form": "only covers + cannot see",
+      "expected": "SCOPE-LIMITING",
+      "source": {
+        "pr": null,
+        "kind": "bead",
+        "bead": "ugcportal-fgcb",
+        "field": "acceptance_criteria K1",
+        "note": "No 'only covers' sentence exists in #199/#200's review comments, bodies or comment lines at the commits above (searched for only covers/sees/catches/checks/scans/reads/matches); this is the bead's own K1 example, verbatim."
+      },
+      "text": "this guard only covers named imports; it cannot see a namespace import"
+    },
+    {
+      "form": "only + a verb outside the narrowing sets: scope-limiting prose the rule does NOT recategorise (a known miss, pinned so a change to it is deliberate)",
+      "expected": "ABSOLUTE",
+      "commentQuote": "They are overwhelmingly three things: statements of what a guard does *not* catch (findings 2 and 3's fix)",
+      "source": {
+        "pr": 200,
+        "kind": "body",
+        "line": 59,
+        "fetchedWith": "gh pr view 200 --json body -q .body",
+        "commentId": 6070699194
+      },
+      "text": "The third row is **not** closed here. `MediaAnonymousScope` does not reach it either — it only binds a query routed through `listMedia`. Filed as **ugcportal-7egi** with a `discovered-from` edge, and both `publishability.ts` and the guard's own header now say so instead of implying a control that is not there."
+    },
+    {
+      "form": "no other, as a guarantee rather than a narrowing",
+      "expected": "ABSOLUTE",
+      "commentQuote": "Applying the rights gate to `DELETE` fails `does not block unpublishing a row this gate refuses to publish`",
+      "source": {
+        "pr": 200,
+        "kind": "file",
+        "commit": "e2f46a1acd983f31b1bde9655cd4859a5e3490bb",
+        "path": "src/app/api/media/[id]/publish/route.test.ts",
+        "line": 1579,
+        "commentId": 6070699194
+      },
+      "before": "The two `not.toHaveBeenCalled()` assertions are what give this a",
+      "text": "failing case the status code alone would not: DELETE has no other",
+      "after": "reason to read either table, so a gate wrongly copied into it is"
+    },
+    {
+      "form": "never sees, as a guarantee about a type rather than a narrowing",
+      "expected": "ABSOLUTE",
+      "source": {
+        "pr": 200,
+        "kind": "file",
+        "commit": "e2f46a1acd983f31b1bde9655cd4859a5e3490bb",
+        "path": "src/lib/media-public-feed-index-migration.test.ts",
+        "line": 98
+      },
+      "before": "typed `?: never`, so the constant cannot assign it at all; `Object.keys`",
+      "text": "never sees it because nothing can give it a value. A filter re-checking each",
+      "after": "value's shape here would be re-deciding, in a second place, something the"
+    },
+    {
+      "form": "nothing else, as a guarantee in review prose",
+      "expected": "ABSOLUTE",
+      "source": {
+        "pr": 199,
+        "kind": "comment",
+        "commentId": 6068974327
+      },
+      "commentQuote": "`layerIsCleared` matches `candidate.layer === layer` and nothing else.",
+      "text": "`layerIsCleared` matches `candidate.layer === layer` and nothing else."
+    },
+    {
+      "form": "never look at, with a code subject rather than an instrument: a narrowing form whose subject check fails (boundary pin)",
+      "expected": "ABSOLUTE",
+      "source": {
+        "pr": 199,
+        "kind": "file",
+        "commit": "4acd815dc64dc12056d592b6ca162633641597d3",
+        "path": "src/lib/curation-clearance-write.ts",
+        "line": 142
+      },
+      "before": "than stored. The table would accept the row and `factBlocker` would",
+      "text": "never look at it, so what would be recorded is an inert sentence that",
+      "after": "reads, to anyone reviewing the register, exactly like the sentence that"
+    },
+    {
+      "form": "cannot see, with a code subject rather than an instrument: a narrowing form whose subject check fails (boundary pin)",
+      "expected": "ABSOLUTE",
+      "source": {
+        "pr": 199,
+        "kind": "file",
+        "commit": "4acd815dc64dc12056d592b6ca162633641597d3",
+        "path": "src/lib/curation-clearance-write.test.ts",
+        "line": 693
+      },
+      "before": "ACTOR MATCHES — checked through the gate's own projection, not just",
+      "text": "the raw row, so a clearance attributed to someone the gate cannot see",
+      "after": "would fail here."
+    }
+  ],
+  "truePositives": [
+    {
+      "finding": "PR #199 round 1 finding 5 (LOW, CONFIRMED, family 1)",
+      "expected": "ABSOLUTE",
+      "commentQuote": "can only be `(listingId, layer)` — the one unique index it carries",
+      "source": {
+        "pr": 199,
+        "kind": "file",
+        "commit": "700d9b5ca869dace9445c7cf1257b1d78234d370",
+        "path": "src/lib/curation-clearance-write.ts",
+        "line": 205,
+        "commentId": 6068974327
+      },
+      "before": "P2002 is Prisma's unique-constraint violation, which on this table",
+      "text": "can only be `(listingId, layer)` — the one unique index it carries.",
+      "after": "Narrowed by code rather than caught broadly, so a foreign-key"
+    },
+    {
+      "finding": "PR #200 round 1 finding 3 (LOW, CONFIRMED, family 1)",
+      "expected": "ABSOLUTE",
+      "commentQuote": "a sixth reader fails this file by existing",
+      "source": {
+        "pr": 200,
+        "kind": "file",
+        "commit": "353e472806ef1dc044cd5817b55376b89fccdafb",
+        "path": "src/lib/public-media.consumers.test.ts",
+        "line": 26,
+        "commentId": 6069779392
+      },
+      "before": "source, by the scan below, and compared against an explicit map. A sixth",
+      "text": "reader added next year fails this file by existing, and the only way to",
+      "after": "make it pass is to name the test that covers it."
+    },
+    {
+      "finding": "PR #200 round 1 finding 8 (LOW, CONFIRMED, family 1: prose overtaken by #199)",
+      "expected": "ABSOLUTE",
+      "alsoExpected": [
+        "TEMPORAL"
+      ],
+      "commentQuote": "state that nothing writes `MediaRightsClearance` rows yet / that `qfy9` is \"in flight\"",
+      "source": {
+        "pr": 200,
+        "kind": "file",
+        "commit": "353e472806ef1dc044cd5817b55376b89fccdafb",
+        "path": "src/lib/publishability.scope-agreement.test.ts",
+        "line": 234,
+        "commentId": 6069779392
+      },
+      "before": "ugcportal-qfy9, built in parallel. The refusing half of this gate is",
+      "text": "reachable end to end today; the permitting half is reachable only this",
+      "after": "way, and the PR says so rather than implying an admin flow exercised it."
+    },
+    {
+      "finding": "PR #199 round 1 finding 2 (LOW, CONFIRMED, family 1: \"17 tests fail\" is 21)",
+      "expected": "MEASUREMENT",
+      "source": {
+        "pr": 199,
+        "kind": "comment",
+        "commentId": 6068974327
+      },
+      "commentQuote": "`layerIsCleared` matching any clearance rather than this layer's: 17 tests fail across the new suite and the existing gate suite.",
+      "text": "`layerIsCleared` matching any clearance rather than this layer's: 17 tests fail across the new suite and the existing gate suite."
+    }
+  ],
+  "searchedWithoutANarrowingSentence": [
+    {
+      "construction": "no other",
+      "note": "No sentence in #199 or #200 uses \"no other\" to narrow what an instrument sees, so K1 has no real SCOPE-LIMITING entry for it; the rule is asserted on constructed sentences instead (\"no other guard catches a hand-written where\"). Every use found states a guarantee or a fact: in #199, six added diff lines such as \"covers the layer it names and no other\" and \"settles that layer and no other\", and two review-comment sentences; in #200, \"DELETE has no other\" (a diff line, pinned above as ABSOLUTE, and its review-comment twin) and \"and no others\" in a test title.",
+      "searched": "case-insensitive \"no other\" over each PR body (gh pr view <n> --json body), every issue comment (gh api --paginate repos/eiriksf-capgemini/ugcportal/issues/<n>/comments), every review comment (gh api --paginate repos/eiriksf-capgemini/ugcportal/pulls/<n>/comments) and every added diff line (gh pr diff <n>)",
+      "reach": "PR #199: body 0 matches; 3 issue comments, 2 matches (6068974327, 6069537357); review comments 0 matches; 2964 added diff lines, 6 matches. PR #200: body 0 matches; 6 issue comments, 1 match (6070270739); review comments 0 matches; 3190 added diff lines, 2 matches.",
+      "fetched": "2026-10-16"
+    }
+  ]
+}
