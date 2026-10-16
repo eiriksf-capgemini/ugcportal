@@ -161,6 +161,17 @@ it from step 0 to the end, including the defect sweep it requires of you
 (`review-standards` section 2). It is a numbered procedure, not a summary, and
 nothing in it is reproduced here — see the table below for why.
 
+**A claim in your brief that nothing has measured is yours to test, not
+context to confirm.** A sentence worded "the implementer reports X; not yet
+verified" or "from memory, not from a recorded value" is unverified until you
+have measured it: test it, do not confirm it, and state in your review
+whether you reproduced it. A brief that words such a sentence as fact (the
+inverted privacy rationale of `ugcportal-fbng` A14, the token format of PR
+#252 / `ugcportal-qzfu`) has dropped the attribution: treat it as unverified,
+and say so in your report so the orchestrator does not relay it onward. The
+full rule is in `.claude/skills/dispatch-bead/SKILL.md`, beside "never
+enumerate a set in a brief from memory".
+
 **The branch under review is not yours.** Do not commit to it, do not push to
 it, and do not touch the implementer's worktree yourself — the one sanctioned
 way it goes away is the post-merge sweep in the machine section's third
