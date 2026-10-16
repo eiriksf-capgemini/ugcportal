@@ -21,7 +21,18 @@ bd list --status=closed --json
 
 Filter to issues where `metadata.released_in` is **not** set — those are candidates. (A small Python/jq filter over the JSON is the easiest way; there's no CLI flag for "metadata key absent".)
 
-**Before including a candidate, verify it actually shipped.** `bd status=closed` only means the bead's work is done, not that its PR landed on `main`. For every `gh-N` token in the bead's `metadata.prs`, check `gh pr view N --json state,mergedAt` — if any PR isn't `MERGED`, drop that bead from this release (leave its `released_in` unset so a later run picks it up once it actually merges) and note it in your final report rather than silently skipping it. A bead with no `prs` at all (pre-PR-workflow direct commit) is trusted as-is. Do not skip this check — a bead closed with an unmerged PR in `prs` has already happened once in this repo's history and produced a changelog entry for work that wasn't on `main`.
+**Before including a candidate, verify it actually shipped.** `bd status=closed` only means the bead's work is done, not that its PR landed on `main`. For every `gh-N` token in the bead's `metadata.prs`, check `gh pr view N --json state,mergedAt` — if any PR isn't `MERGED`, drop that bead from this release (leave its `released_in` unset so a later run picks it up once it actually merges) and note it in your final report rather than silently skipping it. A bead with no `prs` at all has no PR to check and is not dropped here; the resolution rule below decides which section it renders under. Every token in `prs` must match `gh-<digits>` exactly (`GH-12`, `12`, `gh-12a` and an empty token from a stray comma do not): a bead with any malformed token is excluded from this release and from `C`, left without `released_in`, and named in the step-10 report; fix the bead's `prs` and re-run. **The run is INCOMPLETE while any malformed bead exists**: it may be the only `feat` or `breaking` bead, and the step-3 bump is computed without it. Do not proceed to steps 6-8 until the bead is fixed, or the human has accepted its exclusion by name. `scripts/cut-release-render.mjs` exits 3 in that case. Do not skip this check — a bead closed with an unmerged PR in `prs` has already happened once in this repo's history and produced a changelog entry for work that wasn't on `main`.
+
+**Classify every surviving candidate by `metadata.resolution`.** `bd status=closed` also covers work closed without shipping anything (found cutting v0.7.0: beads closed as already implemented, not reproducible, or decided against were listed as Features and Fixes). The key `resolution` takes one of: `shipped` | `not-reproducible` | `wont-fix` | `duplicate` | `superseded`.
+
+- `resolution` absent and `prs` non-empty: treated as `shipped`. This is the default, so no existing shipped bead needs retagging.
+- `resolution` absent and `prs` empty: the fallback. The bead renders under "Closed without a change" (step 5), so existing beads closed without a PR need no retagging either.
+- `resolution=shipped`, or any of the four non-shipped values, is taken as written; the four render under "Closed without a change".
+- A `resolution` value outside the set above also renders under "Closed without a change" and is named in the step-10 report as unrecognised. It is never dropped.
+- Normalisation: `resolution` and `prs` are trimmed; a blank or non-string value counts as absent; `resolution` values are case-sensitive, so `Shipped` is unrecognised.
+- A bead with no `prs` that predates the PR workflow (e.g. early direct commits) falls under the fallback too. To keep it in the shipped sections, set `resolution=shipped` on it.
+
+`scripts/cut-release-render.mjs` is the reference implementation of this classification, of step 5's grouping and of the repeated-PR check in step 10; `scripts/cut-release-render.test.mjs` runs it over a fixture. If this prose and that script disagree, fix whichever is wrong in the same PR.
 
 **Report the denominator at every narrowing, and treat a zero at the FIRST
 one as a failure of this step rather than as an empty backlog**
@@ -30,7 +41,7 @@ one as a failure of this step rather than as an empty backlog**
 ```
 closed beads returned by `bd list --status=closed --json`: <A>
 of those, without `metadata.released_in`:                  <B>
-of those, every `gh-N` in `metadata.prs` MERGED:           <C>
+of those, verified (every `gh-N` MERGED, or no prs): <C>
 ```
 
 `A = 0` is not a release with nothing in it — this repo has hundreds of
@@ -41,9 +52,12 @@ this guards against is a dependency filter that used the wrong field name
 and reported "nothing is stuck" over a backlog with ten dead beads: every
 figure on that report was plausible.
 
+`C` counts every candidate that passed the PR check, "Closed without a change" candidates included: step 5 must render exactly `C` entries.
+
 `B = 0` or `C = 0` with a healthy `A` **is** a real answer — everything
-closed has already shipped — and is reported as `A` closed, `B` unreleased,
-`C` verified-shipped, not as a bare "nothing to release". Say so with all
+closed is already released, or has an unmerged or malformed PR link that
+kept it out — and is reported as `A` closed, `B` unreleased, `C` verified
+candidates (PR-merged, or closed without a change), not as a bare "nothing to release". Say so with all
 three numbers and stop.
 
 ## 2. Read the current version
@@ -52,7 +66,7 @@ Read `version` from `package.json` at the repo root. That's the baseline this re
 
 ## 3. Determine the version bump
 
-Across all the unreleased issues found in step 1, look at each one's `metadata.cc_type` (and `metadata.breaking`, if set to `"true"`):
+Across the unreleased issues that step 1 classified as shipped (beads under "Closed without a change" never contribute: a `wont-fix` bead with `cc_type=feat` or `breaking=true` does not raise the bump), look at each one's `metadata.cc_type` (and `metadata.breaking`, if set to `"true"`):
 
 - Any issue has `metadata.breaking=true` → **major**
 - Else any issue has `cc_type=feat` → **minor**
@@ -66,7 +80,7 @@ Compute the new version from the current one (semver x.y.z): major bumps x, rese
 
 `metadata.prs` is a comma-separated list like `gh-5,gh-7`. Run `gh repo view --json nameWithOwner -q .nameWithOwner` once and use that value for every link — do not hardcode a slug. For each token, strip the `gh-` prefix to get the PR number and build the link: `https://github.com/<owner>/<repo>/pull/<n>`. A bead with multiple entries in `prs` must show **all** of them, not just the first — that's the whole point of tracking it as a list.
 
-If a bead has no `prs` metadata (shipped via a direct commit predating the PR workflow, e.g. very early scaffolding work), just show the bead id with no PR links rather than inventing one.
+If a bead has no `prs` metadata, show the bead id with no PR links rather than inventing one. Under step 1's rule such a bead renders under "Closed without a change" unless it carries `resolution=shipped`, so a pre-PR-workflow direct-commit bead needs `resolution=shipped` set to be listed as shipped work.
 
 ## 5. Group and render
 
@@ -82,11 +96,13 @@ Group the unreleased issues by `cc_type` into sections, in this order, omitting 
 ### 🏗️ Build & CI       (cc_type = build or ci)
 ### 🔧 Chores           (cc_type = chore, style, revert)
 ### ❓ Other             (cc_type missing, empty, or not one of the above)
+### 🚫 Closed without a change   (classified in step 1)
 ```
 
-The "Other" bucket exists so a typo'd or unset `cc_type` produces a *visible* entry demanding a fix, instead of the bead silently vanishing from the changelog while still getting marked `released_in` in step 7. Never drop an issue found in step 1 without rendering it somewhere.
+A candidate that step 1 classified as closed without a change renders under "Closed without a change" **instead of** its `cc_type` section, whatever its `cc_type`. That section is last, and for step 5a's rollup it is one more section with its own row.
+The "Other" bucket exists so a typo'd or unset `cc_type` produces a *visible* entry demanding a fix, instead of the bead silently vanishing from the changelog while still getting marked `released_in` in step 7. Never drop an issue found in step 1 without rendering it somewhere. "Closed without a change" is rendered, not omitted, and the number of entries across all sections must equal step 1's `C`.
 
-Each entry: `- **<title>** (\`<bead-id>\`, scope: <cc_scope>) — <PR links, comma-separated, or nothing if none>`
+Each entry: `- **<title>** (\`<bead-id>\`, scope: <cc_scope>) — <PR links, comma-separated, or nothing if none>`. Under "Closed without a change", add the resolution after the scope (`resolution: wont-fix`; write `resolution: none` for the fallback).
 
 Prepend a version header above the sections:
 
@@ -100,7 +116,7 @@ This header, the optional Cost Summary from step 5a immediately below, and the p
 
 Add a per-type rollup of the same `tokens_impl`/`tokens_qa` bead metadata described in CLAUDE.md > "Token cost metadata" — but only if **at least one** included issue has either field set. If none do, skip this whole step (an all-empty table is noise, not a summary); say so explicitly in your step 10 report either way.
 
-Reuse the exact same per-`cc_type` sections step 5 already grouped — same buckets, same order, same membership — rather than recomputing or restating the bucketing rules here. Render one row per section, regardless of whether any issue in it has cost data (a section with zero data still gets a row of dashes, so the absence is visible rather than silently dropped). For each section: sum `tokens_impl` and `tokens_qa` separately across its issues, and set `Total = Impl + QA` for that row. A missing `tokens_impl`/`tokens_qa` field contributes 0 to its sum; if a value is present but isn't a plain integer, treat it as missing too (don't guess or round) and flag the malformed value in your step 10 report. Separately, count how many of the section's issues have *either* field set as a "Beads with data" fraction (numerator = issues with data, denominator = the section's total issue count from step 5).
+Reuse the exact same step-5 sections, including "Closed without a change", that step 5 already grouped — same buckets, same order, same membership — rather than recomputing or restating the bucketing rules here. Render one row per section, regardless of whether any issue in it has cost data (a section with zero data still gets a row of dashes, so the absence is visible rather than silently dropped). For each section: sum `tokens_impl` and `tokens_qa` separately across its issues, and set `Total = Impl + QA` for that row. A missing `tokens_impl`/`tokens_qa` field contributes 0 to its sum; if a value is present but isn't a plain integer, treat it as missing too (don't guess or round) and flag the malformed value in your step 10 report. Separately, count how many of the section's issues have *either* field set as a "Beads with data" fraction (numerator = issues with data, denominator = the section's total issue count from step 5).
 
 Add a final **Total** row: `Total = Impl + QA` there too, and its Impl/QA/Total/"Beads with data" cells are each the straight sum of that column down the per-section rows above (numerator-with-numerator, denominator-with-denominator for the fraction) — never inferred by inspecting whether other columns are zero.
 
@@ -126,7 +142,7 @@ Bump the version with `npm version <version> --no-git-tag-version` (not a manual
 
 ## 7. Mark issues as released
 
-For every issue included in this release:
+For every issue included in this release, "Closed without a change" entries included (they are rendered here, and an untagged one would reappear in the next release):
 
 ```bash
 bd update <id> --set-metadata released_in=v<version>
@@ -285,7 +301,7 @@ Do this only after confirming the release PR from step 8 is merged (`gh pr view 
 
 ## 10. Report back
 
-State the computed version, the bump reason (which issue(s) triggered feat/major), step 1's three narrowing figures (`A` closed / `B` unreleased / `C` verified-shipped), step 7's read-back fraction, how many issues were included, whether step 5a's Cost Summary was included or skipped (and why, if skipped, or note any malformed `tokens_impl`/`tokens_qa` value it ignored), the PR URL, and the GitHub Release URL (or why it was skipped/deferred).
+Start with any malformed-`prs` beads (the run is incomplete while they exist; see step 1), then state the computed version, the bump reason (which issue(s) triggered feat/major), step 1's three narrowing figures (`A` closed / `B` unreleased / `C` verified candidates: PR-merged or closed without a change), how many entries step 5 rendered under "Closed without a change" and the total rendered (which must equal `C`), the report lines `scripts/cut-release-render.mjs` prints, verbatim in form: `PR #<n> (<bead-id>) is already linked in an earlier release section: <versions>` (scan the `pull/<n>` links of every existing `## v` section, exact number match; the entry stays rendered rather than being silently re-announced or dropped), `<bead-id>: unrecognised resolution "<value>"`, `<bead-id>: malformed prs "<raw>" -- excluded from this release; fix the bead, then re-run`, and `<bead-id> dropped from this release: PR(s) not MERGED: <numbers>`, step 7's read-back fraction, how many issues were included, whether step 5a's Cost Summary was included or skipped (and why, if skipped, or note any malformed `tokens_impl`/`tokens_qa` value it ignored), the PR URL, and the GitHub Release URL (or why it was skipped/deferred).
 
 Then step 7b's result next to 7a's: the script's exit and its registry-images-checked line, the two probe statuses (or that there was no Docker machine), and what the release PR body recorded.
 
