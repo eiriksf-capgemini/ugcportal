@@ -351,6 +351,12 @@ describe("scope-limiting recategorisation (ugcportal-fgcb K1)", () => {
     expect(classifyClaimLine("the test asserts it cannot see the draft")).toEqual(["SCOPE-LIMITING"]);
   });
 
+  it("KNOWN ERROR, pinned: a pronoun counts as an instrument whenever an instrument noun appears before it", () => {
+    // Named in the comment above findScopeLimitingSpans; pinned so a fix to
+    // it is visible here.
+    expect(classifyClaimLine("the test passed, and it cannot see the draft row")).toEqual(["SCOPE-LIMITING"]);
+  });
+
   it("M2: a detection verb needs an instrument subject too, after 'cannot' and after 'never'", () => {
     expect(classifyClaimLine("an attacker cannot detect whether an account exists")).toEqual(["ABSOLUTE"]);
     expect(classifyClaimLine("the user cannot notice that a watermark was applied")).toEqual(["ABSOLUTE"]);

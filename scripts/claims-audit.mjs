@@ -351,7 +351,11 @@ const COVERAGE_UNIVERSAL_RE = /\b(?:catch(?:es)?|sees?|covers?|detects?|flags?|f
 // alone); an instrument named only outside the window (PR #200's table row
 // "nothing else catches it either", whose instrument is in the table's
 // header four lines up); and "covers X and no other", which is how a
-// clearance's guarantee is phrased in PR #199. Each of these is pinned in
+// clearance's guarantee is phrased in PR #199. And the reverse error it
+// still makes: a pronoun counts as an instrument whenever an instrument
+// noun appears anywhere before it in the window, whether or not that noun
+// is what the pronoun means ("the test passed, and it cannot see the draft
+// row" is SCOPE-LIMITING). Each of these is pinned in
 // scripts/claims-audit.test.mjs.
 const DETECTION_VERB = String.raw`(?:catch(?:es)?|detects?|notices?|recogni[sz]es?)`;
 const AMBIGUOUS_VERB = String.raw`(?:sees?|covers?|inspects?|looks? at)`;
