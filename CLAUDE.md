@@ -265,23 +265,44 @@ models whose transcripts under-record output (also section 1.2). Per side (`impl
   its earlier passes twice. **Write them only when the command prints
   `missing=none uncovered=none`.** It prints `INCOMPLETE` instead when some
   or all listed agents have no transcript (including `passes=0`), or when the
-  list does not cover what the bead already records: a `tokens_qa_rN` with no
-  `tokens_qa_rN_agent` in the list (a round recorded before agent ids were
-  kept), an agent already in `cost_agents_*` that the list leaves out, or a
-  `tokens_*` with no `cost_agents_*` at all. That last case is the impl side's
-  pre-rule shape — earlier passes run by agents nobody listed. Without this
-  check a list holding only the newest agent prints a complete-looking
+  list does not cover what the bead already records: a side an earlier
+  recording marked incomplete (below), whatever the list now holds; a
+  `tokens_qa_rN` with no `tokens_qa_rN_agent` (a round recorded before agent
+  ids were kept) or with one that is not in the list; an agent already in
+  `cost_agents_*` that the list leaves out; or a `tokens_*` with no
+  `cost_agents_*` (and, for qa, no rounds) at all. That last case is the impl
+  side's pre-rule shape — earlier passes run by agents nobody listed. Without
+  this check a list holding only the newest agent prints a complete-looking
   `ctx=`/`ite=` for that agent alone. On `INCOMPLETE`, write no
-  `cost_ite_*`/`cost_calls_*` key at all and do **not** set `tokens_*` from
-  `ctx=`: a sum over part of the agents is partial, and over none it is a 0
-  that would read as a measured zero cost. Apply the per-agent rule to
-  `tokens_*` by hand instead, or first backfill the missing agent ids
-  (`tokens_qa_rN_agent`, `cost_agents_*`) from the transcripts and re-run. A `cost_ite_*` that is 0
-  or not a positive integer is not read as ITE by the report anyway; it is
-  listed under Data gaps and the bead falls back to its `tokens_*`.
+  `cost_ite_*`/`cost_calls_*` key, **unset** any an earlier complete
+  recording left there (it misses at least the agents recorded since), and do
+  **not** set `tokens_*` from `ctx=`: a sum over part of the agents is
+  partial, and over none it is a 0 that would read as a measured zero cost.
+  Apply the per-agent rule to `tokens_*` by hand instead, or — before any
+  `INCOMPLETE` write — first backfill the missing agent ids
+  (`tokens_qa_rN_agent`, `cost_agents_*`) from the transcripts and re-run. A
+  `cost_ite_*` that is 0 or not a positive integer is not read as ITE by the
+  report anyway; it is listed under Data gaps and the bead falls back to its
+  `tokens_*`.
+- `cost_coverage_impl` / `cost_coverage_qa` — the mark an `INCOMPLETE`
+  recording leaves: set it to the marker the output names (an existing marker
+  is printed back unchanged). The `cost_agents_*` that write records holds
+  only the agents known so far, and would otherwise read on the next
+  recording as a list covering the whole figure, so the next `ctx=` would
+  overwrite `tokens_*` with part of it (ugcportal-cii0 M3). While a side
+  carries any `cost_coverage_*` — or a `cost_note_*` that does not begin
+  `all transcripts present` — every later recording prints `INCOMPLETE`, and
+  the report reads no `cost_ite_*` on that side even if one is left there (it
+  is listed under Data gaps). **Only a human clears it**, after backfilling
+  every earlier agent id and correcting `tokens_*`:
+  `bd update <id> --unset-metadata cost_coverage_<side> --unset-metadata cost_note_<side>`,
+  then re-run. A recording never removes it.
 - `cost_note_impl` / `cost_note_qa` — `all transcripts present`, or the note
-  the `INCOMPLETE` line names (`missing: <ids>`, `pre-rule rounds without
-  agent ids: r1, r2`, `recorded agents dropped from the list: <ids>`). Work done inline in an
+  the `INCOMPLETE` line names: one or more of, joined by `; `,
+  `missing: <ids>`, `marked incomplete by an earlier recording: <key>`,
+  `rounds without agent ids: r1, r2`, `rounds whose agents are not in the
+  list: r3`, `recorded agents dropped from the list: <ids>`,
+  `tokens_<side> recorded before cost_agents_<side>`. Work done inline in an
   orchestrator or human session has no agent id and is not in these keys; say
   so here when it was material.
 
@@ -292,19 +313,21 @@ bd show <id> --json > /tmp/bead.json          # the bead's current metadata, for
 # (it ships with ugcportal-cii0's #261); all four arguments are required, side is impl or qa
 node -e 'import("./scripts/release-cost-report.mjs").then((m)=>console.log(m.runAgentCost(...process.argv.slice(1))))' /tmp/passes.json <agent-id>,<agent-id> /tmp/bead.json impl
 # prints:  ite=<ite> calls=<calls> ctx=<ctx> agents=<n> passes=<n> missing=none uncovered=none
-#     or:  INCOMPLETE ... missing=<ids> uncovered=<rounds> -- write no cost_ite_*/cost_calls_*, do not overwrite tokens_* ...
+#     or:  INCOMPLETE ... missing=<ids> uncovered=<what> -- write no cost_ite_*/cost_calls_* and unset any already there, do not overwrite tokens_* ...
 # missing=none uncovered=none:
 bd update <id> --set-metadata tokens_impl=<ctx> --set-metadata tokens_impl_convention=last-per-agent \
   --set-metadata cost_agents_impl=<ids> --set-metadata cost_ite_impl=<ite> --set-metadata cost_calls_impl=<calls> \
   --set-metadata cost_note_impl="all transcripts present"
 node scripts/bd-verify-metadata.mjs <id> tokens_impl=<ctx> cost_ite_impl=<ite> cost_calls_impl=<calls>
-# INCOMPLETE: no cost_ite_*/cost_calls_*, tokens_impl by the per-agent rule by hand (never from ctx=):
+# INCOMPLETE: no cost_ite_*/cost_calls_* (old ones removed), the side marked, tokens_impl by the per-agent rule by hand (never from ctx=):
 bd update <id> --set-metadata tokens_impl=<figure> --set-metadata tokens_impl_convention=last-per-agent \
-  --set-metadata cost_agents_impl=<ids> --set-metadata cost_note_impl="<the note the output names>"
+  --set-metadata cost_agents_impl=<ids> --set-metadata cost_note_impl="<the note the output names>" \
+  --set-metadata cost_coverage_impl="<the marker the output names>" --unset-metadata cost_ite_impl --unset-metadata cost_calls_impl
+node scripts/bd-verify-metadata.mjs <id> tokens_impl=<figure> cost_coverage_impl="<the marker>"   # and its printed keyset has no cost_ite_impl / cost_calls_impl
 ```
 
 **How the two are read.** A bead carrying a `cost_ite_*` key that is a
-positive integer is reported in ITE and its `tokens_*` are not read; a bead
+positive integer, on a side not marked incomplete, is reported in ITE and its `tokens_*` are not read; a bead
 with no accepted `cost_ite_*` figure (none, or only a 0 or malformed one) is
 reported from its `tokens_*` as "context-size, not cost". `scripts/release-cost-report.mjs`
 (`costUnitOf`) and `cut-release` step 5a both keep the two in separate totals.
