@@ -339,7 +339,7 @@ repo.** (It was applied by mistake three times in v0.5.0 — PRs #60, #61,
 #75 — which is a separate defect, not an exception to this.) The
 reviewer and the PR author are the same GitHub account, so every marker
 chain computes as `approx` rather than `exact`, and an `approx` chain runs
-the strict rounds-1–3 rule at *every* round. Cost of that, measured: one P3
+the strict rounds-1–3 rule at *every* round. In recorded context size, not cost: one P3
 bead recorded **987k review tokens** (`tokens_qa` 987,870 on `ugcportal-577s`, PR #201, in `bd show
 ugcportal-577s --json` on 2026-10-16; `zo8n` shares that PR and records the
 same figure; context size, not cost). The fix is a separate reviewer
@@ -566,8 +566,8 @@ path is the first defect family applied to itself.
 
 1. **The review identity problem.** Every marker chain is `approx` because
    reviewer and author share an account, so the lenient band is unreachable
-   and every round runs at full strictness. Measured cost: 987k review
-   tokens recorded on a single P3 (`ugcportal-577s`, PR #201; context size, not cost). Fix: `ugcportal-62b6`, pending on Eirik.
+   and every round runs at full strictness. Recorded context size: 987k review
+   tokens on a single P3 (`ugcportal-577s`, PR #201; context size, not cost). Fix: `ugcportal-62b6`, pending on Eirik.
 2. **The orchestrator is the least-reviewed participant.** Implementers and
    reviewers are checked by each other; the orchestrator's briefs, bead
    edits and metadata writes are checked by nobody. Every error in section A
