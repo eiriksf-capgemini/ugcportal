@@ -1367,6 +1367,12 @@ describe("findings_rN keys (ugcportal-2jvh)", () => {
     expect(classifySeverity("Review round 2 (chain exact).\n\nNo findings this round.").clean).toBe(false);
   });
 
+  it("P1: a marker-first approval (#173 r2 verbatim) is clean: the verdict line skips the round-marker line", () => {
+    // pins the mutant text.split -> raw.split on the verdictLine line of classifySeverity
+    expect(pr173.round2Body.trimStart()).toMatch(/^<!-- ugcportal-review-round: 2 -->/);
+    expect(classifySeverity(pr173.round2Body).clean).toBe(true);
+  });
+
   it("M1: a blocking verdict line that states the band rule is never clean, so an all-zero key on it is inconsistent (#157 r3 severity word removed, #207 r2, #209 r4)", () => {
     const zero = { findings_r1: "f1:0 f2:0 f3:0 f4:0 med:0 low:0" };
     const lines = [
