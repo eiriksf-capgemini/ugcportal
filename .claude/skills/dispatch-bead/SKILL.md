@@ -232,14 +232,19 @@ Three implementer agents at a time in practice, and never two on the same
 `cc_scope`. Claim the bead (`bd update <id> --claim`) and hand over the
 brief.
 
-Before any pass after the first (a fix round, section 5), run the pass-budget
-check of section 6.
-
 ## 5. Sending a fix round back: resume or fresh (ugcportal-8r06)
 
+**First, the pass budget (section 6).** Before choosing anything below, record
+the passes made so far and run `node scripts/check-pass-budget.mjs <bead-id>;
+echo "exit $?"`. Only exit 0 (PROCEED) lets this section run; exit 1 (STOP)
+means no fix round is sent at all, and exit 2 (UNKNOWN) means fix the
+bookkeeping and re-run. Whether a further pass happens depends on the pass
+count; how it is sent, below, does not.
+
 A review round that blocks needs a fix. The agent that made the most recent
-pass on the PR can be resumed (`SendMessage`), or a fresh agent can be dispatched. Choose on two
-figures, not on how many passes the agent has already had:
+pass on the PR can be resumed (`SendMessage`), or a fresh agent can be dispatched. Choose
+between the two on two figures; the pass count plays no part in that choice
+(the budget check above has already settled whether to send one):
 
 - **Carried context**: the `subagent_tokens` of the *last* completion
   notification of the agent that made the most recent pass on the PR (the
@@ -370,32 +375,91 @@ passes already made, counting the implementer's first):
 node scripts/check-pass-budget.mjs <bead-id>; echo "exit $?"
 ```
 
+**What it reads, and who writes it.** Two kinds of metadata key. The review
+rounds are `findings_r<N>` (or `findings_pr<n>_r<N>` on a bead with a second
+reviewed PR), which the orchestrator writes after every review round under
+`pr-review-merge` step 4a item 5, with `N` the round marker; a run that
+reviewed but stamped no marker goes under `findings_unstamped`. The pass count
+is `tokens_impl_passes` (defined in CLAUDE.md, "Token cost metadata"). No
+other step writes it each round; the write above, before every run of this
+script, is what keeps it current.
+
+**Which rounds count.** `tokens_impl_passes` covers the whole bead, across all
+its PRs, so a clean round only exempts the bead when it belongs to the
+**latest** PR. With any `findings_pr<n>_r<N>` key, the latest PR is the highest
+PR number found in the bead's `prs` or in those keys (a PR still in review may
+not be listed in `prs` yet, and GitHub numbers only rise), and only that PR's
+keys count. A clean earlier round of that same PR does exempt: the bead
+reached a clean round. A clean round on an earlier PR does not. Bare
+`findings_r<N>` keys count only when the bead has no `findings_pr*` key and its
+`prs` lists at most one PR; a bead carrying both forms is a recording error
+(step 4a item 5 renames the bare keys first), and the script names it and
+counts no round of it as clean.
+
+**The cross-check against a stale count.** Every reviewed round reviewed a
+pushed pass, so with current bookkeeping the pass count is not lower than the
+highest round recorded. (A round that re-reviews a fix a human pushed outside
+any agent pass, a round-7 verification say, breaks that, and comes back
+UNKNOWN too: the human directing it decides.) The script takes R as the highest counted round number, plus
+one if `findings_unstamped` is set (an unstamped run reviewed a pass too, and
+is never read as clean). If `tokens_impl_passes` is below R the count lags the
+rounds (written once when the PR opened and never updated, say), and the
+script refuses with UNKNOWN, naming both figures, rather than reading a stale
+`1` as one pass. An unstamped run that re-reviewed a stamped round's head makes
+R one too high; the refusal then costs a re-check, never a missed stop.
+
 It reads `bd show <id> --json` and its exit status is the verdict:
 
 | Exit | Verdict | Meaning | You |
 |---|---|---|---|
-| 0 | PROCEED | under 3 passes, or 3+ with a recorded clean round (`findings_r<N>` or `findings_pr<n>_r<N>` equal to `f1:0 f2:0 f3:0 f4:0 med:0 low:0`) | dispatch the round per section 5 |
-| 1 | STOP | 3+ passes and no clean round | do **not** spawn; do the stop below |
-| 2 | UNKNOWN | `tokens_impl_passes` absent, empty or not a whole number, or the bead could not be read | record the count and re-run; do **not** treat it as zero and carry on |
+| 0 | PROCEED | the count is not below R, and it is under 3 or a counted round is clean (`f1:0 f2:0 f3:0 f4:0 med:0 low:0`) | dispatch the round per section 5 |
+| 1 | STOP | 3+ passes, not below R, and no counted round clean | do **not** spawn; do the stop below |
+| 2 | UNKNOWN | `tokens_impl_passes` absent, empty, not a whole number, or below R; or the bead could not be read | correct the count and re-run; do **not** treat it as zero and carry on |
 
-The script prints how many metadata keys it examined. A bead whose pass count
-the orchestrator has not written comes back UNKNOWN, never PROCEED: an absent
-field read as zero would make the rule fire on nothing, and the beads it exists
-for are the ones where bookkeeping lagged.
+The script prints how many metadata keys it examined, how many were findings
+keys and how many of those it counted. A bead whose pass count the
+orchestrator has not written, or has not kept current, comes back UNKNOWN,
+never PROCEED: an absent field read as zero, or a stale one read as current,
+would make the rule fire on nothing, and the beads it exists for are the ones
+where bookkeeping lagged.
 
 **On STOP, in this order:**
 
 1. Post a PR comment stating the stop: the script's output verbatim, the head
    sha, what is and is not fixed, and that no further pass will be spawned.
 2. File the remainder as a new bead in the bead-template form, with the
-   findings still open as its scope, linked at creation with
-   `--deps=discovered-from:<stopped-bead-id>` (the form pr-review-merge step
-   5a uses), then read the new bead back with `bd show` to confirm the edge
-   points from the new bead to the stopped one (`review-standards` section 6).
-3. Append a note to the stopped bead naming the new bead's id and the stop.
+   findings still open as its scope, linked at creation to the stopped bead.
+   The commands are `pr-review-merge` step 5a's, with the stopped bead's id
+   in place of the PR title's and the open findings as the description and
+   acceptance: the scratch files written by quoted heredoc, the `grep -l
+   '<fill'` guard, then
+
+   ```bash
+   bd create "$(cat "$scratch/title.txt")" --type=task --priority=2 \
+     --body-file "$scratch/desc.md" \
+     --acceptance="$(cat "$scratch/acc.md")" \
+     --notes="$(cat "$scratch/notes.md")" \
+     --deps=discovered-from:<stopped-bead-id> \
+     --metadata @"$scratch/meta.json"
+   bd dep list <new-bead-id>
+   ```
+
+   then run section 1's gate over the new bead until it exits 0, as step 5a
+   does. The `bd dep list` output must name `discovered-from` and the stopped
+   bead's id, in that direction (`review-standards` section 6; step 5a says
+   why the edge is the part that goes wrong).
+3. Append a note to the stopped bead naming the new bead's id and the stop
+   (`bd update <stopped-bead-id> --append-notes "..."`).
 4. Do not spawn the fix pass. What happens to the PR (merge as it is, close, or
    wait for the new bead) is a human decision; the round cap in CLAUDE.md still
    governs the rounds themselves.
+
+A bead already under human direction when it reaches STOP (a round-6 cap
+escalation the human is working through, say) is not re-planned by the
+orchestrator: post the verdict, and leave steps 2 and 3 to the human, with the
+commands above. That is how this rule was first demonstrated, on
+`ugcportal-ul2j` on 2026-10-17, in its human-directed round 7: STOP, exit 1,
+with no remainder bead filed (bc04's K1).
 
 A human who directs another pass past a STOP takes the decision over; record who
 and why in a note, and do not clear the verdict by lowering
