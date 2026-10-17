@@ -217,6 +217,17 @@ export function mediaItemPath(previewId: string): string {
   return `${MEDIA_ITEM_PATH}/${encodeURIComponent(previewId)}`;
 }
 
+/**
+ * Where the owner answers the rights questions for a file they already
+ * uploaded without them (ugcportal-gkax, POST /api/media/[id]/attestation).
+ * Keyed on the row's own `Media.id`, which only its owner ever holds (the
+ * 201 of their own upload): this is an owner-only write, not a public
+ * handle, and the route refuses anybody else's id regardless.
+ */
+export function mediaAttestationApiPath(mediaId: string): string {
+  return `${MEDIA_UPLOAD_PATH}/${encodeURIComponent(mediaId)}/attestation`;
+}
+
 /** The listing parameters GET /api/public/media reads out of its query string. */
 export type PublicMediaListingParams = { limit?: number; cursor?: string };
 

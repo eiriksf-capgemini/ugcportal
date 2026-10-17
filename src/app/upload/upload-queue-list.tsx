@@ -8,6 +8,7 @@ import {
   signInPath,
 } from "@/lib/routes";
 
+import { AttestExistingUpload } from "./attest-existing-upload";
 import { formatBytes, mayRetry, secondsUntilRetry } from "./outcomes";
 import {
   percentComplete,
@@ -23,6 +24,10 @@ import {
  * in a test (the repo's vitest runs in a node environment — see
  * vitest.config.ts — so `renderToStaticMarkup` is the only rendering
  * available, and this is the shape that suits it).
+ *
+ * One child keeps state of its own: `AttestExistingUpload`
+ * (ugcportal-gkax), the rights questions for one stored file. Whether it
+ * renders at all is still decided here, from the props.
  */
 
 export type UploadQueueListProps = {
@@ -487,6 +492,21 @@ export function UploadQueueList({
                   Clear
                 </Button>
               </div>
+            ) : null}
+
+            {/*
+              ugcportal-gkax: the rights questions, afterwards, for an upload
+              its own 201 said was stored WITHOUT them (a configured
+              uploader's). `=== false`, never a falsy check: `null` means the
+              201 did not say, and a row that may already carry an
+              attestation is offered nothing. Keyed on the Media row's id,
+              which is what the route takes.
+            */}
+            {item.status === "succeeded" && item.media?.attested === false ? (
+              <AttestExistingUpload
+                mediaId={item.media.id}
+                fileName={item.name}
+              />
             ) : null}
 
             <Failure

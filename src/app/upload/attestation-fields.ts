@@ -99,12 +99,20 @@ export function unansweredAttestationFields(draft: AttestationDraft): string[] {
  * written out, so the sentence cannot come to disagree with the rule — the
  * same reason `tagCapMessage` interpolates its own constant.
  */
-export function attestationDraftError(draft: AttestationDraft): string | null {
+export function attestationDraftError(
+  draft: AttestationDraft,
+  /**
+   * What the incomplete draft is blocking, as the sentence's ending: the
+   * upload form's "choosing files", or a queue row's "recording them"
+   * (ugcportal-gkax). The count and the rule are the same either way.
+   */
+  blocking: string = "choosing files",
+): string | null {
   const missing = unansweredAttestationFields(draft);
   if (missing.length === 0) return null;
   return missing.length === 1
-    ? "Answer the remaining rights question before choosing files."
-    : `Answer the remaining ${missing.length} rights questions before choosing files.`;
+    ? `Answer the remaining rights question before ${blocking}.`
+    : `Answer the remaining ${missing.length} rights questions before ${blocking}.`;
 }
 
 /**

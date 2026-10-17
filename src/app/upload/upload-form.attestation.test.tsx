@@ -562,6 +562,31 @@ describe("the queue row says whether the upload went public (ugcportal-ho7j K3)"
     expect(link!.textContent).toContain("public page");
   });
 
+  it("offers the rights questions afterwards only when the 201 said attested: false (ugcportal-gkax)", async () => {
+    await uploadAndAnswer({
+      ...STORED,
+      publishedAt: "2026-10-15T10:00:00.000Z",
+      publishRefusal: null,
+      attested: false,
+    });
+
+    const offer = [...container.querySelectorAll("button")].find((button) =>
+      (button.textContent ?? "").startsWith("Answer the rights questions"),
+    );
+    expect(offer, "no offer on a row stored without an attestation").toBeDefined();
+  });
+
+  it("offers nothing when the 201 said attested: true (ugcportal-gkax)", async () => {
+    await uploadAndAnswer({
+      ...STORED,
+      publishedAt: "2026-10-15T10:00:00.000Z",
+      publishRefusal: null,
+      attested: true,
+    });
+
+    expect(text()).not.toContain("Answer the rights questions");
+  });
+
   it("renders the refusal's reason, and no 'Published', when a gate refused", async () => {
     await uploadAndAnswer({
       ...STORED,

@@ -19,7 +19,9 @@ import {
 
 /**
  * ugcportal-15r K3, as a claim about the WHOLE TREE: an attestation row is
- * written in exactly one file, and always with `session.user.id`.
+ * written only in the files named below (one at first; the late-attestation
+ * route since ugcportal-gkax; and a test-support fixture), and always with
+ * `session.user.id`.
  *
  * WHY A TREE-WIDE SCAN AND NOT JUST THE ROUTE'S OWN TESTS. The route tests
  * next door prove the one write path there is names the session's user. They
@@ -202,8 +204,29 @@ const WRITE_PATH = "app/api/media/route.ts";
  */
 const TEST_SUPPORT_WRITE_PATH = "lib/test-support/media-fixtures.ts";
 
-/** Both, sorted the way `scanAttestationWritePaths` returns them. */
-const ALLOWED_WRITE_PATHS = [WRITE_PATH, TEST_SUPPORT_WRITE_PATH].sort();
+/**
+ * The SECOND product file allowed to write one (ugcportal-gkax): the owner
+ * answering the questions for a file they already uploaded without answering
+ * them — a configured uploader's, since ugcportal-ho7j.
+ *
+ * Admitted by name, and held below to everything the upload route is held
+ * to: one explicit `tx.mediaAttestation.create`, naming `userId`, and that
+ * `userId` traced back to the session through the ownership gate rather
+ * than taken on the route's word. §3.1's whole point is that the row names
+ * the person who uploaded the file; a second writer is only acceptable if
+ * it provably cannot name anybody else.
+ */
+const LATE_ATTESTATION_WRITE_PATH = "app/api/media/[id]/attestation/route.ts";
+
+/** The ownership gate that route takes its actor from. */
+const MEDIA_ACCESS_PATH = "lib/media-access.ts";
+
+/** All three, sorted the way `scanAttestationWritePaths` returns them. */
+const ALLOWED_WRITE_PATHS = [
+  WRITE_PATH,
+  LATE_ATTESTATION_WRITE_PATH,
+  TEST_SUPPORT_WRITE_PATH,
+].sort();
 
 /**
  * ONE WALK OF `src/`, AND ONE PARSE OF THE WRITE PATH, shared by every case
@@ -230,7 +253,7 @@ function testSupportImporters(): string[] {
   return (cachedTestSupportImporters ??= scanTestSupportImporters(SRC_ROOT));
 }
 
-describe("ugcportal-15r K3: exactly one place writes an attestation", () => {
+describe("ugcportal-15r K3: only the named places write an attestation", () => {
   const found = writePaths();
 
   it("finds the write path at all", () => {
@@ -240,10 +263,11 @@ describe("ugcportal-15r K3: exactly one place writes an attestation", () => {
     expect(found.length).toBeGreaterThan(0);
   });
 
-  it("finds it in exactly two files: POST /api/media, and the test-support fixture", () => {
+  it("finds it in exactly three files: POST /api/media, POST /api/media/[id]/attestation, and the test-support fixture", () => {
     /*
-     * Two, not one, since ugcportal-3ae — and the second is pinned by name
-     * rather than by a pattern, so a THIRD writer fails here by existing
+     * Two, not one, since ugcportal-3ae, and three since ugcportal-gkax —
+     * and each is pinned by name rather than by a pattern, so a FOURTH
+     * writer fails here by existing
      * IN EVERY SHAPE THE SCANNER SEES: a `*.mediaAttestation.<write>(…)`
      * call, and a nested `attestation: { <write>: … }` whose value is an
      * object literal. That covers an importer, an admin screen or a bulk
@@ -317,6 +341,66 @@ describe("ugcportal-15r K3: exactly one place writes an attestation", () => {
     for (const binding of bindings) {
       expect(binding, binding).toMatch(/session\??\.user\??\.id/);
     }
+  });
+});
+
+/**
+ * ugcportal-gkax: the second product writer, held to what the first is held
+ * to — and, because it takes its actor from the shared ownership gate rather
+ * than from its own `auth()` call, with the chain back to the session
+ * checked link by link rather than taken on trust.
+ */
+describe("ugcportal-gkax: the late-attestation route names the session's user too", () => {
+  const routeFile = path.join(SRC_ROOT, LATE_ATTESTATION_WRITE_PATH);
+  const accessFile = path.join(SRC_ROOT, MEDIA_ACCESS_PATH);
+
+  it("writes exactly one attestation, through an explicit transactional create", () => {
+    const writes = attestationWritesIn(routeFile);
+
+    expect(writes).toHaveLength(1);
+    expect(writes[0].method).toBe("create");
+    expect(writes[0].nested).toBe(false);
+    expect(writes[0].callee).toBe("tx.mediaAttestation.create");
+  });
+
+  it("names `userId` as the actor", () => {
+    const [write] = attestationWritesIn(routeFile);
+
+    expect(write.argument).toMatch(/attestedByUserId:\s*userId\b/);
+  });
+
+  it("binds `userId` from the ownership gate's result, and `access` from the gate, and from nothing else", () => {
+    const userIds = bindingsNamed(routeFile, "userId");
+    expect(userIds.length).toBeGreaterThan(0);
+    for (const binding of userIds) {
+      expect(binding, binding).toBe("access.userId");
+    }
+
+    const accesses = bindingsNamed(routeFile, "access");
+    expect(accesses.length).toBeGreaterThan(0);
+    for (const binding of accesses) {
+      expect(binding, binding).toMatch(/^await requireOwnedMedia\(/);
+    }
+  });
+
+  it("and the gate takes that `userId` from the session", () => {
+    /*
+     * The link the route cannot vouch for itself: `access.userId` is only
+     * the session's user if `requireOwnedMedia` makes it so. Every binding
+     * of each name in that file is checked, so a second `userId` read from
+     * anywhere else there fails here.
+     */
+    const userIds = bindingsNamed(accessFile, "userId");
+    expect(userIds.length).toBeGreaterThan(0);
+    for (const binding of userIds) expect(binding, binding).toBe("user.id");
+
+    const users = bindingsNamed(accessFile, "user");
+    expect(users.length).toBeGreaterThan(0);
+    for (const binding of users) expect(binding, binding).toMatch(/^session\??\.user$/);
+
+    const sessions = bindingsNamed(accessFile, "session");
+    expect(sessions.length).toBeGreaterThan(0);
+    for (const binding of sessions) expect(binding, binding).toBe("await auth()");
   });
 });
 
