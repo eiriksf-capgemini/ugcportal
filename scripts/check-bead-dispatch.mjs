@@ -16,10 +16,10 @@
  * lists nothing, an item is not a repo-relative path, or `none` is combined
  * with anything but one parenthesised reason) -- in each of those cases the
  * other field's statement is never judged in its place; or the two name
- * different commits at the same distance from origin/main's HEAD, which
- * cannot be ordered; or, of the candidates, the one whose commit is
- * fresher on main (on a shared commit,
- * the union of both declarations) has had a declared path touched by a
+ * different commits neither of which is an ancestor of the other, which
+ * cannot be ordered; or, of the candidates, the one whose commit descends
+ * from the other's (on a shared commit, the union of both declarations)
+ * has had a declared path touched by a
  * commit on `main` since; or a path it declares does not exist at
  * origin/main's HEAD (ugcportal-ul2j). `PREMISE_FRESHNESS_COST`'s comment
  * gives the rules in the order the check applies them.
@@ -157,11 +157,14 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
  *      PR was squash-merged), or it resolves to a commit off main (rule 1),
  *      or it lacks a declaration that can be checked (rule 3), the bead
  *      FAILS, naming the field and what is wrong, and the other field's
- *      statement is never judged in its place. Of two sound candidates, the
- *      one whose commit is FRESHER ON MAIN -- strictly fewer commits behind
- *      origin/main's HEAD -- is judged, with its own declaration; when both
+ *      statement is never judged in its place. Of two sound candidates naming
+ *      different commits, the one whose commit is NEWER ON MAIN BY ANCESTRY
+ *      -- the other's commit is an ancestor of it (`git merge-base
+ *      --is-ancestor`) -- is judged, with its own declaration; when NEITHER
+ *      is an ancestor of the other, the two latest statements cannot be
+ *      ordered on this history and the bead FAILS, naming both. When both
  *      name the same commit, that commit is judged against the UNION of the
- *      two declarations. Recency comes from the commit's position on main,
+ *      two declarations. Recency comes from the commits' ancestry on main,
  *      never from where the text sits: judging by field order let a
  *      description rewritten after the notes be passed over for an older,
  *      narrower notes statement, and a stale premise passed (PR #289 review
@@ -170,13 +173,13 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
  *      since said are not enough -- the understated-declaration pass K5
  *      forbids, introduced by the gate rather than the author (round 4,
  *      M1) -- which is why an unsound candidate fails the bead rather than
- *      being skipped. Both commits are on main, so both are ancestors of
- *      its HEAD; on a linear main (this repository squash-merges:
- *      `git rev-list --count --merges origin/main` printed 0 of 297 at
- *      74f38a2 on 2026-10-17) two different commits never share a count, so
- *      equal counts mean the same commit. A main with merge commits could
- *      give two different commits the same count, and then the bead fails
- *      rather than pick one. The cost is deliberate: a bead whose
+ *      being skipped. Nor is a commit count a stand-in for ancestry: once
+ *      main has a merge commit, two on-main commits can sit on different
+ *      sides of it, neither newer than the other, with counts behind HEAD
+ *      that can still differ -- ordering them by count judged the lower one
+ *      with its own narrower declaration and passed a stale premise (round
+ *      6, M1). Ordering by ancestry does not depend on main being linear.
+ *      A git failure while asking fails closed, as not measured. The cost is deliberate: a bead whose
  *      description still carries an old typo'd, pruned or off-main premise
  *      fails until that line is re-verified, even when its notes hold a
  *      sound, fresh one -- re-verifying those lines across the backlog is
@@ -847,8 +850,10 @@ export const CHECKS = [
     // declared, or the bead fails here -- the other field's statement is
     // never judged in its place, because either field could hold the
     // author's latest assertion. Of two sound candidates, the one whose
-    // commit is fresher on main is judged; on a shared commit, the union of
-    // the two declarations is (PREMISE_FRESHNESS_COST's comment, rule 2).
+    // commit descends from the other's is judged; two commits neither of
+    // which is an ancestor of the other fail; on a shared commit, the union
+    // of the two declarations is judged (PREMISE_FRESHNESS_COST's comment,
+    // rule 2).
     const candidates = ["description", "notes"]
       .map((field) => ({ field, st: lines.filter((l) => l.field === field).at(-1) }))
       .filter((c) => c.st !== undefined);
@@ -869,15 +874,13 @@ export const CHECKS = [
       const named = failures.map((f, i) => (i === 0 ? f.detail : `${f.detail[0].toUpperCase()}${f.detail.slice(1)}`)).join(" ");
       return { ok: false, detail: `${named}${others}${olderNotJudged}${cost}` };
     }
-    // Two sound candidates. Both commits are on main (an ancestor of
-    // origin/main's HEAD, or HEAD itself), so the fresher one is the one
-    // with strictly fewer commits behind HEAD -- recency read from the
-    // commit's position on main, never from which field the text sits in.
-    // On a linear main (this repository squash-merges; it has no merge
-    // commits) two different on-main commits never share a count, so equal
-    // counts mean the same commit. A main with merge commits could give two
-    // different commits the same count; which is fresher is then undecided,
-    // and the bead fails rather than pick one.
+    // Two sound candidates naming different commits are ordered by
+    // ancestry alone: if one commit is an ancestor of the other, the
+    // descendant is the newer statement and is judged. If neither is, the
+    // two sit on different sides of a merge and neither is newer -- a
+    // commit count can still differ and would pick one by accident -- so
+    // the bead fails, naming both. This does not depend on main being
+    // linear. A git failure (`isAncestor` returns null) fails closed.
     let judged = sound[0];
     let decl = judged.depends;
     let judgedNote = "";
@@ -886,16 +889,25 @@ export const CHECKS = [
       if (d.full === n.full) {
         decl = unionDeclarations(d.depends, n.depends);
         judgedNote = ` Both the description's and the notes' last premise statements name ${d.full.slice(0, 7)}, so their declarations are judged together.`;
-      } else if (d.behind === n.behind) {
-        return {
-          ok: false,
-          detail: `the description's and the notes' last premise statements name different commits, ${d.short} and ${n.short}, each ${d.behind} commit(s) behind origin/main ${ctx.headShort}, so which of them is fresher cannot be decided (on main, only a merge commit allows that) and neither is judged in the other's place. ${PREMISE_FRESHNESS_COST}`,
-        };
       } else {
-        judged = d.behind < n.behind ? d : n;
+        const dBeforeN = ctx.git.isAncestor(d.full, n.full);
+        const nBeforeD = ctx.git.isAncestor(n.full, d.full);
+        if (dBeforeN === null || nBeforeD === null) {
+          return {
+            ok: false,
+            detail: `the description's and the notes' last premise statements name different commits, ${d.short} and ${n.short}, and \`git merge-base --is-ancestor\` failed between them, so which of them is newer on main was not measured and neither is judged in the other's place. ${PREMISE_FRESHNESS_COST}`,
+          };
+        }
+        if (dBeforeN === nBeforeD) {
+          return {
+            ok: false,
+            detail: `the description's last premise statement names ${d.short} and the notes' last names ${n.short}, and neither commit is an ancestor of the other, so the two latest statements cannot be ordered on this history and neither is judged in the other's place. Re-verify the premise against origin/main's HEAD and append one statement at that commit, with its \`Premise depends on:\` line. ${PREMISE_FRESHNESS_COST}`,
+          };
+        }
+        judged = dBeforeN ? n : d;
         const other = judged === d ? n : d;
         decl = judged.depends;
-        judgedNote = ` Judged: the ${possessive(judged.field)} last premise statement, fresher on main than the ${possessive(other.field)} last at ${other.short} (${other.behind} commit(s) behind), which is not judged.`;
+        judgedNote = ` Judged: the ${possessive(judged.field)} last premise statement, newer on main (ancestor order) than the ${possessive(other.field)} last at ${other.short}, an ancestor of ${judged.full.slice(0, 7)}, which is not judged.`;
       }
     }
     const { full, behind } = judged;
@@ -1207,6 +1219,20 @@ export function makeGitContext(headOverride, repoDir = REPO_ROOT) {
         return Number(git(["rev-list", "--count", `${full}..${head}`], repoDir));
       } catch {
         return Infinity;
+      }
+    },
+    /**
+     * whether commit `a` is an ancestor of commit `b` (`git merge-base
+     * --is-ancestor`: exit 0 yes, exit 1 no); null on any other exit, which
+     * is a git failure, so the caller fails closed instead of reading it as
+     * either answer.
+     */
+    isAncestor(a, b) {
+      try {
+        git(["merge-base", "--is-ancestor", a, b], repoDir);
+        return true;
+      } catch (e) {
+        return e && e.status === 1 ? false : null;
       }
     },
     /**

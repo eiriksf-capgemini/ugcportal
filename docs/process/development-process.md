@@ -202,11 +202,13 @@ that resolves and is on `main`, and carry a `Premise depends on: <path>,
 <path>` line (or `Premise depends on: none (<the external fact>)`) that can
 be checked — or the bead fails, naming the field, and the other field's
 line is never judged in its place. Of two sound candidates the one whose
-commit is fresher on `main` is judged (on a shared commit, the union of both
-declarations), because the description can be rewritten after notes were
-appended and where a line sits says nothing about when it was written; two
-different commits at the same distance from `main`'s HEAD cannot be ordered
-and fail. The bead then fails when a commit since the judged premise
+commit descends from the other's is judged (on a shared commit, the union of
+both declarations), because the description can be rewritten after notes
+were appended and where a line sits says nothing about when it was written;
+two different commits neither of which is an ancestor of the other (either
+side of a merge commit) cannot be ordered and fail. Ordering is by ancestry,
+not by commit count, so it does not depend on `main` being linear. The
+bead then fails when a commit since the judged premise
 touched a declared path — naming the commit and the path — or when a
 declared path does not exist at `origin/main`'s HEAD. A declaration that is
 absent or cannot be checked (empty, a path with whitespace, an absolute

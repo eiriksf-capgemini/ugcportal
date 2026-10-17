@@ -69,10 +69,12 @@ gate takes two candidates: the *last* premise line in the description and
 the *last* one in the notes, whichever fields carry one; older lines in
 either field are ignored. Which of the two is the author's latest cannot be
 read from where it sits — the description can be rewritten after notes were
-appended — so recency comes from the commits: of two sound candidates, the
-one whose commit is fresher on `origin/main` (fewer commits behind its HEAD)
-is judged with its own declaration, and when both name the same commit the
-union of the two declarations is judged. It fails the bead when:
+appended — so recency comes from the commits' ancestry: of two sound
+candidates naming different commits, the one whose commit descends from the
+other's (`git merge-base --is-ancestor`) is judged with its own declaration,
+and when both name the same commit the union of the two declarations is
+judged. The order is by ancestry, not by a count of commits behind HEAD, so
+it does not depend on `main` being linear. It fails the bead when:
 
 - either candidate names no commit, or a commit that does not resolve (a
   typo, or a branch commit pruned after its PR was squash-merged) — the
@@ -90,9 +92,11 @@ union of the two declarations is judged. It fails the bead when:
 - either candidate's declaration cannot be checked — empty, whitespace
   inside a path, an absolute path, a `..` segment, a glob, or `none`
   combined with paths or followed by anything but one parenthesised reason;
-- the two candidates name different commits at the same distance from
-  `origin/main`'s HEAD, so which is fresher cannot be decided (only a merge
-  commit on `main` allows that; this repository squash-merges);
+- the two candidates name different commits neither of which is an
+  ancestor of the other (they sit on different sides of a merge commit), so
+  the two latest statements cannot be ordered on this history — re-verify
+  against `origin/main`'s HEAD and append one statement there; a git
+  failure while asking also fails, as not measured;
 - a commit on `origin/main` since the judged premise touched a declared path
   — it names the first five such commits, oldest first, each with up to
   five of the declared files it touched, then counts the rest;
