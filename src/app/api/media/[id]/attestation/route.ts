@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { parseAttestation } from "@/lib/attestation";
+import { type AttestationParseResult, parseAttestation } from "@/lib/attestation";
 import { requireOwnedMedia } from "@/lib/media-access";
 import { prisma } from "@/lib/prisma";
 import { PRISMA_UNIQUE_VIOLATION, prismaErrorCode } from "@/lib/prisma-errors";
@@ -90,6 +90,36 @@ function alreadyAttested() {
   return NextResponse.json({ error: ALREADY_ATTESTED }, { status: 409 });
 }
 
+/**
+ * The ONE place the parsed request body is read, and all it is read for:
+ * the version and the nine answers, through the SAME parser POST /api/media
+ * uses, over the same field names (`attestation.version`,
+ * `attestation.authorship`, ...), so the browser builds this body with the
+ * same `attestationFormParts` it builds the upload's multipart parts with.
+ * `Object.hasOwn`, so a key inherited from `Object.prototype` is never read
+ * as an answer. `null` when the body is not a JSON object at all.
+ *
+ * WHY A SEPARATE FUNCTION. The raw object is a local of this function and
+ * of nothing else, so `POST` holds only what `parseAttestation` returned.
+ * Anything else in the body (an `attestedByUserId`, a `mediaId`, a
+ * `publishedAt`, a key nobody has thought of yet) is out of reach of the
+ * write below, which is what makes the actor and the target the session's
+ * user and the URL's file rather than whatever a client sends.
+ * src/lib/attestation-write-paths.test.ts holds this file to that shape:
+ * `POST` reads `body.value` only as this function's argument and `request`
+ * only through `readJsonBody`, and in here the object is read only inside
+ * the reader handed to `parseAttestation`.
+ */
+function attestationFromBody(value: unknown): AttestationParseResult | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const fields = value as Record<string, unknown>;
+  return parseAttestation((name) =>
+    Object.hasOwn(fields, name) ? fields[name] : undefined,
+  );
+}
+
 export async function POST(request: Request, { params }: RouteContext) {
   const { id } = await params;
 
@@ -101,11 +131,14 @@ export async function POST(request: Request, { params }: RouteContext) {
    * THE ACTOR. `session.user.id`, as `requireOwnedMedia` read it from the one
    * `auth()` call that also decided ownership — and from nothing in the
    * request. `src/lib/attestation-write-paths.test.ts` holds this file to
-   * that: every plain `const/let/var userId = …` declaration here must be
-   * this one, every such `access` declaration must come from
-   * `requireOwnedMedia`, and the write below must name `userId`. That scan
-   * does not see a destructured `const { userId } = …` or a parameter named
-   * `userId`; the route test's body carrying actor keys covers the behaviour.
+   * that, in two ways. It checks that every declaration named `userId` here,
+   * in any shape (plain, destructured or a parameter), is this one, that
+   * every declaration named `access` comes from `requireOwnedMedia`, and that
+   * the write below names `userId`. And it checks that the body is read only
+   * through `attestationFromBody` above, so no body key other than the ten
+   * `parseAttestation` reads, whatever its name, can reach the write. The
+   * route test's K2 case adds a behavioural check for the actor keys it
+   * lists.
    */
   const userId = access.userId;
 
@@ -125,33 +158,13 @@ export async function POST(request: Request, { params }: RouteContext) {
   if (!body.ok) {
     return NextResponse.json({ error: body.error }, { status: body.status });
   }
-  if (
-    typeof body.value !== "object" ||
-    body.value === null ||
-    Array.isArray(body.value)
-  ) {
+  const parsed = attestationFromBody(body.value);
+  if (parsed === null) {
     return NextResponse.json(
       { error: "Expected a JSON object body" },
       { status: 400 },
     );
   }
-  const fields = body.value as Record<string, unknown>;
-
-  /*
-   * The SAME parser POST /api/media uses, over the same field names
-   * (`attestation.version`, `attestation.authorship`, ...), so the browser
-   * builds this body with the same `attestationFormParts` it builds the
-   * upload's multipart parts with. `Object.hasOwn`, so a key inherited from
-   * `Object.prototype` is never read as an answer.
-   *
-   * ONLY THOSE KEYS ARE READ. Anything else in the body — an
-   * `attestedByUserId`, a `mediaId`, a `publishedAt` — is never looked at,
-   * which is what makes the actor and the target the session's user and the
-   * URL's file rather than whatever a client sends.
-   */
-  const parsed = parseAttestation((name) =>
-    Object.hasOwn(fields, name) ? fields[name] : undefined,
-  );
   if (!parsed.ok) {
     return NextResponse.json(
       { error: parsed.message, field: parsed.field },

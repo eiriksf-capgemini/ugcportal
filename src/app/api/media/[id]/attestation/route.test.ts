@@ -331,10 +331,16 @@ describe("K2: never someone else's file, never on someone's behalf, never twice"
     await seedMedia(OTHER_MEDIA_ID, STRANGER);
     signedInAs(OWNER);
 
-    // Every plausible actor key a route could read the actor from. `userId`
-    // matters most: it is the route's own local name, and the structural
-    // guard in src/lib/attestation-write-paths.test.ts does not see a
-    // destructured `const { userId } = …` reading it from the body.
+    // The behavioural check, for the keys listed here and no others: the
+    // route's own local name `userId`, the column name `attestedByUserId`,
+    // `uploaderUserId` (read straight off a request in
+    // src/app/api/admin/rights/decision/route.ts), three of them also under
+    // the `attestation.` prefix, and a few other plausible actor names. A
+    // list can only cover what it lists. That no body key other than the ten
+    // `parseAttestation` reads, whatever its name, reaches the write is the
+    // structural case in src/lib/attestation-write-paths.test.ts
+    // (`rawBodyLeaksIn`), which holds the route's source to reading the body
+    // only through that parser.
     const response = await attest({
       ...attestationBody(),
       attestedByUserId: STRANGER,
@@ -344,6 +350,8 @@ describe("K2: never someone else's file, never on someone's behalf, never twice"
       attestedBy: STRANGER,
       actorUserId: STRANGER,
       ownerId: STRANGER,
+      uploaderUserId: STRANGER,
+      [attestationFieldName("uploaderUserId")]: STRANGER,
       mediaId: OTHER_MEDIA_ID,
     });
 
