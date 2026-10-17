@@ -386,9 +386,11 @@ describe("ugcportal-gkax: the late-attestation route names the session's user to
   it("and the gate takes that `userId` from the session", () => {
     /*
      * The link the route cannot vouch for itself: `access.userId` is only
-     * the session's user if `requireOwnedMedia` makes it so. Every binding
-     * of each name in that file is checked, so a second `userId` read from
-     * anywhere else there fails here.
+     * the session's user if `requireOwnedMedia` makes it so. Every plain
+     * `const/let/var <name> = …` declaration of each name in that file is
+     * checked, so a second such `userId` declaration read from anywhere
+     * else there fails here. `bindingsNamed` does not see destructured or
+     * parameter bindings.
      */
     const userIds = bindingsNamed(accessFile, "userId");
     expect(userIds.length).toBeGreaterThan(0);

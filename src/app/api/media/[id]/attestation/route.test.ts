@@ -326,15 +326,24 @@ describe("K2: never someone else's file, never on someone's behalf, never twice"
     expect(await prisma.mediaAttestation.count()).toBe(1);
   });
 
-  it("the actor is always the session user: an attestedByUserId (or mediaId) in the body is ignored", async () => {
+  it("the actor is always the session user: an actor key (or mediaId) in the body is ignored", async () => {
     await seedMedia();
     await seedMedia(OTHER_MEDIA_ID, STRANGER);
     signedInAs(OWNER);
 
+    // Every plausible actor key a route could read the actor from. `userId`
+    // matters most: it is the route's own local name, and the structural
+    // guard in src/lib/attestation-write-paths.test.ts does not see a
+    // destructured `const { userId } = …` reading it from the body.
     const response = await attest({
       ...attestationBody(),
       attestedByUserId: STRANGER,
       [attestationFieldName("attestedByUserId")]: STRANGER,
+      userId: STRANGER,
+      [attestationFieldName("userId")]: STRANGER,
+      attestedBy: STRANGER,
+      actorUserId: STRANGER,
+      ownerId: STRANGER,
       mediaId: OTHER_MEDIA_ID,
     });
 

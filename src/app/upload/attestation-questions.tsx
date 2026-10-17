@@ -53,7 +53,8 @@ import {
  *
  * `refused` is a PROP rather than state watched here, exactly like
  * `AltTextFields`' `attemptedFilenames`: "has the visitor tried and failed"
- * belongs to the thing that tried — `addFiles` in the parent — not to a
+ * belongs to the caller that tried — `addFiles` in upload-form.tsx, or
+ * `submit` in `AttestExistingUpload` (attest-existing-upload.tsx) — not to a
  * control watching its own value. Marking nine questions red before anyone has
  * done anything would be the alternative.
  */
@@ -88,9 +89,13 @@ export function AttestationFields({
 }) {
   const groupId = useId();
   const errorId = useId();
-  // Computed with the SAME functions `addFiles` gated on, so what is marked
-  // and what blocked cannot disagree — the rule AltTextFields follows for
-  // `altTextFieldError`.
+  // Computed with the SAME function both callers gate on (`addFiles` in
+  // upload-form.tsx and `submit` in `AttestExistingUpload` each go through
+  // `completedAttestation`, which refuses exactly when
+  // `unansweredAttestationFields` is non-empty — its later `return null`s
+  // re-check the same two conditions; see attestation-fields.ts), so what is
+  // marked and what blocked cannot disagree — the rule AltTextFields follows
+  // for `altTextFieldError`.
   const unanswered = new Set(unansweredAttestationFields(draft));
   const error = refused ? attestationDraftError(draft, refusalEnding) : null;
 

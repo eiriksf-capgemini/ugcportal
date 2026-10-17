@@ -101,8 +101,11 @@ export async function POST(request: Request, { params }: RouteContext) {
    * THE ACTOR. `session.user.id`, as `requireOwnedMedia` read it from the one
    * `auth()` call that also decided ownership — and from nothing in the
    * request. `src/lib/attestation-write-paths.test.ts` holds this file to
-   * that: every `userId` binding here must be this one, `access` must come
-   * from `requireOwnedMedia`, and the write below must name `userId`.
+   * that: every plain `const/let/var userId = …` declaration here must be
+   * this one, every such `access` declaration must come from
+   * `requireOwnedMedia`, and the write below must name `userId`. That scan
+   * does not see a destructured `const { userId } = …` or a parameter named
+   * `userId`; the route test's body carrying actor keys covers the behaviour.
    */
   const userId = access.userId;
 
