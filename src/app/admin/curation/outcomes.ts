@@ -1,5 +1,6 @@
 import { CLEARANCE_WRITE_REFUSALS } from "@/lib/curation-clearance-write";
 import { PRICE_WRITE_REFUSALS } from "@/lib/curation-price-write";
+import { MAX_LICENCE_TERMS_LENGTH } from "@/lib/licence-terms";
 import { TRIAGE_WRITE_REFUSALS } from "@/lib/curation-triage-write";
 
 /**
@@ -55,6 +56,11 @@ const OUTCOME_MESSAGES: Record<TriageOutcomeCode, string> = {
     "The sale gate refuses this upload, so no price was recorded. The uploader needs a current resale-rights clearance, and every rights layer this upload carries needs its own — the layers still in the way are listed above.",
   price_amount_invalid:
     "A price has to be a whole number of minor units (øre, cents) within the allowed range, or blank to remove it. Nothing was recorded — a price that is not a whole number becomes a rounding argument the day somebody is charged.",
+  price_terms_too_long: `The licence terms are longer than the ${MAX_LICENCE_TERMS_LENGTH.toLocaleString("en-GB")} characters an item page can carry, so nothing was recorded — not the price either, because the two are saved together. Shorten the grant; anything that needs more is a contract to agree with the buyer in writing.`,
+  price_terms_instagram_url:
+    "The licence terms mention an Instagram address, so nothing was recorded — not the price either. What a buyer pays for is the uploaded original, never an Instagram post, so the grant must not point at one. Remove the address and save again.",
+  price_terms_bidi_control:
+    "The licence terms contain an invisible text-direction control (a bidi mark, embedding, override or isolate), so nothing was recorded — not the price either. Such a control can make a buyer see different words from the ones stored, so a grant may not carry one. Retype the grant by hand, or delete the invisible characters around any right-to-left passage; right-to-left letters on their own are fine.",
   alcohol_with_commercial_links:
     "That upload already carries a commercial link, and nothing commercial may sit on a picture showing alcohol (alkoholloven § 9-2). Nothing was recorded — not even your other answers, because a half-recorded triage would put your name on a set you did not finish. Detach the item’s commercial links first, then answer the alcohol question.",
 };

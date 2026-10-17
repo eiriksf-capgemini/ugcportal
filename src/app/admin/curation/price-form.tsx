@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { MAX_LICENCE_TERMS_LENGTH } from "@/lib/licence-terms";
 import { MAX_PRICE_CENTS, SUPPORTED_CURRENCIES } from "@/lib/pricing";
 
 /**
@@ -22,6 +23,12 @@ import { MAX_PRICE_CENTS, SUPPORTED_CURRENCIES } from "@/lib/pricing";
  * (`price_amount_invalid`), because a browser attribute is not enforcement:
  * a server action is reachable by POSTing its id with no form at all.
  *
+ * THE LICENCE GRANT (ugcportal-74w.1) is saved with the price, in the same
+ * write, so it sits in the same form rather than a second one. Blank means
+ * no per-item grant, and the item page then links to the site-wide
+ * /licence. `maxLength` is the same convenience `max` is above: the bound,
+ * and the refusal of an Instagram address, are `recordPrice`'s.
+ *
  * A separate module from page.tsx so it can be rendered on its own in a
  * test, the same reason the triage and clearance forms give.
  */
@@ -33,6 +40,7 @@ export function CurationPriceForm({
   mediaId,
   priceCents,
   currency,
+  licenceTerms,
   action,
 }: {
   /** The upload being priced. Identity from the page, not a choice the form offers. */
@@ -41,6 +49,8 @@ export function CurationPriceForm({
   priceCents: number | null;
   /** The stored currency, pre-selected. */
   currency: string;
+  /** The stored grant, so the textarea round-trips like the amount does. */
+  licenceTerms: string | null;
   /**
    * The server action that records the price. Passed in rather than imported
    * here so this module can be rendered in a test without a running action
@@ -50,6 +60,7 @@ export function CurationPriceForm({
 }) {
   const amountId = `price-cents-${mediaId}`;
   const currencyId = `price-currency-${mediaId}`;
+  const termsId = `price-licence-terms-${mediaId}`;
   return (
     <form action={action} className="mt-2 space-y-2">
       <input type="hidden" name="mediaId" value={mediaId} />
@@ -100,6 +111,23 @@ export function CurationPriceForm({
           </option>
         ))}
       </select>
+      <label className="block text-xs font-medium" htmlFor={termsId}>
+        Licence terms for this item
+        <span className="mt-1 block font-normal text-muted-foreground">
+          Plain text shown to the buyer beside the price, at most{" "}
+          {MAX_LICENCE_TERMS_LENGTH.toLocaleString("en-GB")} characters. Leave it
+          blank to use the site-wide licence page. No Instagram addresses — a
+          buyer is sold the original, never the post.
+        </span>
+      </label>
+      <textarea
+        id={termsId}
+        name="licenceTerms"
+        rows={4}
+        maxLength={MAX_LICENCE_TERMS_LENGTH}
+        defaultValue={licenceTerms ?? ""}
+        className={FIELD_CLASS}
+      />
       <Button type="submit" size="sm">
         Save the price
       </Button>
