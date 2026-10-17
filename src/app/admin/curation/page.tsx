@@ -13,10 +13,13 @@ import {
 import { TRIAGE_ANSWER_SELECT } from "@/lib/curation-triage";
 import { prisma } from "@/lib/prisma";
 import {
+  BASIS_LAYER,
   CLEARABLE_LAYERS,
   MEDIA_GATE_SELECT,
   TRIAGE_FACTS,
   evaluateSellability,
+  musicClearanceBasisProblem,
+  type MusicClearanceBasisProblem,
   unsettledLayers,
 } from "@/lib/resale-rights";
 import {
@@ -74,6 +77,30 @@ export const UPLOAD_LIST_ID = "curation-uploads";
  * styling choice either side could change; the id is there to be matched.
  */
 export const ERROR_BANNER_ID = "curation-triage-error";
+
+/**
+ * Why a stored MUSIC clearance does not settle the layer, in words, one per
+ * `musicClearanceBasisProblem` answer (ugcportal-hx2). A
+ * `Record` over the problem type, so a problem added there and not worded
+ * here fails `tsc` rather than rendering nothing.
+ *
+ * The register reads the verdict from that same function the gate
+ * (`layerIsCleared`) reads, never from a condition written here: a row the
+ * gate does not count must not be listed as "cleared". Reachable only with a
+ * row the writer did not store — one written before the basis column
+ * existed, or by hand — since the writer refuses every one of these.
+ */
+const MUSIC_BASIS_PROBLEM_WORDS: Record<MusicClearanceBasisProblem, string> = {
+  missing:
+    "it states no basis — a licence for the track or the uploader’s own original score — and a written reason on its own is not one.",
+  unrecognised: "its basis is not one a music clearance can rest on.",
+  muted_delivery:
+    "its basis is muted delivery, which is not a clearance while the buyer receives the raw original with its sound intact.",
+  evidence_blank:
+    "its licence basis has no evidence reference saying where the licence is.",
+  evidence_unexpected:
+    "it carries licence evidence on a basis that takes none.",
+};
 
 /**
  * What the page needs about one upload.
@@ -685,14 +712,21 @@ export default async function AdminCurationPage({
                     </p>
                     {clearances.length > 0 ? (
                       <dl className="mt-2 space-y-1 text-xs text-muted-foreground">
-                        {clearances.map((recorded) => (
-                          <div key={recorded.layer}>
-                            <dt className="inline font-medium">
-                              {recorded.layer} cleared:{" "}
-                            </dt>
-                            <dd className="inline">
-                              {recorded.reason}
-                              {recorded.basis ? ` (basis: ${recorded.basis})` : null}{" "}
+                        {clearances.map((recorded) => {
+                          // The gate's own basis verdict for this row
+                          // (ugcportal-hx2) — the same call
+                          // `layerIsCleared` makes, on MUSIC only, as it
+                          // does. Non-null means the gate does not count the
+                          // row, so it is not listed as "cleared".
+                          const basisProblem =
+                            recorded.layer === BASIS_LAYER
+                              ? musicClearanceBasisProblem(
+                                  recorded.basis,
+                                  recorded.basisEvidence,
+                                )
+                              : null;
+                          const signer = (
+                            <>
                               —{" "}
                               {recorded.clearedBy?.name ??
                                 recorded.clearedBy?.email ??
@@ -700,9 +734,38 @@ export default async function AdminCurationPage({
                                 "nobody"}{" "}
                               ({recorded.clearedBy?.role ?? "no account"}) ·{" "}
                               {dateTimeFormat.format(recorded.clearedAt)}
-                            </dd>
-                          </div>
-                        ))}
+                            </>
+                          );
+                          return basisProblem !== null ? (
+                            <div key={recorded.layer}>
+                              <dt className="inline font-medium">
+                                {recorded.layer} recorded but not counted:{" "}
+                              </dt>
+                              <dd className="inline">
+                                {recorded.reason} {signer}. Not counted because{" "}
+                                {MUSIC_BASIS_PROBLEM_WORDS[basisProblem]} The
+                                gate does not treat this layer as cleared.
+                              </dd>
+                            </div>
+                          ) : (
+                            <div key={recorded.layer}>
+                              <dt className="inline font-medium">
+                                {recorded.layer} cleared:{" "}
+                              </dt>
+                              <dd className="inline">
+                                {recorded.reason}
+                                {recorded.basis
+                                  ? ` (basis: ${recorded.basis}${
+                                      recorded.basisEvidence?.trim()
+                                        ? `, evidence: ${recorded.basisEvidence.trim()}`
+                                        : ""
+                                    })`
+                                  : null}{" "}
+                                {signer}
+                              </dd>
+                            </div>
+                          );
+                        })}
                       </dl>
                     ) : null}
                     {clearableBlocking.length === 0 ? (

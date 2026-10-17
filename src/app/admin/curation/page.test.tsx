@@ -907,6 +907,74 @@ describe("the rights-layer well (ugcportal-qfy9)", () => {
     expect(submittedLayers(well)).toContain(RightsLayer.MUSIC);
   });
 
+  describe("a MUSIC row the gate does not count is not listed as cleared (ugcportal-hx2)", () => {
+    /*
+      The register's verdict on a MUSIC row comes from the gate's own
+      `musicClearanceBasisProblem`, so a row `layerIsCleared` does not count
+      must not read "MUSIC cleared" while the same well lists MUSIC as not
+      settled. Rows like these are reachable only outside the writer (before
+      the basis column existed, or by hand), so they are created directly.
+    */
+    async function wellWithMusicRow(data: {
+      basis: "LICENCE" | "ORIGINAL_SCORE" | "MUTED_DELIVERY" | null;
+      basisEvidence: string | null;
+    }): Promise<string> {
+      await createUpload("media-1");
+      await triageWithEveryLayerPresent("media-1");
+      const listing = await prisma.mediaListing.findUniqueOrThrow({
+        where: { mediaId: "media-1" },
+        select: { id: true },
+      });
+      await prisma.mediaRightsClearance.create({
+        data: {
+          listingId: listing.id,
+          layer: RightsLayer.MUSIC,
+          reason: "Track is fine, ref 7781",
+          ...data,
+          clearedByUserId: "admin-1",
+        },
+      });
+      return layerWell(await renderPage({ edit: "media-1" }), "media-1");
+    }
+
+    it("says a MUSIC row with no basis is recorded but not counted, and not cleared", async () => {
+      const well = await wellWithMusicRow({ basis: null, basisEvidence: null });
+      expect(well).not.toContain("MUSIC cleared");
+      expect(well).toContain("MUSIC recorded but not counted");
+      expect(well).toContain("it states no basis");
+      expect(well).toContain("The gate does not treat this layer as cleared.");
+      // The reason is still shown, so the admin can see what was recorded.
+      expect(well).toContain("Track is fine, ref 7781");
+      // And it agrees with the rest of the well: MUSIC is still blocking.
+      expect(submittedLayers(well)).toContain(RightsLayer.MUSIC);
+    });
+
+    it("says a MUTED_DELIVERY row is recorded but not counted, and not cleared", async () => {
+      const well = await wellWithMusicRow({
+        basis: "MUTED_DELIVERY",
+        basisEvidence: null,
+      });
+      expect(well).not.toContain("MUSIC cleared");
+      expect(well).toContain("MUSIC recorded but not counted");
+      expect(well).toContain("its basis is muted delivery");
+      expect(well).toContain("The gate does not treat this layer as cleared.");
+      expect(submittedLayers(well)).toContain(RightsLayer.MUSIC);
+    });
+
+    it("still lists a LICENCE row with evidence as cleared, with its basis and evidence", async () => {
+      const well = await wellWithMusicRow({
+        basis: "LICENCE",
+        basisEvidence: "rights-evidence/owner-1/music-licence.pdf",
+      });
+      expect(well).toContain("MUSIC cleared");
+      expect(well).toContain(
+        "(basis: LICENCE, evidence: rights-evidence/owner-1/music-licence.pdf)",
+      );
+      expect(well).not.toContain("recorded but not counted");
+      expect(submittedLayers(well)).not.toContain(RightsLayer.MUSIC);
+    });
+  });
+
   it("offers no form for a layer no clearance settles", async () => {
     /*
       ALCOHOL blocks forever on a `yes`, and WINE_ACCESSORY blocks on
