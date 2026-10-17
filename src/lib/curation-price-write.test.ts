@@ -28,6 +28,7 @@ const { CURRENT_CHECKLIST_VERSION, isSellable, MEDIA_GATE_SELECT } =
   await import("@/lib/resale-rights");
 const { recordPrice } = await import("@/lib/curation-price-write");
 const { MAX_PRICE_CENTS } = await import("@/lib/pricing");
+const { MAX_LICENCE_TERMS_LENGTH } = await import("@/lib/licence-terms");
 
 const OWNER = "owner-price";
 const ADMIN = "admin-price";
@@ -37,7 +38,7 @@ const PREVIEW_KEY = `previews/${OWNER}/preview.webp`;
 async function storedListing() {
   return prisma.mediaListing.findUniqueOrThrow({
     where: { mediaId: MEDIA_ID },
-    select: { id: true, priceCents: true, currency: true },
+    select: { id: true, priceCents: true, currency: true, licenceTerms: true },
   });
 }
 
@@ -121,7 +122,7 @@ beforeEach(async () => {
   });
   await prisma.mediaListing.update({
     where: { mediaId: MEDIA_ID },
-    data: { priceCents: null, currency: "NOK" },
+    data: { priceCents: null, currency: "NOK", licenceTerms: null },
   });
 });
 
@@ -325,5 +326,137 @@ describe("K3: a Media row with no watermarked preview cannot be priced", () => {
     await expect(
       recordPrice({ target: { mediaId: MEDIA_ID }, priceCents: null }),
     ).resolves.toMatchObject({ kind: "unpriced" });
+  });
+});
+
+describe("ugcportal-74w.1: the licence grant is stored with the price", () => {
+  const GRANT = "Web and social use for 12 months.\nCredit the photographer.";
+
+  it("K1: stores the grant in the same write as the price, and it round-trips", async () => {
+    const outcome = await recordPrice({
+      target: { mediaId: MEDIA_ID },
+      priceCents: 99_900,
+      currency: "NOK",
+      // CRLF from a textarea, with surrounding whitespace: stored normalised.
+      licenceTerms: "  Web and social use for 12 months.\r\nCredit the photographer.\n",
+    });
+
+    expect(outcome).toMatchObject({ kind: "priced", priceCents: 99_900, licenceTerms: GRANT });
+    await expect(storedListing()).resolves.toMatchObject({
+      priceCents: 99_900,
+      licenceTerms: GRANT,
+    });
+  });
+
+  it("K1: leaves the stored grant alone when none is supplied, like the currency", async () => {
+    await recordPrice({ target: { mediaId: MEDIA_ID }, priceCents: 1, licenceTerms: GRANT });
+    await recordPrice({ target: { mediaId: MEDIA_ID }, priceCents: 2 });
+    await expect(storedListing()).resolves.toMatchObject({ priceCents: 2, licenceTerms: GRANT });
+  });
+
+  it("K2: stores empty, whitespace-only and null input as null", async () => {
+    for (const blank of ["", "   \n\t ", null]) {
+      // Set first, so a writer that ignored blank input would leave the old
+      // grant in place and fail here rather than pass on a null it never wrote.
+      await recordPrice({ target: { mediaId: MEDIA_ID }, priceCents: 10, licenceTerms: GRANT });
+      await expect(storedListing()).resolves.toMatchObject({ licenceTerms: GRANT });
+
+      await expect(
+        recordPrice({ target: { mediaId: MEDIA_ID }, priceCents: 10, licenceTerms: blank }),
+      ).resolves.toMatchObject({ kind: "priced", licenceTerms: null });
+      await expect(storedListing(), JSON.stringify(blank)).resolves.toMatchObject({
+        licenceTerms: null,
+      });
+    }
+  });
+
+  it("K4: refuses a grant naming instagram.com in any spelling, and writes nothing", async () => {
+    await recordPrice({ target: { mediaId: MEDIA_ID }, priceCents: 500, licenceTerms: GRANT });
+
+    for (const bad of [
+      "See instagram.com/p/abc",
+      "INSTAGRAM.COM/gry",
+      "https://www.Instagram.com/p/abc",
+      "http://instagram.com",
+      "www.instagram.com/eirik",
+    ]) {
+      await expect(
+        recordPrice({
+          target: { mediaId: MEDIA_ID },
+          priceCents: 9_999,
+          currency: "EUR",
+          licenceTerms: bad,
+        }),
+        bad,
+      ).resolves.toEqual({ kind: "price_terms_instagram_url" });
+    }
+    // Nothing written: not the grant, and not the price or currency that
+    // came with it.
+    await expect(storedListing()).resolves.toMatchObject({
+      priceCents: 500,
+      currency: "NOK",
+      licenceTerms: GRANT,
+    });
+
+    // THE MUTATION: the same call without the address is stored.
+    await expect(
+      recordPrice({
+        target: { mediaId: MEDIA_ID },
+        priceCents: 9_999,
+        currency: "EUR",
+        licenceTerms: "See the original file.",
+      }),
+    ).resolves.toMatchObject({ kind: "priced", licenceTerms: "See the original file." });
+  });
+
+  it("refuses a grant over the length bound by name, and writes nothing", async () => {
+    await expect(
+      recordPrice({
+        target: { mediaId: MEDIA_ID },
+        priceCents: 700,
+        licenceTerms: "x".repeat(MAX_LICENCE_TERMS_LENGTH + 1),
+      }),
+    ).resolves.toEqual({ kind: "price_terms_too_long" });
+    await expect(storedListing()).resolves.toMatchObject({ priceCents: null, licenceTerms: null });
+
+    // THE MUTATION: exactly the bound is stored, whole.
+    await recordPrice({
+      target: { mediaId: MEDIA_ID },
+      priceCents: 700,
+      licenceTerms: "x".repeat(MAX_LICENCE_TERMS_LENGTH),
+    });
+    const stored = await storedListing();
+    expect(stored.licenceTerms).toHaveLength(MAX_LICENCE_TERMS_LENGTH);
+  });
+
+  it("K3: a grant is not stored when the gate refuses the price", async () => {
+    await prisma.resaleRightsReview.update({
+      where: { uploaderUserId: OWNER },
+      data: { status: ResaleRightsStatus.REVOKED },
+    });
+    await expect(
+      recordPrice({ target: { mediaId: MEDIA_ID }, priceCents: 10, licenceTerms: GRANT }),
+    ).resolves.toMatchObject({ kind: "price_not_sellable" });
+    await expect(storedListing()).resolves.toMatchObject({ licenceTerms: null });
+
+    await prisma.resaleRightsReview.update({
+      where: { uploaderUserId: OWNER },
+      data: { status: ResaleRightsStatus.CLEARED },
+    });
+    await expect(
+      recordPrice({ target: { mediaId: MEDIA_ID }, priceCents: 10, licenceTerms: GRANT }),
+    ).resolves.toMatchObject({ kind: "priced", licenceTerms: GRANT });
+  });
+
+  it("un-pricing neither checks nor writes the grant, so it can never be refused over one", async () => {
+    await recordPrice({ target: { mediaId: MEDIA_ID }, priceCents: 10, licenceTerms: GRANT });
+    await expect(
+      recordPrice({
+        target: { mediaId: MEDIA_ID },
+        priceCents: null,
+        licenceTerms: "instagram.com/p/abc",
+      }),
+    ).resolves.toMatchObject({ kind: "unpriced", licenceTerms: GRANT });
+    await expect(storedListing()).resolves.toMatchObject({ priceCents: null, licenceTerms: GRANT });
   });
 });

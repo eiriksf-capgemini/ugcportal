@@ -162,6 +162,10 @@ const UPLOAD_SELECT = {
       // an admin once priced this, not evidence that it may be sold today.
       priceCents: true,
       currency: true,
+      // The grant saved with the price (ugcportal-74w.1), read for the same
+      // reason and under the same rule: round-tripped into the form, never
+      // shown as anything a buyer is offered.
+      licenceTerms: true,
       triagedAt: true,
       triagedByUserId: true,
       triagedBy: { select: { name: true, email: true, role: true } },
@@ -305,10 +309,11 @@ export function triageFactDisagreementId(
  *
  * WHAT THIS SCREEN DOES NOT DO, so that the absences are not mistaken for
  * gaps:
- *   - per-item LICENCE TERMS (ugcportal-74w.1). Price is on this screen now
- *     (ugcportal-yzo7, below); what a buyer would be granted is still the
- *     site-wide /licence text, because `MediaListing` has no column for
- *     anything narrower and this bead added no migration;
+ *   - checking a per-item LICENCE GRANT against the layer clearances. The
+ *     grant itself is entered here, saved with the price in the same write
+ *     (ugcportal-74w.1, the price form below); whether it promises more than
+ *     the clearances support is a decision not yet taken (ugcportal-0443)
+ *     and a check not yet built (ugcportal-02t4);
  *   - deciding what a disagreement between the admin's flag and the
  *     uploader's attestation MEANS for sellability (ugcportal-9pic). This
  *     screen renders the disagreement; the gate reads none of the six
@@ -757,6 +762,7 @@ export default async function AdminCurationPage({
                         mediaId={upload.id}
                         priceCents={listing.priceCents}
                         currency={listing.currency}
+                        licenceTerms={listing.licenceTerms}
                         action={setPrice}
                       />
                     ) : null}

@@ -7,7 +7,10 @@ import {
 } from "@/lib/test-support/media-fixtures";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
 import { siteOrigin } from "@/lib/origin";
-import { PURCHASE_OFFER_ID } from "@/components/media/purchase-offer";
+import {
+  LICENCE_GRANT_ATTRIBUTE,
+  PURCHASE_OFFER_ID,
+} from "@/components/media/purchase-offer";
 import { countTerracottaPrimaryControls } from "@/lib/design/terracotta-primary-control";
 import { CURRENT_CHECKLIST_VERSION } from "@/lib/resale-rights";
 import { LICENCE_PATH, mediaItemPath, mediaPreviewPath } from "@/lib/routes";
@@ -589,6 +592,56 @@ describe("ugcportal-yzo7 K4: the price block on the item page", () => {
     expect(
       renderToStaticMarkup(await MediaItemPage(params(PREVIEW_ID))),
     ).not.toContain(`id="${PURCHASE_OFFER_ID}"`);
+  });
+
+  it("ugcportal-74w.1 K1: shows the item's stored licence grant beside the price", async () => {
+    const grant = "Web use for 12 months.\nCredit the photographer.";
+    await prisma.mediaListing.update({
+      where: { mediaId: "page-item-priced" },
+      data: { licenceTerms: grant },
+    });
+
+    const html = renderToStaticMarkup(await MediaItemPage(params(PREVIEW_ID)));
+
+    expect(html).toContain(LICENCE_GRANT_ATTRIBUTE);
+    expect(html).toContain(grant);
+    expect(html).toContain("1,250.00");
+  });
+
+  it("ugcportal-74w.1 K3: shows no grant once the clearance is revoked, though the grant is still stored", async () => {
+    const grant = "Print use only, one edition.";
+    await prisma.mediaListing.update({
+      where: { mediaId: "page-item-priced" },
+      data: { licenceTerms: grant },
+    });
+    await prisma.resaleRightsReview.update({
+      where: { uploaderUserId: UPLOADER },
+      data: { status: "REVOKED" },
+    });
+
+    const html = renderToStaticMarkup(await MediaItemPage(params(PREVIEW_ID)));
+    expect(html).not.toContain(LICENCE_GRANT_ATTRIBUTE);
+    expect(html).not.toContain(grant);
+    await expect(
+      prisma.mediaListing.findUniqueOrThrow({
+        where: { mediaId: "page-item-priced" },
+        select: { licenceTerms: true },
+      }),
+    ).resolves.toEqual({ licenceTerms: grant });
+
+    // THE RESTORE: cleared again, the grant is back.
+    await prisma.resaleRightsReview.update({
+      where: { uploaderUserId: UPLOADER },
+      data: { status: "CLEARED" },
+    });
+    expect(renderToStaticMarkup(await MediaItemPage(params(PREVIEW_ID)))).toContain(grant);
+  });
+
+  it("ugcportal-74w.1 K2: an item with no grant shows the /licence link and no grant block", async () => {
+    const html = renderToStaticMarkup(await MediaItemPage(params(PREVIEW_ID)));
+    expect(html).toContain(`id="${PURCHASE_OFFER_ID}"`);
+    expect(html).toContain(`href="${LICENCE_PATH}"`);
+    expect(html).not.toContain(LICENCE_GRANT_ATTRIBUTE);
   });
 
   it("keeps the price out of the page's own metadata", async () => {

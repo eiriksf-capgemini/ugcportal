@@ -19,10 +19,10 @@ import { LICENCE_PATH } from "@/lib/routes";
  * reflects the environment it renders in.
  *
  * Consistent with docs/ugc-research.md §3.5 ("You own what you create. When
- * you sell UGC, define the usage rights in writing") and with ugcportal-74w,
- * which will add per-item licence terms later: this page is the default that
- * applies when an item states nothing, and it promises no picker that does
- * not exist.
+ * you sell UGC, define the usage rights in writing") and with the per-item
+ * licence grant ugcportal-74w.1 added (MediaListing.licenceTerms, shown beside
+ * the price on the item page): this page is the default that applies when an
+ * item states nothing, and it promises no picker that does not exist.
  */
 
 export type LicenceContent = {

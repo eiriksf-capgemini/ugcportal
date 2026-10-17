@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { CurationPriceForm } from "@/app/admin/curation/price-form";
+import { MAX_LICENCE_TERMS_LENGTH } from "@/lib/licence-terms";
 import { MAX_PRICE_CENTS, SUPPORTED_CURRENCIES } from "@/lib/pricing";
 
 /**
@@ -19,12 +20,14 @@ import { MAX_PRICE_CENTS, SUPPORTED_CURRENCIES } from "@/lib/pricing";
 function render(
   priceCents: number | null,
   currency = "NOK",
+  licenceTerms: string | null = null,
 ): string {
   return renderToStaticMarkup(
     <CurationPriceForm
       mediaId="media-1"
       priceCents={priceCents}
       currency={currency}
+      licenceTerms={licenceTerms}
       action={() => undefined}
     />,
   );
@@ -88,5 +91,37 @@ describe("what the price form submits (ugcportal-yzo7 K1)", () => {
     // The one destructive thing this form does, and the only one the gate
     // does not stand in front of. It has to be stated where it is done.
     expect(render(125_000)).toContain("blank");
+  });
+});
+
+describe("the licence grant field (ugcportal-74w.1 K1)", () => {
+  /** The textarea's opening tag and its content, or null. */
+  function termsField(markup: string): { tag: string; body: string } | null {
+    const match = /(<textarea[^>]*name="licenceTerms"[^>]*>)([\s\S]*?)<\/textarea>/.exec(
+      markup,
+    );
+    return match ? { tag: match[1], body: match[2] } : null;
+  }
+
+  it("submits the grant under the name the action reads, inside the price form", () => {
+    // Same form as the amount, so one submit is one `recordPrice` write.
+    const markup = render(125_000);
+    expect(termsField(markup)).not.toBeNull();
+    expect(markup.indexOf('name="licenceTerms"')).toBeLessThan(markup.indexOf("</form>"));
+  });
+
+  it("round-trips a stored grant, escaped, and renders blank for none", () => {
+    const stored = 'Web use only.\nCredit <b>"Eirik"</b> & Gry.';
+    expect(termsField(render(125_000, "NOK", stored))?.body).toBe(
+      "Web use only.\nCredit &lt;b&gt;&quot;Eirik&quot;&lt;/b&gt; &amp; Gry.",
+    );
+    // The mutation: no stored grant renders an empty field, not "null".
+    expect(termsField(render(125_000, "NOK", null))?.body).toBe("");
+  });
+
+  it("bounds the browser's field with the same length the write uses", () => {
+    expect(termsField(render(null))?.tag).toContain(
+      `maxLength="${MAX_LICENCE_TERMS_LENGTH}"`,
+    );
   });
 });

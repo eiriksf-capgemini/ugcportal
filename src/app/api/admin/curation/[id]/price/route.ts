@@ -4,6 +4,7 @@ import { requireAdmin } from "@/lib/admin";
 import { isSameOriginRequest } from "@/lib/origin";
 import { readJsonBody } from "@/lib/request-body";
 import { recordPrice } from "@/lib/curation-price-write";
+import { MAX_LICENCE_TERMS_LENGTH } from "@/lib/licence-terms";
 import {
   MAX_PRICE_CENTS,
   isStorablePriceCents,
@@ -13,8 +14,13 @@ import {
 // App Router hands dynamic segments in as a Promise (Next 16).
 type RouteContext = { params: Promise<{ id: string }> };
 
-// Two numbers and a currency code. Anything larger is not this request.
-const MAX_BODY_BYTES = 1024;
+// Two numbers, a currency code and a licence grant of at most
+// MAX_LICENCE_TERMS_LENGTH UTF-16 code units (ugcportal-74w.1). Sized for
+// the worst legitimate encoding of that grant rather than the typical one:
+// a JSON encoder may write every code unit as a six-byte `\uXXXX` escape,
+// so 2 000 of them is 12 000 bytes before the rest of the body. Anything
+// larger is not this request. Was 1 KiB before the grant existed.
+const MAX_BODY_BYTES = 16 * 1024;
 
 // The ceiling and the currency allowlist both live in
 // src/lib/pricing.ts now (ugcportal-yzo7), shared by this route, the admin
@@ -24,13 +30,17 @@ const MAX_BODY_BYTES = 1024;
 // is the HTTP-shaped half: what a malformed BODY is, and which sentence a
 // caller gets for it.
 
-type PriceInput = { priceCents: number | null; currency?: string };
+type PriceInput = {
+  priceCents: number | null;
+  currency?: string;
+  licenceTerms?: string | null;
+};
 type ParseResult =
   | { ok: true; value: PriceInput }
   | { ok: false; error: string };
 
 /**
- * Pulls the two writable fields off the body. Unknown fields are ignored and
+ * Pulls the three writable fields off the body. Unknown fields are ignored and
  * nothing from the body is ever spread into Prisma — in particular the
  * triage columns, which decide sellability, are not settable here.
  */
@@ -39,9 +49,10 @@ function parsePriceInput(body: unknown): ParseResult {
     return { ok: false, error: "Expected a JSON object body" };
   }
 
-  const { priceCents, currency } = body as {
+  const { priceCents, currency, licenceTerms } = body as {
     priceCents?: unknown;
     currency?: unknown;
+    licenceTerms?: unknown;
   };
 
   // `null` is how a price is removed (un-pricing an item). `undefined` is a
@@ -70,11 +81,24 @@ function parsePriceInput(body: unknown): ParseResult {
     return { ok: false, error: "Unsupported currency" };
   }
 
+  // Absent leaves the stored grant alone, `null` (or blank) removes it, a
+  // string sets it — `recordPrice`'s three readings. Any other JSON type is
+  // a malformed body. The length bound and the Instagram refusal are
+  // `recordPrice`'s, answered below from its outcome rather than re-spelled.
+  if (
+    licenceTerms !== undefined &&
+    licenceTerms !== null &&
+    typeof licenceTerms !== "string"
+  ) {
+    return { ok: false, error: "licenceTerms must be a string or null" };
+  }
+
   return {
     ok: true,
     value: {
       priceCents: priceCents as number | null,
       currency: currency as string | undefined,
+      licenceTerms: licenceTerms as string | null | undefined,
     },
   };
 }
@@ -87,7 +111,9 @@ function parsePriceInput(body: unknown): ParseResult {
  *
  * Four refusals, deliberately distinct:
  *   403 — not an admin. Same answer for signed-out and signed-in non-admin.
- *   400 — the body is not a well-formed price.
+ *   400 — the body is not a well-formed price, or its licence grant is
+ *         over the length bound or names an Instagram host
+ *         (ugcportal-74w.1; both refused by `recordPrice`).
  *   404 — no such listing.
  *   422 — the listing exists and the caller is allowed, but its uploader has
  *         no current resale-rights clearance, the upload itself is not
@@ -151,6 +177,7 @@ export async function POST(request: Request, { params }: RouteContext) {
     target: { listingId: id },
     priceCents: parsed.value.priceCents,
     currency: parsed.value.currency,
+    licenceTerms: parsed.value.licenceTerms,
   });
 
   if (outcome.kind === "price_media_not_found") {
@@ -180,6 +207,23 @@ export async function POST(request: Request, { params }: RouteContext) {
       { status: 400 },
     );
   }
+  if (outcome.kind === "price_terms_too_long") {
+    // 400: a property of the body alone, the same class as a bad amount.
+    return NextResponse.json(
+      {
+        error: `licenceTerms must be at most ${MAX_LICENCE_TERMS_LENGTH} characters`,
+      },
+      { status: 400 },
+    );
+  }
+  if (outcome.kind === "price_terms_instagram_url") {
+    // 400 for the same reason, with the reason named: ugcportal-2eh Option A
+    // keeps Instagram a discovery aid, never part of what a buyer is sold.
+    return NextResponse.json(
+      { error: "licenceTerms must not contain an Instagram address" },
+      { status: 400 },
+    );
+  }
   if (outcome.kind === "price_not_sellable") {
     // The blocker code is one of a closed set (SellabilityBlocker), safe to
     // hand back: it tells an admin which step of the checklist is missing,
@@ -190,11 +234,13 @@ export async function POST(request: Request, { params }: RouteContext) {
     );
   }
 
-  // The same three fields this endpoint has always echoed, rebuilt from the
-  // write's own outcome rather than from a second read.
+  // The three fields this endpoint has always echoed, plus the grant
+  // (ugcportal-74w.1), rebuilt from the write's own outcome rather than from
+  // a second read.
   return NextResponse.json({
     id: outcome.listingId,
     priceCents: outcome.kind === "priced" ? outcome.priceCents : null,
     currency: outcome.currency,
+    licenceTerms: outcome.licenceTerms,
   });
 }
