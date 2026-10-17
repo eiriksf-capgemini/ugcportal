@@ -11,8 +11,9 @@
  * since the premise touched a path the bead's `Premise depends on:` line
  * declares; or the bead declares no dependency at all -- a premise with no
  * `Premise depends on:` line fails, because absent must not read as `none`;
- * or the declaration cannot be checked (it lists nothing, or an item is not
- * a repo-relative path); or a declared path does not exist at origin/main's
+ * or the declaration cannot be checked (it lists nothing, an item is not
+ * a repo-relative path, or `none` is combined with anything but one
+ * parenthesised reason); or a declared path does not exist at origin/main's
  * HEAD (ugcportal-ul2j). `PREMISE_FRESHNESS_COST`'s comment gives the rules
  * in the order the check applies them.
  *
@@ -135,12 +136,17 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
  *      changes cannot be path-compared with main's history, so it fails, and
  *      an off-main premise never rescues a stale on-main one.
  *   2. The FRESHEST on-main premise statement is the one judged -- the one
- *      the fewest main commits have passed. A bead re-verified today still
+ *      the fewest main commits have passed. Each statement is dated by the
+ *      first commit after its label (the one it was verified at), not by
+ *      the newest commit its line happens to name. A bead re-verified today still
  *      carries yesterday's line in its log, and the newer verification and
  *      its declaration supersede the older ones.
  *   3. That statement must carry a `Premise depends on:` declaration
  *      (`PREMISE_DEPENDS_FORM`). Absent is a FAILURE, never read as "none":
- *      a check that matched nothing must not look like one that passed.
+ *      a check that matched nothing must not look like one that passed. A
+ *      declaration that cannot be checked fails too (`parseDeclaration`:
+ *      empty, whitespace inside a path, absolute, a `..` segment, a glob,
+ *      or `none` combined with anything but one parenthesised reason).
  *   4. `Premise depends on: none (<why>)` -- an explicit declaration that the
  *      premise rests on no file in this repository (an external fact: an API's
  *      behaviour, a vendor document, a legal rule) -- does not go stale on a
@@ -247,10 +253,18 @@ const SHA_RE = /\b([0-9a-f]{7,40})\b/g;
  * A premise statement is a line where the word `premise` is used as a
  * LABEL: followed by `verified`, `checked`, `measured` or `confirmed`
  * (each also with `re-`), by `corrected`, or by a colon -- after optional
- * `,` or `(` ("premise (verified 2026-10-08 at ...)"). A line that merely
- * mentions the word ("the premise-fresh gate run at <sha> was green") is not
- * one: it would otherwise date the premise from that sha and take the
- * declaration under it (PR #289 review, M1's sibling shape).
+ * `,` or `(` ("premise (verified 2026-10-08 at ...)") -- and where that word
+ * opens the line or follows a clause boundary (`.`, `:`, `;`, `!`, `?`, `,`,
+ * `(` or `[`, then only whitespace or markup). A line that merely mentions
+ * the word ("the premise-fresh gate run at <sha> was green") is not one, and
+ * neither is one using the label form mid-sentence ("on the premise: the
+ * gate at <sha> was green"): either would otherwise date the premise from
+ * that sha and take the declaration under it (PR #289 review, M1's sibling
+ * shapes in rounds 1 and 2).
+ *
+ * A statement's `shas` are the commit tokens after its label, in order;
+ * `premiseCommits` dates the statement by the first of them that resolves --
+ * the commit it was verified at -- not by the freshest one the line names.
  *
  * A line that OPENS with `Premise depends on:` is a declaration, not a
  * premise statement, and starts none of its own; and on any statement, the
@@ -287,8 +301,14 @@ const DEPENDS_RE = /(?<![A-Za-z0-9])premise depends on\s*:/i;
 /** A line that IS a declaration: the label opens it, after any list or emphasis markup. */
 const DEPENDS_LINE_RE = /^[\s*_>`#-]*premise depends on\s*:/i;
 
-/** `premise` used as a label -- see findPremiseLines. Not `premise-fresh`, not "the premise of". */
-const PREMISE_LABEL_RE = /\bpremise(?![\w-])[\s,(]*(?:(?:re-?)?(?:verified|checked|measured|confirmed)\b|corrected\b|:)/i;
+/**
+ * `premise` used as a label -- see findPremiseLines. Not `premise-fresh`, not
+ * "the premise of", and not mid-sentence: the word must open the line or
+ * follow a clause boundary (`.`, `:`, `;`, `!`, `?`, `,`, `(`, `[`), with only
+ * whitespace or markup between, so "on the premise: the gate at <sha> was
+ * green" is not a statement but "2026-10-06 audit: premise re-verified" is.
+ */
+const PREMISE_LABEL_RE = /(?:^|[.:;!?,(\[])[\s`*_>#(\[-]*premise(?![\w-])[\s,(]*(?:(?:re-?)?(?:verified|checked|measured|confirmed)\b|corrected\b|:)/i;
 /** A line that OPENS with a commit token, after any quoting or list markup: the hard-wrap continuation. */
 const LEADING_SHA_RE = /^[\s`*_>(\[-]*([0-9a-f]{7,40})\b/;
 
@@ -296,9 +316,14 @@ function isPremiseStatementStart(line) {
   return PREMISE_LABEL_RE.test(line) && !DEPENDS_LINE_RE.test(line);
 }
 
-/** Commit tokens on one line, up to any `Premise depends on:` label (a hex-looking path segment is not a commit). */
+/**
+ * Commit tokens on a premise statement's line, in order, from its label up to
+ * any `Premise depends on:` label (a hex-looking path segment is not a
+ * commit). Text before the label is a different note and lends nothing.
+ */
 function shasIn(line) {
-  return [...line.split(DEPENDS_RE)[0].matchAll(SHA_RE)].map((m) => m[1]);
+  const label = PREMISE_LABEL_RE.exec(line);
+  return [...line.slice(label ? label.index : 0).split(DEPENDS_RE)[0].matchAll(SHA_RE)].map((m) => m[1]);
 }
 
 /**
@@ -793,7 +818,7 @@ export const CHECKS = [
     if (decl.kind === "missing") {
       return {
         ok: false,
-        detail: `${where} has no \`Premise depends on:\` line, so there is nothing to scope its freshness by; absent is not read as \`none\`. Add ${PREMISE_DEPENDS_FORM}, on the premise line or the line right after it -- after re-running the premise if it is not at origin/main's HEAD.`,
+        detail: `${where} has no \`Premise depends on:\` line, so there is nothing to scope its freshness by; absent is not read as \`none\`. Add ${PREMISE_DEPENDS_FORM} -- after re-running the premise if it is not at origin/main's HEAD.`,
       };
     }
     if (decl.kind === "none") {
@@ -862,8 +887,9 @@ export const CHECKS = [
 export const EXAMINED_FIELDS = [...new Set(CHECKS.flatMap((c) => c.fields))];
 
 /**
- * Resolve the commit-ish tokens on premise lines against the repo, keeping
- * only the ones git recognises as commits, each with how many commits
+ * Resolve each premise statement to ONE commit -- the first token after its
+ * label that git recognises as a commit; a statement with none is skipped --
+ * each with how many commits
  * `origin/main` is ahead of it (`behind`), how many of its own commits are
  * not on `origin/main` (`notOnMain`), and the declaration of the statement
  * it came from. Both counts are needed: HEAD and every descendant of HEAD
@@ -872,6 +898,17 @@ export const EXAMINED_FIELDS = [...new Set(CHECKS.flatMap((c) => c.fields))];
 function premiseCommits(lines, ctx) {
   const out = [];
   for (const { shas, depends } of lines) {
+    // A statement is dated by the FIRST commit after its label that git
+    // resolves -- the one it was verified at -- not by whichever commit on
+    // its line is freshest: a bd note is one line, and a later commit mentioned in
+    // the same note ("... merged at a532388 during this audit") would
+    // otherwise date the premise from there and hide every touch in between
+    // (PR #289 review round 2, M1; ugcportal-vl32's live shape). A token that
+    // does not resolve (a hex-looking word) is passed over. If the first
+    // resolving commit is off main, the statement is off main: a later
+    // on-main commit on the same line does not rescue it (ugcportal-y6ol:
+    // verified at branch commit 2cd6d60, its line later cites PR #97's
+    // 35800c9 as history).
     for (const sha of shas) {
       const full = ctx.git.resolveCommit(sha);
       if (!full) continue;
@@ -882,6 +919,7 @@ function premiseCommits(lines, ctx) {
         notOnMain: ctx.git.commitsNotOnMain(full),
         depends: depends || { kind: "missing" },
       });
+      break;
     }
   }
   return out;

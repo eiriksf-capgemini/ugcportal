@@ -501,6 +501,16 @@ describe("K2: premise freshness against origin/main (kt3k's cases, under ul2j's 
     expect(res.stdout).toContain(`premise verified at ${OLDEST().slice(0, 7)} (2 commit(s) behind origin/main ${HEAD().slice(0, 7)}) is stale`);
   });
 
+  it("M1 round 2: a statement verified at an off-main commit is not rescued by an on-main commit later on its line", () => {
+    // Dated by the first commit after the label: the branch commit. The HEAD
+    // sha named afterwards is a different note on the same bd line.
+    const notes = `Premise verified 2026-10-14 at feature-branch commit ${descendant}. Dispatched from origin/main ${HEAD()}.\nPremise depends on: f3.txt`;
+    const res = runFixture(completeBead({ notes }));
+    expect(res.status).toBe(1);
+    expect(failedChecks(res.stdout)).toEqual(["premise-fresh"]);
+    expect(res.stdout).toContain(`premise commit ${descendant} is not on origin/main`);
+  });
+
   it("says the comparison could not be made, not an Infinity count, when git rev-list fails", () => {
     // --head names a ref git cannot resolve, so both rev-list calls fail.
     const file = writeBeads(completeBead({ notes: `Premise verified 2026-10-14 at origin/main ${HEAD()}.` }));
@@ -719,8 +729,9 @@ describe("ul2j: premise freshness is scoped by the paths the premise declares", 
     const line = freshLine(res.stdout);
     expect(line).toContain("has no `Premise depends on:` line");
     expect(line).toContain("absent is not read as `none`");
-    // and it tells the author what to write
+    // and it tells the author what to write -- once (PR #289 review round 2, L2)
     expect(line).toContain(PREMISE_DEPENDS_FORM);
+    expect(line.split("on the premise line or the line right after it").length - 1).toBe(1);
   });
 
   it("K3: absent fails even for a premise verified at origin/main's current HEAD", () => {
@@ -823,6 +834,52 @@ describe("ul2j: premise freshness is scoped by the paths the premise declares", 
     expect(res.status).toBe(1);
     STALE_AT_C0(res.stdout);
     expect(findPremiseLines(notes).map((s) => s.shas)).toEqual([[c[0]], []]);
+  });
+
+  // --- PR #289 review round 2, M1: the same LINE can name a newer commit
+  // too (bd stores each appended note as one line), and a later line can use
+  // the label form mid-sentence. A statement is dated by the first commit
+  // after its label, and only a label that opens a clause starts one.
+  it("M1 round 2: a newer commit named later on the premise's own line does not date it", () => {
+    const notes = `${ABOUT_C0()} Dispatched 2026-10-15 by the orchestrator from origin/main ${c[2]}. Premise depends on: src/lib/a.ts`;
+    const res = runNotes(notes);
+    expect(res.status).toBe(1);
+    expect(failedChecks(res.stdout)).toEqual(["premise-fresh"]);
+    STALE_AT_C0(res.stdout);
+  });
+
+  it("M1 round 2: a later line using `premise:` mid-sentence is not a premise statement", () => {
+    const notes = [
+      ABOUT_C0(),
+      `2026-10-15 orchestrator, on the premise: the dispatch gate at origin/main ${c[2]} was green.`,
+      "Premise depends on: src/lib/a.ts",
+    ].join("\n");
+    const res = runNotes(notes);
+    expect(res.status).toBe(1);
+    STALE_AT_C0(res.stdout);
+    expect(findPremiseLines(notes).map((st) => st.shas)).toEqual([[c[0]]]);
+  });
+
+  it("M1 round 2: ugcportal-vl32's live line is dated by the commit it was verified at, not the later merge it mentions", () => {
+    // vl32's 2026-10-08 note, verbatim but for the two shas: 54d88ca -> c0
+    // (verified at) and a532388 -> c2 (a merge it mentions). The live bead
+    // declares nothing; a declaration is added so the dating is observable.
+    const vl32 = (verified, merged) =>
+      `Premise verified 2026-10-08 at ${verified} (v0.7.0 line-up audit, ugcportal-j5fl): HOLDS. Checked: git show origin/main:CLAUDE.md | grep -c retro_source (returns 0); bd show on bc04/mftd/co9g, which today carry metadata.retro_source = release-cost-v0.5.0-vs-v0.6.0.md#4/#3/#6 respectively. Observed: retro_source is in active use on real bead metadata right now (confirming the bead's point is still live, not moot), and is documented in .claude/skills/cut-release/SKILL.md (step 3, merged via PR #189/ugcportal-p7x7 just before this check) but still nowhere in CLAUDE.md. Note for the orchestrator: PR #189 (ugcportal-p7x7) merged to origin/main at commit ${merged} during this audit window but local main in this checkout is still at ${verified} and the bead ugcportal-p7x7 is still shown OPEN in bd — a gap worth closing out separately, not something this bead needs to act on since it only touches CLAUDE.md.`;
+    const res = runNotes(`${vl32(c[0], c[2])}\nPremise depends on: src/lib/a.ts`);
+    expect(res.status).toBe(1);
+    STALE_AT_C0(res.stdout);
+  });
+
+  it("M1 round 2: a statement whose own commit is the newest on its line is still dated by it", () => {
+    // The 7 live multi-commit statements have this shape: the verified-at
+    // commit first, older ones after it ("(was <older>)").
+    const notes = `Premise re-verified 2026-10-17 at origin/main ${c[2]} (was ${c[0]}; the first touch was ${c[1]}). Premise depends on: src/lib/a.ts`;
+    const res = runNotes(notes);
+    expect(res.status).toBe(0);
+    expect(freshLine(res.stdout)).toContain(
+      `premise verified at ${short(c[2])} (4 commit(s) behind origin/main ${short(c[6])}); none of those commits touched its declared path(s): src/lib/a.ts`,
+    );
   });
 
   it("names the first five touching commits and up to five files each, then counts the rest", () => {
@@ -1129,14 +1186,26 @@ describe("findPremiseLines", { timeout: 30_000 }, () => {
     expect(found.map((l) => l.shas)).toEqual([["abc1234"], ["def5678"], ["9abcdef"]]);
   });
 
+  it("reads a statement's commits from its label on, in order, so the first one is the verified-at commit", () => {
+    // a commit named before the label belongs to another note on the same line
+    expect(findPremiseLines("2026-10-15 merged def5678. Premise verified at abc1234.")[0].shas).toEqual(["abc1234"]);
+    // order is kept: premiseCommits dates the statement by the first resolving one
+    expect(findPremiseLines("Premise verified at abc1234. Dispatched from origin/main def5678.")[0].shas).toEqual(["abc1234", "def5678"]);
+  });
+
   it("counts `premise` as a label, not as a word mentioned in passing", () => {
     for (const line of [
       "Premise re-verified 2026-10-06 on main at abc1234.",
       "Premise re-checked at abc1234.",
       "premise (verified 2026-10-08 at abc1234)",
-      "the premise, verified at abc1234, holds",
       "Premise: found at abc1234.",
       "Premise confirmed at abc1234.",
+      // after a clause boundary: live shapes (ugcportal-paa, -pmb, -a9no, -6do8)
+      "2026-10-06 audit: premise re-verified on main at abc1234.",
+      "K4-K6 added. Premise verified 2026-10-15 at origin/main abc1234.",
+      "on-main value. Premise (verified 2026-10-07 at abc1234)",
+      "- **Premise verified** at abc1234.",
+      "(premise re-verified live at abc1234)",
     ]) {
       expect(findPremiseLines(line).map((l) => l.shas), line).toEqual([["abc1234"]]);
     }
@@ -1144,6 +1213,10 @@ describe("findPremiseLines", { timeout: 30_000 }, () => {
       "the premise-fresh gate run at origin/main abc1234 was green",
       "docs/process/premise-audit-v0.7.0-2026-10-08.md at abc1234",
       "the premise of this bead is at abc1234",
+      // the label form mid-sentence (PR #289 review round 2, M1 (b))
+      "2026-10-15 orchestrator, on the premise: the dispatch gate at origin/main abc1234 was green.",
+      "the premise, verified at abc1234, holds",
+      "a re-verified `Premise verified` line at abc1234",
     ]) {
       expect(findPremiseLines(line), line).toEqual([]);
     }

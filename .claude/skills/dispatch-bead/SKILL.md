@@ -74,6 +74,9 @@ fails it when:
 - the line has **no** `Premise depends on:` — absent is never read as
   `none`, because a check that matched nothing must not look like one that
   passed;
+- the declaration cannot be checked — empty, whitespace inside a path, an
+  absolute path, a `..` segment, a glob, or `none` combined with paths or
+  followed by anything but one parenthesised reason;
 - a declared path does not exist at `origin/main`'s HEAD — a typo is
   touched only by a commit that creates it, so it would otherwise pass on
   every merge (to rest on something being

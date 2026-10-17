@@ -199,8 +199,10 @@ premise is stale. Stale is scoped by the paths the premise declares
 (`ugcportal-ul2j`): the freshest `Premise verified` line on `main` must carry
 a `Premise depends on: <path>, <path>` line (or `Premise depends on: none
 (<the external fact>)`), and fails when a commit since it touched a declared
-path — naming the commit and the path — when that line is absent, or when a
-declared path does not exist at `origin/main`'s HEAD. The declaration is the
+path — naming the commit and the path — when that line is absent, when it
+cannot be checked (empty, a path with whitespace, an absolute path, a `..`
+segment, a glob, or `none` combined with anything but one parenthesised
+reason), or when a declared path does not exist at `origin/main`'s HEAD. The declaration is the
 author's and is trusted: a premise resting on a file it leaves out passes. A
 premise commit that is not on `main` at all still fails as before. That is
 usually a branch commit whose PR was since squash-merged — `main` has the
