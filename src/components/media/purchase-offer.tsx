@@ -75,16 +75,18 @@ const TERRACOTTA_CHIP_CLASS =
  * "unless an item says otherwise, all rights are reserved". With no grant
  * (`licenceTerms === null`, which `publicOffer` also makes of a blank one),
  * nothing about a grant is rendered — no heading, no empty block — and the
- * sentence points at /licence alone, exactly as before this bead.
+ * sentence points at /licence alone.
  *
  * THE GRANT IS A TEXT NODE, NEVER MARKUP. It is admin-written free text
  * rendered to every buyer, so it goes in as a JSX child, which React
  * escapes; `<script>` or `<a href>` typed into it reaches the page as those
  * characters, not as elements. Line breaks the admin typed are kept with
  * `whitespace-pre-line` rather than by turning them into `<br>`s, which
- * would mean building markup out of the text. Nothing on this path may use
- * `dangerouslySetInnerHTML`; src/lib/licence-terms-signal.test.ts asserts
- * that over every file that names the column.
+ * would mean building markup out of the text. purchase-offer.test.tsx
+ * renders a grant holding `<script>` and `<a href>` and asserts both come
+ * out escaped, and src/lib/licence-terms-signal.test.ts asserts no file that
+ * names the column, and no file on the buyer's render path, uses
+ * `dangerouslySetInnerHTML`.
  */
 export function PurchaseOffer({ offer }: { offer: PublicOffer | null }) {
   if (offer === null) return null;

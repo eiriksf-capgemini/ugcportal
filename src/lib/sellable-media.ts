@@ -189,9 +189,9 @@ export function publicOffer(
   }
   // THE GRANT, re-checked on read by the same rule the writer applies
   // (`checkLicenceTerms`, src/lib/licence-terms.ts), for the reason the two
-  // checks above give. Read only here, after the gate said yes, so a grant
-  // stored while the item was sellable is not shown once it is not
-  // (ugcportal-74w.1 K3). Blank reads as no grant, and the page falls back
+  // checks above give. Read after the gate said yes, so a grant stored
+  // while the item was sellable is not shown once it is not
+  // (ugcportal-74w.1 K3; sellable-media.test.ts "K3: returns no offer"). Blank reads as no grant, and the page falls back
   // to /licence (K2). A stored grant the writer would REFUSE — over the
   // bound, or naming an Instagram host (K4) — withdraws the whole offer
   // rather than showing the price with the site-wide licence instead: the

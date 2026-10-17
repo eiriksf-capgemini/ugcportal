@@ -18,8 +18,10 @@ type RouteContext = { params: Promise<{ id: string }> };
 // MAX_LICENCE_TERMS_LENGTH UTF-16 code units (ugcportal-74w.1). Sized for
 // the worst legitimate encoding of that grant rather than the typical one:
 // a JSON encoder may write every code unit as a six-byte `\uXXXX` escape,
-// so 2 000 of them is 12 000 bytes before the rest of the body. Anything
-// larger is not this request. Was 1 KiB before the grant existed.
+// so the largest accepted grant is six bytes per code unit before the rest
+// of the body; route.test.ts ("refuses an over-long grant with 400, inside
+// the body bound") posts exactly that body and expects it to be stored.
+// Anything larger is not this request.
 const MAX_BODY_BYTES = 16 * 1024;
 
 // The ceiling and the currency allowlist both live in

@@ -8,9 +8,11 @@
  * file imports nothing and reads no row.
  *
  * WRITTEN ONLY BY `recordPrice` (src/lib/curation-price-write.ts), behind
- * the sale gate, and READ ONLY BESIDE A FRESH GATE CALL
- * (`publicOffer`, src/lib/sellable-media.ts). The repository scan that keeps
- * both true is src/lib/licence-terms-signal.test.ts. Nothing here names the
+ * the sale gate, and SHOWN TO A BUYER ONLY THROUGH `publicOffer`
+ * (src/lib/sellable-media.ts), which asks the gate first. The repository
+ * scan that asserts the single writer, and that every other reader asks the
+ * gate or is on its written-down allowlist, is
+ * src/lib/licence-terms-signal.test.ts. Nothing here names the
  * column, deliberately: this module answers "is this text acceptable", never
  * "what does this item grant".
  */
@@ -44,12 +46,12 @@ export type LicenceTermsCheck =
 
 /**
  * Characters that render as nothing, stripped before the Instagram check
- * only — never from what is stored. Without this, "instagram.c​om" reads
+ * only — never from what is stored. Without this, "instagram.c\u200Bom" reads
  * as the domain to a buyer and as something else to a regular expression.
  * Zero-width space, non-joiner and joiner, word joiner, the byte-order mark,
  * and the soft hyphen.
  */
-const INVISIBLE = /[​-‍⁠﻿­]/g;
+const INVISIBLE = /[\u200B-\u200D\u2060\uFEFF\u00AD]/g;
 
 /**
  * An Instagram host anywhere in the text: `instagram.com` (any case, with or

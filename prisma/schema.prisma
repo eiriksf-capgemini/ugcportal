@@ -823,8 +823,10 @@ model MediaListing {
   // links to the site-wide /licence instead. Written only by `recordPrice`
   // (src/lib/curation-price-write.ts), in the same write as the price, which
   // refuses an over-long grant or one naming an Instagram host
-  // (src/lib/licence-terms.ts); read only beside a fresh sale-gate call
-  // (src/lib/sellable-media.ts). Both asserted over the whole tree by
+  // (src/lib/licence-terms.ts); shown to a buyer only through
+  // `publicOffer` (src/lib/sellable-media.ts), which asks the sale gate
+  // first. The single writer, and every reader either asking the gate or
+  // on a written-down allowlist, are asserted over the whole tree by
   // src/lib/licence-terms-signal.test.ts. Not checked against the layer
   // clearances: that is ugcportal-0443 (decision) and ugcportal-02t4.
   licenceTerms String?

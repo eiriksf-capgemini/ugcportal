@@ -59,7 +59,7 @@ describe("no Instagram host (K4)", () => {
     "instagr.am/p/abc",
     // Read the same by a buyer, spelled differently for a regex.
     "ｉｎｓｔａｇｒａｍ．ｃｏｍ/p/abc",
-    "instagram.c​om/p/abc",
+    "instagram.c\u200Bom/p/abc",
   ];
 
   it("refuses every spelling of the host", () => {
