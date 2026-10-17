@@ -171,7 +171,7 @@ beforeEach(async () => {
   authMock.mockReset().mockResolvedValue(ADMIN_SESSION);
   await prisma.mediaListing.update({
     where: { id: "listing-1" },
-    data: { priceCents: null },
+    data: { priceCents: null, licenceTerms: null },
   });
   await prisma.resaleRightsReview.deleteMany({});
 });
@@ -203,6 +203,113 @@ describe("the happy path", () => {
     expect(
       (await POST(priceRequest({ priceCents: null }), context())).status,
     ).toBe(200);
+    expect(await priceOf()).toBeNull();
+  });
+});
+
+/** The stored grant, read straight off the column. */
+async function termsOf(id = "listing-1"): Promise<string | null> {
+  const listing = await prisma.mediaListing.findUniqueOrThrow({
+    where: { id },
+    select: { licenceTerms: true },
+  });
+  return listing.licenceTerms;
+}
+
+describe("ugcportal-74w.1 K1/K4: the licence grant through the HTTP entry point", () => {
+  const GRANT = "Web use only, for 12 months.";
+
+  it("passes the grant to the write with the price, stores it and echoes it", async () => {
+    await setReview("CLEARED");
+
+    const response = await POST(
+      priceRequest({ priceCents: 24900, currency: "NOK", licenceTerms: GRANT }),
+      context(),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      id: "listing-1",
+      priceCents: 24900,
+      currency: "NOK",
+      licenceTerms: GRANT,
+    });
+    expect(await priceOf()).toBe(24900);
+    expect(await termsOf()).toBe(GRANT);
+  });
+
+  it("leaves the grant alone when the field is absent, and removes it with null", async () => {
+    await setReview("CLEARED");
+    await POST(priceRequest({ priceCents: 100, licenceTerms: GRANT }), context());
+
+    await POST(priceRequest({ priceCents: 200 }), context());
+    expect(await termsOf()).toBe(GRANT);
+
+    await POST(priceRequest({ priceCents: 200, licenceTerms: null }), context());
+    expect(await termsOf()).toBeNull();
+  });
+
+  it("refuses an Instagram address with 400 and writes neither price nor grant", async () => {
+    await setReview("CLEARED");
+
+    const response = await POST(
+      priceRequest({ priceCents: 300, licenceTerms: "See https://www.instagram.com/p/abc" }),
+      context(),
+    );
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toMatch(/Instagram/);
+    expect(await priceOf()).toBeNull();
+    expect(await termsOf()).toBeNull();
+  });
+
+  it("refuses a grant carrying a bidi control with 400 and writes neither price nor grant", async () => {
+    await setReview("CLEARED");
+
+    // Displayed as "See instagram.com", stored reversed inside an override.
+    const response = await POST(
+      priceRequest({ priceCents: 300, licenceTerms: "See \u202Emoc.margatsni\u202C now" }),
+      context(),
+    );
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toMatch(/bidi control/);
+    expect(await priceOf()).toBeNull();
+    expect(await termsOf()).toBeNull();
+  });
+
+  it("refuses an over-long grant with 400, inside the body bound", async () => {
+    await setReview("CLEARED");
+    const { MAX_LICENCE_TERMS_LENGTH } = await import("@/lib/licence-terms");
+
+    const response = await POST(
+      priceRequest({ priceCents: 300, licenceTerms: "x".repeat(MAX_LICENCE_TERMS_LENGTH + 1) }),
+      context(),
+    );
+    // 400 from the write's own bound, not 413 from the body reader: the
+    // body limit leaves room for the largest grant the write accepts.
+    expect(response.status).toBe(400);
+    expect(await termsOf()).toBeNull();
+
+    // And the largest accepted grant, escaped as \uXXXX throughout (the
+    // worst legitimate encoding), still fits the body bound.
+    const escaped = `{"priceCents":300,"licenceTerms":"${"\\u00e9".repeat(MAX_LICENCE_TERMS_LENGTH)}"}`;
+    const fits = await POST(
+      new Request("http://localhost/api/admin/curation/listing-1/price", {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: "http://localhost" },
+        body: escaped,
+      }),
+      context(),
+    );
+    expect(fits.status).toBe(200);
+    expect(await termsOf()).toBe("\u00e9".repeat(MAX_LICENCE_TERMS_LENGTH));
+  });
+
+  it("rejects a grant that is not a string or null", async () => {
+    await setReview("CLEARED");
+    for (const bad of [42, true, ["a"], { text: "a" }]) {
+      const response = await POST(priceRequest({ priceCents: 300, licenceTerms: bad }), context());
+      expect(response.status, JSON.stringify(bad)).toBe(400);
+    }
     expect(await priceOf()).toBeNull();
   });
 });
@@ -672,7 +779,8 @@ describe("input handling", () => {
     const request = new Request("http://localhost/api/admin/curation/listing-1/price", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ priceCents: 1, padding: "x".repeat(4096) }),
+      // Over the 16 KiB bound the licence grant (ugcportal-74w.1) raised it to.
+      body: JSON.stringify({ priceCents: 1, padding: "x".repeat(17 * 1024) }),
     });
     expect((await POST(request, context())).status).toBe(413);
     expect(await priceOf()).toBeNull();

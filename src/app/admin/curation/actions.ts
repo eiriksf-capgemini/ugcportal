@@ -180,7 +180,7 @@ export async function recordClearance(formData: FormData) {
  * one of a closed set of codes for everything an admin can legitimately get
  * wrong.
  *
- * THIS ACTION DECIDES NOTHING ABOUT SELLABILITY. It parses two form fields
+ * THIS ACTION DECIDES NOTHING ABOUT SELLABILITY. It parses three form fields
  * and hands them to `recordPrice` (src/lib/curation-price-write.ts), which is
  * where the uploader's clearance (K2) and the watermarked preview (K3) are
  * checked — the same function POST /api/admin/curation/[id]/price calls. An
@@ -221,6 +221,15 @@ export async function setPrice(formData: FormData) {
   }
 
   const currency = formData.get("currency");
+  // The licence grant (ugcportal-74w.1). The form always submits the field,
+  // so a string here is what the admin left in the textarea — blank
+  // included, which `recordPrice` stores as no grant. A field missing
+  // ENTIRELY is a request from something other than this form and is
+  // `undefined`, which leaves the stored grant alone, the same reading
+  // `currency` gets below. No checking here: the bound and the Instagram
+  // refusal are `recordPrice`'s, and a second copy would be the one that
+  // drifts.
+  const licenceTerms = formData.get("licenceTerms");
   const outcome = await recordPrice({
     // Media id, not listing id: every form on this screen carries the Media
     // row's id, and `recordPrice` takes either so neither caller has to do a
@@ -232,6 +241,7 @@ export async function setPrice(formData: FormData) {
     // empty string as unsupported, and an admin who only changed the amount
     // must not have their request refused over a field they never touched.
     currency: typeof currency === "string" && currency !== "" ? currency : undefined,
+    licenceTerms: typeof licenceTerms === "string" ? licenceTerms : undefined,
   });
 
   revalidatePath(CURATION_PATH);

@@ -142,6 +142,27 @@ export function sourceFileOf(file: string): ts.SourceFile {
 }
 
 /**
+ * Every identifier name that occurs anywhere in one file's syntax tree — a
+ * comment is not a node and a string literal is not an identifier, so prose
+ * and strings that merely MENTION a name are not counted.
+ *
+ * Moved here from src/lib/sellability-signal.test.ts (ugcportal-yzo7) when
+ * src/lib/licence-terms-signal.test.ts (ugcportal-74w.1) needed the same
+ * matcher for a second column: importing a helper out of a vitest suite
+ * makes vitest run that suite as a side effect, and a second copy would be
+ * the one that drifts.
+ */
+export function identifiersIn(file: string): Set<string> {
+  const names = new Set<string>();
+  const visit = (node: ts.Node): void => {
+    if (ts.isIdentifier(node)) names.add(node.text);
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFileOf(file));
+  return names;
+}
+
+/**
  * Strips `/* *\/` and `//` comments from TS/TSX/JS/JSX source, using
  * TypeScript's OWN parser rather than a hand-rolled lexer (ugcportal-ysub).
  *

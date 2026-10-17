@@ -1,3 +1,4 @@
+import { checkLicenceTerms } from "@/lib/licence-terms";
 import {
   isStorablePriceCents,
   isSupportedCurrency,
@@ -14,8 +15,8 @@ import {
 } from "@/lib/resale-rights";
 
 /**
- * THE ONE PLACE `MediaListing.priceCents` AND `currency` ARE WRITTEN
- * (ugcportal-yzo7 K1/K2/K3).
+ * THE ONE PLACE `MediaListing.priceCents`, `currency` AND `licenceTerms` ARE
+ * WRITTEN (ugcportal-yzo7 K1/K2/K3, ugcportal-74w.1 K1/K3).
  *
  * Two entry points reach this function and neither may price anything
  * without it: the admin curation screen's `setPrice` server action
@@ -43,14 +44,20 @@ import {
  * and neither may pull `@/lib/prisma` into its module graph. See that file's
  * own comment for the measured failure that forced the split.
  *
- * LICENCE TERMS ARE NOT A COLUMN, and that is a boundary rather than an
- * omission. `MediaListing` has `priceCents` and `currency` and nothing
- * describing what a buyer would be granted; the licence that applies is the
- * site-wide one at /licence (src/app/licence/content.ts), which already says
- * "unless an item says otherwise, all rights are reserved". Per-item licence
- * terms would be a new column, a new migration and a new thing for the gate
- * to have an opinion about, and this bead has none of the three. Filed as
- * ugcportal-74w.1.
+ * LICENCE TERMS (ugcportal-74w.1) are a free-text grant stored in the same
+ * write as the price, so an item can say what its money buys rather than
+ * every item pointing at the site-wide /licence. The site-wide licence
+ * (src/app/licence/content.ts) already says "unless an item says otherwise,
+ * all rights are reserved"; this column is where an item says otherwise.
+ * The text is checked here, at write, and checked again on read in
+ * `publicOffer` (src/lib/sellable-media.ts), both with `checkLicenceTerms`
+ * (src/lib/licence-terms.ts: a length bound, no Instagram host, no bidi
+ * control, and blank-is-null), and
+ * src/lib/licence-terms-signal.test.ts asserts over the whole tree that this
+ * file is the only one whose Prisma write names the column. What the text is
+ * NOT checked against is the layer clearances — whether the grant is wider
+ * than what was cleared. That needs a decision on what a clearance grants
+ * (ugcportal-0443) before there is anything to compare with (ugcportal-02t4).
  */
 
 /**
@@ -73,16 +80,28 @@ export const PRICE_WRITE_REFUSALS = [
   "price_no_preview",
   "price_not_sellable",
   "price_amount_invalid",
+  "price_terms_too_long",
+  "price_terms_instagram_url",
+  "price_terms_bidi_control",
 ] as const;
 
 export type PriceWriteRefusal = (typeof PRICE_WRITE_REFUSALS)[number];
 
 export type PriceWriteOutcome =
-  | { kind: "priced"; listingId: string; priceCents: number; currency: string }
-  | { kind: "unpriced"; listingId: string; currency: string }
+  | {
+      kind: "priced";
+      listingId: string;
+      priceCents: number;
+      currency: string;
+      licenceTerms: string | null;
+    }
+  | { kind: "unpriced"; listingId: string; currency: string; licenceTerms: string | null }
   | { kind: "price_media_not_found" }
   | { kind: "price_no_preview" }
   | { kind: "price_amount_invalid" }
+  | { kind: "price_terms_too_long" }
+  | { kind: "price_terms_instagram_url" }
+  | { kind: "price_terms_bidi_control" }
   | { kind: "price_not_sellable"; blocker: SellabilityBlocker };
 
 /**
@@ -112,6 +131,23 @@ export type RecordPriceInput = {
   priceCents: number | null;
   /** Only meaningful alongside a price; ignored on an un-pricing call. */
   currency?: string;
+  /**
+   * The free-text grant a buyer is shown beside the price (ugcportal-74w.1).
+   *
+   * Three readings, the same shape `currency` has: `undefined` leaves the
+   * stored grant alone (a JSON caller that only changed the amount);
+   * `null` or nothing readable (white space and invisibles only, as
+   * `checkLicenceTerms` decides) REMOVES it, so the item page falls back to
+   * the site-wide /licence; anything else is stored, trimmed, once
+   * `checkLicenceTerms` (src/lib/licence-terms.ts) has accepted it, or
+   * refused by name if it does not.
+   *
+   * Like `currency`, only meaningful alongside a price and IGNORED on an
+   * un-pricing call — neither checked nor written — because withdrawing an
+   * offer must never be refused over a field that describes the offer being
+   * withdrawn, and writing it would be a write the gate never checked.
+   */
+  licenceTerms?: string | null;
   /** Injectable for the clearance-expiry branch, same as the gate's own. */
   now?: Date;
 };
@@ -119,7 +155,15 @@ export type RecordPriceInput = {
 /**
  * Set or clear the price on one curated upload.
  *
- * THREE REFUSALS, and the order they are checked in is the contract:
+ * Before any row is read, the request itself can be refused:
+ * `price_amount_invalid` (an amount or currency nothing can charge),
+ * `price_terms_too_long`, `price_terms_instagram_url` and
+ * `price_terms_bidi_control` (the grant text, ugcportal-74w.1 — see
+ * `checkLicenceTerms`). None of the four opens the transaction, so none of
+ * them writes anything.
+ *
+ * THEN THREE REFUSALS ABOUT THE ROW, and the order they are checked in is the
+ * contract:
  *
  *   1. `price_media_not_found` — no such listing, or no file behind it.
  *   2. `price_no_preview` (K3) — the Media row has no watermarked preview.
@@ -167,6 +211,7 @@ export async function recordPrice({
   target,
   priceCents,
   currency,
+  licenceTerms,
   now = new Date(),
 }: RecordPriceInput): Promise<PriceWriteOutcome> {
   const unpricing = priceCents === null;
@@ -179,6 +224,29 @@ export async function recordPrice({
   }
   if (!unpricing && currency !== undefined && !isSupportedCurrency(currency)) {
     return { kind: "price_amount_invalid" };
+  }
+  // The grant is a property of the request too. `undefined` means "leave it
+  // alone" and is the one reading that writes nothing to the column.
+  let termsToStore: { value: string | null } | null = null;
+  if (!unpricing && licenceTerms !== undefined) {
+    const checked = checkLicenceTerms(licenceTerms ?? "");
+    if (!checked.ok) {
+      switch (checked.refusal) {
+        case "too_long":
+          return { kind: "price_terms_too_long" };
+        case "instagram_url":
+          return { kind: "price_terms_instagram_url" };
+        case "bidi_control":
+          return { kind: "price_terms_bidi_control" };
+        default: {
+          // A refusal added to `checkLicenceTerms` and not mapped here is a
+          // type error, and never a fall-through into the write.
+          const unmapped: never = checked.refusal;
+          throw new Error(`unmapped licence-terms refusal: ${String(unmapped)}`);
+        }
+      }
+    }
+    termsToStore = { value: checked.value };
   }
 
   return prisma.$transaction(async (tx): Promise<PriceWriteOutcome> => {
@@ -227,8 +295,12 @@ export async function recordPrice({
           // Currency is only meaningful alongside a price, and applying it on
           // an un-pricing call would be a write the gate never checked.
           ...(!unpricing && currency ? { currency } : {}),
+          // In the SAME update as the price, never a second statement: a
+          // grant stored by a write the gate did not run would be a grant
+          // nobody checked. `termsToStore` is null on an un-pricing call.
+          ...(termsToStore ? { licenceTerms: termsToStore.value } : {}),
         },
-        select: { id: true, priceCents: true, currency: true },
+        select: { id: true, priceCents: true, currency: true, licenceTerms: true },
       });
     } catch (error) {
       // The read above and this write are not serialised against a DELETE of
@@ -246,13 +318,19 @@ export async function recordPrice({
     }
 
     if (updated.priceCents === null) {
-      return { kind: "unpriced", listingId: updated.id, currency: updated.currency };
+      return {
+        kind: "unpriced",
+        listingId: updated.id,
+        currency: updated.currency,
+        licenceTerms: updated.licenceTerms,
+      };
     }
     return {
       kind: "priced",
       listingId: updated.id,
       priceCents: updated.priceCents,
       currency: updated.currency,
+      licenceTerms: updated.licenceTerms,
     };
   });
 }

@@ -31,9 +31,10 @@ export const RIGHTS_BRAND_ALCOHOL_PATH = "/api/admin/rights/brands/alcohol";
  * this one is per-upload case work, and it is the UI half of the endpoint
  * already living at /api/admin/curation/[id]/price. Price (ugcportal-yzo7)
  * and the per-layer clearances (ugcportal-qfy9) both joined this screen
- * rather than getting screens of their own. Per-item LICENCE TERMS did not,
- * and are not here: there is no column for them (ugcportal-74w.1), so what a
- * buyer would be granted is the site-wide text at LICENCE_PATH.
+ * rather than getting screens of their own, and so did the per-item licence
+ * grant (ugcportal-74w.1): entered in the price form here, saved with the
+ * price in the same write, and shown to a buyer beside the price, with the
+ * site-wide text at LICENCE_PATH as the fallback when an item has none.
  */
 export const CURATION_PATH = "/admin/curation";
 

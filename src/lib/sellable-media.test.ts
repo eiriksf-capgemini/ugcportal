@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ResaleRightsStatus } from "@/generated/prisma/enums";
 import { completeAttestationRow } from "@/lib/test-support/attestation";
@@ -171,6 +171,7 @@ describe("an offer is re-evaluated at render, not read off the stored price (ugc
     await expect(getPublicOffer(PREVIEW_ID)).resolves.toEqual({
       priceCents: PRICE_CENTS,
       currency: "NOK",
+      licenceTerms: null,
     });
   });
 
@@ -199,6 +200,7 @@ describe("an offer is re-evaluated at render, not read off the stored price (ugc
       await expect(getPublicOffer(PREVIEW_ID)).resolves.toEqual({
         priceCents: PRICE_CENTS,
         currency: "NOK",
+        licenceTerms: null,
       });
     });
   }
@@ -216,6 +218,7 @@ describe("an offer is re-evaluated at render, not read off the stored price (ugc
     expect(publicOffer(row, new Date("2026-03-20T00:00:00.000Z"))).toEqual({
       priceCents: PRICE_CENTS,
       currency: "NOK",
+      licenceTerms: null,
     });
     // One instant later than the window, same row, same stored price.
     expect(publicOffer(row, new Date("2026-04-01T00:00:00.001Z"))).toBeNull();
@@ -303,6 +306,108 @@ describe("an offer is re-evaluated at render, not read off the stored price (ugc
   });
 });
 
+/**
+ * ugcportal-74w.1 K1/K2/K3: the licence grant travels on the offer, and
+ * only on an offer the gate produced at render time.
+ */
+describe("the licence grant on the offer (ugcportal-74w.1)", () => {
+  const GRANT = "Web use for 12 months. Credit the photographer.";
+
+  async function storedTerms(): Promise<string | null> {
+    const listing = await prisma.mediaListing.findUniqueOrThrow({
+      where: { mediaId: MEDIA_ID },
+      select: { licenceTerms: true },
+    });
+    return listing.licenceTerms;
+  }
+
+  beforeEach(async () => {
+    await recordPrice({
+      target: { mediaId: MEDIA_ID },
+      priceCents: PRICE_CENTS,
+      currency: "NOK",
+      licenceTerms: GRANT,
+    });
+  });
+
+  afterEach(async () => {
+    await recordPrice({
+      target: { mediaId: MEDIA_ID },
+      priceCents: PRICE_CENTS,
+      currency: "NOK",
+      licenceTerms: null,
+    });
+  });
+
+  it("K1: carries the stored grant on the offer", async () => {
+    await expect(getPublicOffer(PREVIEW_ID)).resolves.toEqual({
+      priceCents: PRICE_CENTS,
+      currency: "NOK",
+      licenceTerms: GRANT,
+    });
+  });
+
+  it("K3: returns no offer, grant included, once the item stops being sellable at render — the grant still stored", async () => {
+    // Revoked, expired with no write, and the triage signer demoted: the
+    // three render-time lapses K3 names.
+    await setStatus(ResaleRightsStatus.REVOKED);
+    await expect(getPublicOffer(PREVIEW_ID)).resolves.toBeNull();
+    await setStatus(ResaleRightsStatus.CLEARED);
+
+    await setStatus(ResaleRightsStatus.CLEARED, new Date("2026-04-01T00:00:00.000Z"));
+    expect(publicOffer(await gateRow(), new Date("2026-04-01T00:00:00.001Z"))).toBeNull();
+    await setStatus(ResaleRightsStatus.CLEARED, null);
+
+    await prisma.user.update({ where: { id: ADMIN }, data: { role: "USER" } });
+    await expect(getPublicOffer(PREVIEW_ID)).resolves.toBeNull();
+    await prisma.user.update({ where: { id: ADMIN }, data: { role: "ADMIN" } });
+
+    // Nothing wrote to the grant through any of that.
+    await expect(storedTerms()).resolves.toBe(GRANT);
+    // THE RESTORE: sellable again, and the grant is back on the offer.
+    await expect(getPublicOffer(PREVIEW_ID)).resolves.toMatchObject({ licenceTerms: GRANT });
+  });
+
+  it("K2: reads a blank stored grant as none", async () => {
+    // Written straight to the column — `recordPrice` stores blank as null,
+    // so this state is only reachable by some other writer. The second is
+    // blank to a buyer though not to `trim()`: zero-width and bidi marks.
+    for (const blank of ["  \n ", " \u200B\u2066\u00AD "]) {
+      await prisma.mediaListing.update({
+        where: { mediaId: MEDIA_ID },
+        data: { licenceTerms: blank },
+      });
+      await expect(getPublicOffer(PREVIEW_ID), JSON.stringify(blank)).resolves.toMatchObject({
+        licenceTerms: null,
+      });
+    }
+  });
+
+  it("K4: withdraws the offer for a stored grant the writer would refuse", async () => {
+    // Also only reachable by bypassing `recordPrice`. Re-checked on read for
+    // the reason the currency and amount are: do not trust that a row was
+    // written through the validator.
+    for (const bad of [
+      "See instagram.com/p/abc",
+      "instagram.c\u200Eom/p/x",
+      "x".repeat(2_001),
+      // Displayed as "See instagram.com ..." once bidi-reordered.
+      "See \u202Emoc.margatsni\u202C for the original.",
+    ]) {
+      await prisma.mediaListing.update({
+        where: { mediaId: MEDIA_ID },
+        data: { licenceTerms: bad },
+      });
+      await expect(getPublicOffer(PREVIEW_ID), bad.slice(0, 30)).resolves.toBeNull();
+    }
+    await prisma.mediaListing.update({
+      where: { mediaId: MEDIA_ID },
+      data: { licenceTerms: GRANT },
+    });
+    await expect(getPublicOffer(PREVIEW_ID)).resolves.toMatchObject({ licenceTerms: GRANT });
+  });
+});
+
 describe("the offer read is inside the publish gate too (ugcportal-3ae)", () => {
   /*
    * This file is `lib/sellable-media.ts`'s covering test in
@@ -351,17 +456,21 @@ describe("the offer's shape and its select (ugcportal-yzo7)", () => {
     const { listing: offerListing, ...offerRest } = SELLABLE_MEDIA_SELECT;
     expect(offerRest).toEqual(gateRest);
     expect(Object.keys(offerListing.select).sort()).toEqual(
-      [...Object.keys(gateListing.select), "priceCents", "currency"].sort(),
+      [...Object.keys(gateListing.select), "priceCents", "currency", "licenceTerms"].sort(),
     );
   });
 
-  it("returns the two money fields and nothing else off the row", async () => {
+  it("returns the two money fields and the grant, and nothing else off the row", async () => {
     const offer = await getPublicOffer(PREVIEW_ID);
     expect(offer).not.toBeNull();
     // Named explicitly rather than snapshotted: the row the gate select
     // loads carries `Media.userId` and the uploader's whole review, and a
     // future edit that spread the row into the result would publish both.
-    expect(Object.keys(offer ?? {}).sort()).toEqual(["currency", "priceCents"]);
+    expect(Object.keys(offer ?? {}).sort()).toEqual([
+      "currency",
+      "licenceTerms",
+      "priceCents",
+    ]);
   });
 
   it("answers null for a blank or unknown handle without querying", async () => {

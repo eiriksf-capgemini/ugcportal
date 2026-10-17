@@ -85,17 +85,22 @@ export function isSupportedCurrency(value: unknown): value is string {
 }
 
 /**
- * What a visitor may be told about buying one item: an amount and the
- * currency it is in. Nothing else — in particular no licence terms, because
- * there is no per-item licence to carry (ugcportal-74w.1); the licence that
- * applies is the site-wide one at /licence, which every renderer links to
- * from the route constant rather than from a field here.
+ * What a visitor may be told about buying one item: an amount, the currency
+ * it is in, and — when the admin wrote one — the item's own licence grant
+ * (ugcportal-74w.1). Nothing else off the row.
  */
 export type PublicOffer = {
   /** Integer minor units, exactly as stored. No float ever touches money. */
   priceCents: number;
   /** An ISO-4217 code from {@link SUPPORTED_CURRENCIES}. */
   currency: string;
+  /**
+   * The per-item grant as plain text, or `null` for none — in which case the
+   * licence that applies is the site-wide one at /licence, which every
+   * renderer links to from the route constant. Never markup: a renderer
+   * prints it as a text node (src/components/media/purchase-offer.tsx).
+   */
+  licenceTerms: string | null;
 };
 
 /**
@@ -110,7 +115,10 @@ export type PublicOffer = {
  * offer at all — `publicOffer` is — so there is no path on which a
  * formatting failure becomes a sale.
  */
-export function formatOfferPrice(offer: PublicOffer, locale = "en-GB"): string {
+export function formatOfferPrice(
+  offer: Pick<PublicOffer, "priceCents" | "currency">,
+  locale = "en-GB",
+): string {
   return new Intl.NumberFormat(locale, {
     style: "currency",
     currency: offer.currency,

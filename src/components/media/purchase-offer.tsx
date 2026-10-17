@@ -12,6 +12,17 @@ import { formatOfferPrice, type PublicOffer } from "@/lib/pricing";
 export const PURCHASE_OFFER_ID = "purchase-offer";
 
 /**
+ * Marker attribute on the per-item licence grant's container
+ * (ugcportal-74w.1). Exported for the same reason as the id above: the
+ * assertions that matter most are that it is ABSENT — for an item with no
+ * grant, and for an item that is no longer sellable — and an attribute is a
+ * needle no grant text can forge, because the text is a text node.
+ */
+export const LICENCE_GRANT_ATTRIBUTE = "data-licence-grant";
+// The JSX below spells the attribute literally (`data-licence-grant`), as
+// the sale badge does; purchase-offer.test.tsx asserts the two agree.
+
+/**
  * ugcportal-dmne: the one terracotta "chip" treatment this component renders
  * TWICE — the for-sale badge and the highlighted offer price — one named
  * constant so the two cannot independently drift onto a different,
@@ -58,10 +69,24 @@ const TERRACOTTA_CHIP_CLASS =
  * and did not would be worse than a sentence saying how to ask, so this
  * states the price and points at the licence the terms come from.
  *
- * THE LICENCE IS THE SITE-WIDE ONE. `MediaListing` carries no per-item
- * licence terms (ugcportal-74w.1), so this links to /licence rather than
- * rendering a field that does not exist — which is exactly what that page
- * promises: "unless an item says otherwise, all rights are reserved".
+ * THE LICENCE (ugcportal-74w.1). When the admin wrote a grant for this item,
+ * it is shown under the price, and the site-wide /licence is still linked
+ * for everything the grant does not say — which is what that page promises:
+ * "unless an item says otherwise, all rights are reserved". With no grant
+ * (`licenceTerms === null`, which `publicOffer` also makes of a blank one),
+ * nothing about a grant is rendered — no heading, no empty block — and the
+ * sentence points at /licence alone.
+ *
+ * THE GRANT IS A TEXT NODE, NEVER MARKUP. It is admin-written free text
+ * rendered to every buyer, so it goes in as a JSX child, which React
+ * escapes; `<script>` or `<a href>` typed into it reaches the page as those
+ * characters, not as elements. Line breaks the admin typed are kept with
+ * `whitespace-pre-line` rather than by turning them into `<br>`s, which
+ * would mean building markup out of the text. purchase-offer.test.tsx
+ * renders a grant holding `<script>` and `<a href>` and asserts both come
+ * out escaped, and src/lib/licence-terms-signal.test.ts asserts no file that
+ * names the column, and no file on the buyer's render path, uses
+ * `dangerouslySetInnerHTML`.
  */
 export function PurchaseOffer({ offer }: { offer: PublicOffer | null }) {
   if (offer === null) return null;
@@ -89,13 +114,24 @@ export function PurchaseOffer({ offer }: { offer: PublicOffer | null }) {
           {formatOfferPrice(offer)}
         </span>
       </p>
+      {offer.licenceTerms !== null ? (
+        <section className="mt-2" data-licence-grant>
+          <h2 className="text-xs font-medium">What this licence grants</h2>
+          {/* A text node, escaped by React; see the component comment. */}
+          <p className="mt-1 whitespace-pre-line break-words">
+            {offer.licenceTerms}
+          </p>
+        </section>
+      ) : null}
       {/*
         text-muted-foreground, not text-ink-muted (ugcportal-6uc2, phase 2):
         this whole panel is unconditionally bg-muted, which now reads the
         paper scale.
       */}
       <p className="mt-1 text-xs text-muted-foreground">
-        That is the price for the original file under the terms on the{" "}
+        {offer.licenceTerms !== null
+          ? "That is the price for the original file under the grant above. Anything it does not grant stays reserved, as set out on the "
+          : "That is the price for the original file under the terms on the "}
         <a className={INLINE_LINK_CLASS} href={LICENCE_PATH}>
           licence page
         </a>

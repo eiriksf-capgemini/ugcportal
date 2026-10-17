@@ -3,12 +3,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  identifiersIn,
   isTestFile,
-  sourceFileOf,
   stripComments,
   walkSourceFiles,
 } from "@/lib/design/scan-source";
@@ -105,18 +104,6 @@ const ALLOWED_WITHOUT_GATE: Readonly<Record<string, string>> = {
   "lib/pricing.ts":
     "a pure amount module with no row, no query and no gate by construction; its two consumers are the gated writer and the gated render path",
 };
-
-/** Every identifier name that occurs anywhere in one file's syntax tree. */
-export function identifiersIn(file: string): Set<string> {
-  const names = new Set<string>();
-  const source = sourceFileOf(file);
-  const visit = (node: ts.Node): void => {
-    if (ts.isIdentifier(node)) names.add(node.text);
-    ts.forEachChild(node, visit);
-  };
-  visit(source);
-  return names;
-}
 
 /**
  * Files that name `priceCents` and do NOT name the gate, relative to `src/`
