@@ -4,8 +4,9 @@
  *   upstream bytes   : 16041
  *   upstream sha256  : bc7d83425702955b4cb67cb14ede9d603f9d912376d57a2d81d661094d2a782a
  * Everything after this comment is the upstream file byte for byte; the
- * header is the only addition. src/app/vendor/shadcn-tailwind.test.ts pins the
- * sha256 over the bytes after this comment, so an edit here fails the suite.
+ * header is the only addition. src/app/vendor/shadcn-tailwind.test.ts requires
+ * this header to be exactly one comment (a comment closer anywhere before the
+ * end of it fails the suite) and pins the sha256 over the bytes after it.
  * Why vendored: depending on the shadcn package for this one stylesheet pulled
  * its CLI tree (ts-morph, fast-glob, @modelcontextprotocol/sdk, ...) and their
  * advisories into every install. See docs/process/dependency-deferral-register.md.

@@ -27,7 +27,8 @@ const VENDORED = path.join(HERE, "shadcn-tailwind.css");
 const GLOBALS = path.resolve(HERE, "..", "globals.css");
 
 // sha256 of shadcn@4.21.0's dist/tailwind.css (16041 bytes), the bytes after
-// the header comment in the vendored file.
+// the header comment in the vendored file. The header itself is checked
+// separately: it must be exactly one comment, so it cannot carry CSS.
 const UPSTREAM_SHA256 =
   "bc7d83425702955b4cb67cb14ede9d603f9d912376d57a2d81d661094d2a782a";
 
@@ -52,10 +53,24 @@ async function compileGlobals(css: string, classNames: string): Promise<string> 
   return result.css;
 }
 
+/**
+ * Splits the vendored file into header and body. The header is exactly one
+ * block comment: it opens the file with the comment opener, the FIRST comment
+ * closer in the file ends it, and that closer is followed directly by a
+ * newline. Anything else (a closer mid-line, so CSS could follow it before a
+ * re-opened comment) returns null, so no CSS can hide in the header.
+ */
+function splitVendored(vendored: string): { header: string; body: string } | null {
+  if (!vendored.startsWith("/*")) return null;
+  const end = vendored.indexOf("*/");
+  if (end === -1 || vendored[end + 2] !== "\n") return null;
+  return { header: vendored.slice(0, end + 2), body: vendored.slice(end + 3) };
+}
+
 function bodyAfterHeader(vendored: string): string {
-  const end = vendored.indexOf("*/\n");
-  if (!vendored.startsWith("/*") || end === -1) return vendored;
-  return vendored.slice(end + 3);
+  const parts = splitVendored(vendored);
+  if (!parts) throw new Error("vendored header is not exactly one block comment");
+  return parts.body;
 }
 
 describe("vendored shadcn stylesheet", () => {
@@ -101,6 +116,26 @@ describe("vendored shadcn stylesheet", () => {
   it("matches the pinned upstream bytes", () => {
     const body = bodyAfterHeader(readFileSync(VENDORED, "utf8"));
     expect(pinMatches(body)).toBe(true);
+  });
+
+  it("header is exactly one block comment and the rest is the pinned body", () => {
+    const vendored = readFileSync(VENDORED, "utf8");
+    const parts = splitVendored(vendored);
+    expect(parts).not.toBeNull();
+    // Comments stripped, the header is empty: it carries no CSS.
+    expect(stripCssComments(parts!.header).trim()).toBe("");
+    expect(parts!.header + "\n" + parts!.body).toBe(vendored);
+    expect(pinMatches(parts!.body)).toBe(true);
+  });
+
+  it("header guard fails on a header that closes its comment early and hides CSS", () => {
+    const vendored = readFileSync(VENDORED, "utf8");
+    const lines = vendored.split("\n");
+    lines[1] += " */ .evil{color:#f00;} /*";
+    const mutated = lines.join("\n");
+    expect(mutated).not.toBe(vendored);
+    expect(splitVendored(mutated)).toBeNull();
+    expect(() => bodyAfterHeader(mutated)).toThrow();
   });
 
   it("pin check fails on a one-byte edit of the vendored bytes", () => {

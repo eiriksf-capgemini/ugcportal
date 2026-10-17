@@ -14,9 +14,11 @@
  *     "ONE THEME PER MODE" and petrol-palette comments).
  *   - src/app/vendor/shadcn-tailwind.css (ugcportal-pc7s), a byte-for-byte
  *     copy of an upstream stylesheet whose `#000` is a mask-image alpha stop,
- *     not a rendered colour. A changed byte fails the sha256 and size pin
- *     checked in shadcn-tailwind.test.ts (run there on an edited copy), so editing
- *     this file to satisfy this gate is caught.
+ *     not a rendered colour. shadcn-tailwind.test.ts checks that the
+ *     file is exactly one header comment followed by bytes matching a pinned
+ *     sha256 and size, so a changed byte in either part fails there (run
+ *     there on edited copies), and editing this file to satisfy this gate is
+ *     caught.
  *   - src/lib/design/**, the colour-contrast engine (color.ts, contrast.ts,
  *     tokens.ts, usage.ts) and its tests. That code's whole job is parsing
  *     and reasoning about arbitrary hex/oklch strings as DATA - a hex literal
