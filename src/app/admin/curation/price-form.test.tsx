@@ -6,7 +6,7 @@ import { MAX_LICENCE_TERMS_LENGTH } from "@/lib/licence-terms";
 import { MAX_PRICE_CENTS, SUPPORTED_CURRENCIES } from "@/lib/pricing";
 
 /**
- * The price form submits two values and nothing else, and the one that can
+ * The price form submits three values and nothing else (amount, currency, licence terms), and the one that can
  * go wrong silently is the amount (ugcportal-yzo7 K1).
  *
  * The real component, rendered, with the real markup read — the same shape
@@ -90,7 +90,12 @@ describe("what the price form submits (ugcportal-yzo7 K1)", () => {
   it("says in the label that blank removes the price", () => {
     // The one destructive thing this form does, and the only one the gate
     // does not stand in front of. It has to be stated where it is done.
-    expect(render(125_000)).toContain("blank");
+    const markup = render(125_000);
+    const label = new RegExp(
+      `<label[^>]*for="price-cents-media-1"[^>]*>([\\s\\S]*?)</label>`,
+    ).exec(markup);
+    expect(label).not.toBeNull();
+    expect(label?.[1]).toContain("blank");
   });
 });
 

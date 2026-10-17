@@ -60,7 +60,7 @@ const OUTCOME_MESSAGES: Record<TriageOutcomeCode, string> = {
   price_terms_instagram_url:
     "The licence terms mention an Instagram address, so nothing was recorded — not the price either. What a buyer pays for is the uploaded original, never an Instagram post, so the grant must not point at one. Remove the address and save again.",
   price_terms_bidi_control:
-    "The licence terms contain an invisible text-direction control (a bidi mark, embedding, override or isolate), so nothing was recorded — not the price either. Such a control can make a buyer see different words from the ones stored, so a grant may not carry one. Retype the grant without it, or paste it as plain text; right-to-left letters on their own are fine.",
+    "The licence terms contain an invisible text-direction control (a bidi mark, embedding, override or isolate), so nothing was recorded — not the price either. Such a control can make a buyer see different words from the ones stored, so a grant may not carry one. Retype the grant by hand, or delete the invisible characters around any right-to-left passage; right-to-left letters on their own are fine.",
   alcohol_with_commercial_links:
     "That upload already carries a commercial link, and nothing commercial may sit on a picture showing alcohol (alkoholloven § 9-2). Nothing was recorded — not even your other answers, because a half-recorded triage would put your name on a set you did not finish. Detach the item’s commercial links first, then answer the alcohol question.",
 };

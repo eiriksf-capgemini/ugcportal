@@ -547,7 +547,7 @@ describe("ugcportal-yzo7 K4: the price block on the item page", () => {
 
     expect(html).toContain(`id="${PURCHASE_OFFER_ID}"`);
     expect(html).toContain("1,250.00");
-    // The licence the price is under, not a per-item one that does not exist.
+    // The licence the price is under: the site-wide one, as no per-item terms are stored.
     expect(html).toContain(`href="${LICENCE_PATH}"`);
   });
 

@@ -428,8 +428,9 @@ export default async function AdminCurationPage({
       */}
       <p className="mt-2 text-sm text-muted-foreground">
         Recording the triage does not set a price, and setting a price does not
-        grant a licence — what a buyer would be granted is the site-wide
-        licence text, not a per-item one. A stored price is an offer only while
+        by itself grant a licence — a price without terms grants the site-wide
+        licence text. Per-item terms, when entered with the price, are shown to
+        the buyer instead, and are checked at write and again at render. A stored price is an offer only while
         the gate still clears the upload: the catalogue re-asks on every
         request, so a revoked or lapsed clearance takes the item off sale with
         nothing written to it. The rights layers a &ldquo;yes&rdquo; needs are

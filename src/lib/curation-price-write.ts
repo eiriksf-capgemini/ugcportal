@@ -49,8 +49,10 @@ import {
  * every item pointing at the site-wide /licence. The site-wide licence
  * (src/app/licence/content.ts) already says "unless an item says otherwise,
  * all rights are reserved"; this column is where an item says otherwise.
- * The text is checked here and nowhere else (src/lib/licence-terms.ts: a
- * length bound, blank-is-null, no Instagram host), and
+ * The text is checked here, at write, and checked again on read in
+ * `publicOffer` (src/lib/sellable-media.ts), both with `checkLicenceTerms`
+ * (src/lib/licence-terms.ts: a length bound, no Instagram host, no bidi
+ * control, and blank-is-null), and
  * src/lib/licence-terms-signal.test.ts asserts over the whole tree that this
  * file is the only one whose Prisma write names the column. What the text is
  * NOT checked against is the layer clearances — whether the grant is wider
