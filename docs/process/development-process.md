@@ -196,15 +196,22 @@ when a bead is missing any element of the `bead-template` form — user story,
 both scope lines, K-numbered criteria, a `Verified by` on each, a guardrail,
 a premise, `model`/`model_effort`, `cc_type`/`cc_scope` — or when its
 premise is stale. Stale is scoped by the paths the premise declares
-(`ugcportal-ul2j`): the bead's newest premise line is the one judged — an
-older one never stands in for it, so a newest line that names no commit, or
-one that does not resolve, fails — and it must carry
-a `Premise depends on: <path>, <path>` line (or `Premise depends on: none
-(<the external fact>)`), and fails when a commit since it touched a declared
-path — naming the commit and the path — when that line is absent, when it
-cannot be checked (empty, a path with whitespace, an absolute path, a `..`
-segment, a glob, or `none` combined with anything but one parenthesised
-reason), or when a declared path does not exist at `origin/main`'s HEAD. The declaration is the
+(`ugcportal-ul2j`): the last premise line in the description and the last
+in the notes are the candidates, and each must be sound — name a commit
+that resolves and is on `main`, and carry a `Premise depends on: <path>,
+<path>` line (or `Premise depends on: none (<the external fact>)`) that can
+be checked — or the bead fails, naming the field, and the other field's
+line is never judged in its place. Of two sound candidates the one whose
+commit is fresher on `main` is judged (on a shared commit, the union of both
+declarations), because the description can be rewritten after notes were
+appended and where a line sits says nothing about when it was written; two
+different commits at the same distance from `main`'s HEAD cannot be ordered
+and fail. The bead then fails when a commit since the judged premise
+touched a declared path — naming the commit and the path — or when a
+declared path does not exist at `origin/main`'s HEAD. A declaration that is
+absent or cannot be checked (empty, a path with whitespace, an absolute
+path, a `..` segment, a glob, or `none` combined with anything but one
+parenthesised reason) fails on either candidate. The declaration is the
 author's and is trusted: a premise resting on a file it leaves out passes. A
 premise commit that is not on `main` at all still fails as before. That is
 usually a branch commit whose PR was since squash-merged — `main` has the

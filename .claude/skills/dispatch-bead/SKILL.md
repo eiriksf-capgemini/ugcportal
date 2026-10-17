@@ -65,31 +65,45 @@ Premise depends on: none (<the external fact the premise rests on>)
 
 Paths are repo-relative, comma-separated, matched literally (`[id]` is a
 directory name, not a glob); a directory covers everything under it. The
-gate judges the bead's *newest* premise line — the last one, reading the
-description first and then the notes, each top to bottom — and reads only
-that line's declaration. It fails the bead when:
+gate takes two candidates: the *last* premise line in the description and
+the *last* one in the notes, whichever fields carry one; older lines in
+either field are ignored. Which of the two is the author's latest cannot be
+read from where it sits — the description can be rewritten after notes were
+appended — so recency comes from the commits: of two sound candidates, the
+one whose commit is fresher on `origin/main` (fewer commits behind its HEAD)
+is judged with its own declaration, and when both name the same commit the
+union of the two declarations is judged. It fails the bead when:
 
-- that line names no commit, or a commit that does not resolve (a typo, or
-  a branch commit pruned after its PR was squash-merged) — an older premise
-  line is never judged in its place, because it may declare fewer paths
-  than the newest one; append a freshly verified line instead;
-- a commit on `origin/main` since that premise touched a declared path — it
-  names the first five such commits, oldest first, each with up to five of
-  the declared files it touched, then counts the rest;
-- the line has **no** `Premise depends on:` — absent is never read as
-  `none`, because a check that matched nothing must not look like one that
-  passed;
-- the declaration cannot be checked — empty, whitespace inside a path, an
-  absolute path, a `..` segment, a glob, or `none` combined with paths or
-  followed by anything but one parenthesised reason;
+- either candidate names no commit, or a commit that does not resolve (a
+  typo, or a branch commit pruned after its PR was squash-merged) — the
+  other field's line is never judged in its place, because either could be
+  the author's latest and may declare more paths; re-verify and write a
+  fresh line in that field;
+- either candidate's commit is not on `origin/main` at all — usually a
+  branch commit whose PR was since squash-merged (`main` has the change
+  under a different sha), sometimes a branch not yet merged; either way it
+  cannot be compared with `main`'s history, so re-verify against
+  `origin/main`'s HEAD;
+- either candidate has **no** `Premise depends on:` — absent is never read
+  as `none`, because a check that matched nothing must not look like one
+  that passed;
+- either candidate's declaration cannot be checked — empty, whitespace
+  inside a path, an absolute path, a `..` segment, a glob, or `none`
+  combined with paths or followed by anything but one parenthesised reason;
+- the two candidates name different commits at the same distance from
+  `origin/main`'s HEAD, so which is fresher cannot be decided (only a merge
+  commit on `main` allows that; this repository squash-merges);
+- a commit on `origin/main` since the judged premise touched a declared path
+  — it names the first five such commits, oldest first, each with up to
+  five of the declared files it touched, then counts the rest;
 - a declared path does not exist at `origin/main`'s HEAD — a typo is
   touched only by a commit that creates it, so it would otherwise pass on
   every merge (to rest on something being
-  *absent*, declare its nearest existing parent directory);
-- the premise commit is not on `origin/main` at all — usually a branch
-  commit whose PR was since squash-merged (`main` has the change under a
-  different sha), sometimes a branch not yet merged; either way it cannot be
-  compared with `main`'s history, so re-verify against `origin/main`'s HEAD.
+  *absent*, declare its nearest existing parent directory).
+
+The cost is deliberate: a bead whose description still carries an old
+typo'd or off-main premise line fails until that line is re-verified, even
+when its notes hold a sound, fresh one (`ugcportal-ydbi` is the backfill).
 
 `none` does not go stale on a merge. Clearing a failure means re-running the
 bead's premise check against today's code and writing a new premise line and

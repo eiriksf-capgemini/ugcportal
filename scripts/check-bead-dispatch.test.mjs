@@ -844,7 +844,7 @@ describe("ul2j: premise freshness is scoped by the paths the premise declares", 
     const res = runNotes(notes);
     expect(res.status).toBe(1);
     expect(failedChecks(res.stdout)).toEqual(["premise-fresh"]);
-    expect(freshLine(res.stdout)).toContain('the newest premise statement names no commit ("Premise re-verified 2026-10-12');
+    expect(freshLine(res.stdout)).toContain(`the notes' last premise statement names no commit ("Premise re-verified 2026-10-12`);
     expect(freshLine(res.stdout)).toContain("The 1 older premise statement(s) on this bead are not judged in its place.");
     expect(freshLine(res.stdout)).not.toContain(`premise verified at ${short(c[2])}`);
     expect(freshLine(res.stdout)).not.toContain(`premise verified at ${short(c[0])}`);
@@ -923,7 +923,7 @@ describe("ul2j: premise freshness is scoped by the paths the premise declares", 
     expect(res.status).toBe(1);
     expect(failedChecks(res.stdout)).toEqual(["premise-fresh"]);
     const line = freshLine(res.stdout);
-    expect(line).toContain("the newest premise statement names deadbee0deadbee0, which does not resolve in this repo");
+    expect(line).toContain("the notes' last premise statement names deadbee0deadbee0, which does not resolve in this repo");
     expect(line).toContain("Re-run the premise check against origin/main's current HEAD");
     expect(line).not.toContain(`premise verified at ${short(c[0])}`);
     expect(line).not.toContain(`premise verified at ${short(c[2])}`);
@@ -1143,7 +1143,10 @@ describe("M1 round 4: the newest premise statement is judged, and an older one n
   // declares src/a.ts only; statement B, newer, is verified at c1 and also
   // declares src/b.ts -- which c2 touched. Judged on B, the bead is stale.
   // Judged on A (as rounds 1-3 did whenever B could not be dated), it passes:
-  // nothing since c0 touched src/a.ts.
+  // nothing since c0 touched src/a.ts. "Newest" in this block means last
+  // within one field -- every statement here but the one test that says
+  // otherwise sits in the notes, where top to bottom is append order. Across
+  // fields recency comes from the commits (the round-5 block below).
   let dir;
   let c;
   let s1;
@@ -1210,7 +1213,7 @@ describe("M1 round 4: the newest premise statement is judged, and an older one n
     expect(res.status).toBe(1);
     expect(failedChecks(res.stdout)).toEqual(["premise-fresh"]);
     const line = freshLine(res.stdout);
-    expect(line).toContain(`the newest premise statement names ${typo}, which does not resolve in this repo`);
+    expect(line).toContain(`the notes' last premise statement names ${typo}, which does not resolve in this repo`);
     expect(line).toContain("Re-run the premise check against origin/main's current HEAD");
     NOT_JUDGED_AT_A(line);
   });
@@ -1221,7 +1224,7 @@ describe("M1 round 4: the newest premise statement is judged, and an older one n
     expect(res.status).toBe(1);
     expect(failedChecks(res.stdout)).toEqual(["premise-fresh"]);
     const line = freshLine(res.stdout);
-    expect(line).toContain("the newest premise statement names effaced, which does not resolve in this repo");
+    expect(line).toContain("the notes' last premise statement names effaced, which does not resolve in this repo");
     NOT_JUDGED_AT_A(line);
   });
 
@@ -1242,13 +1245,14 @@ describe("M1 round 4: the newest premise statement is judged, and an older one n
     const pruned = runNotes(notes);
     expect(pruned.status).toBe(1);
     expect(failedChecks(pruned.stdout)).toEqual(["premise-fresh"]);
-    expect(freshLine(pruned.stdout)).toContain(`the newest premise statement names ${s1}, which does not resolve in this repo`);
+    expect(freshLine(pruned.stdout)).toContain(`the notes' last premise statement names ${s1}, which does not resolve in this repo`);
     NOT_JUDGED_AT_A(freshLine(pruned.stdout));
   });
 
-  it("a statement in the notes is newer than one in the description, so it is the one judged", () => {
-    // ugcportal-ul2j's own shape: the description's premise (filed first)
-    // declares less than the notes' later one.
+  it("the notes' last statement is fresher on main than the description's, so it is the one judged", () => {
+    // ugcportal-ul2j's own shape: the description's premise, at c0, declares
+    // less than the notes' one at c1. Judged by commit position on main,
+    // not by field: c1 is fresher.
     const base = completeBead();
     const bead = { ...base, description: `${base.description}\n\n${A()}`, notes: B(c[1]) };
     const file = path.join(dir, `beads-${Math.random().toString(36).slice(2)}.json`);
@@ -1282,6 +1286,225 @@ describe("M1 round 4: the newest premise statement is judged, and an older one n
     );
     expect(line).not.toContain("skipped");
     expect(line).not.toContain("deadbee0");
+  });
+});
+
+describe("M1 round 5: each field's last statement is a candidate, and the one fresher on main is judged", { timeout: 60_000 }, () => {
+  // The round-5 reviewer's layout: c0 has src/a.ts and src/b.ts, c1 touches
+  // only README.md, c2 touches src/b.ts, c3 (HEAD) touches README.md. s1 is
+  // a side-branch commit forked from c1, never merged. Recency comes from a
+  // statement's commit on main, never from which field it sits in: the
+  // description can be rewritten after the notes were appended.
+  let dir;
+  let c;
+  let s1;
+  const run = (args) => execFileSync("git", args, { cwd: dir, encoding: "utf8" }).trim();
+  const short = (sha) => sha.slice(0, 7);
+  beforeAll(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "ul2j-fields-"));
+    run(["init", "-q", "-b", "main"]);
+    run(["config", "user.email", "test@example.com"]);
+    run(["config", "user.name", "Test"]);
+    const write = (rel, text) => {
+      fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      fs.writeFileSync(path.join(dir, rel), text);
+    };
+    const commit = (msg) => {
+      run(["add", "-A"]);
+      run(["commit", "-q", "-m", msg]);
+      return run(["rev-parse", "HEAD"]);
+    };
+    write("src/a.ts", "a v0\n");
+    write("src/b.ts", "b v0\n");
+    write("README.md", "r0\n");
+    c = [commit("c0")];
+    write("README.md", "r1\n");
+    c.push(commit("c1 readme"));
+    run(["checkout", "-q", "-b", "side"]);
+    write("side.txt", "side\n");
+    s1 = commit("s1 side branch");
+    run(["checkout", "-q", "main"]);
+    write("src/b.ts", "b v1\n");
+    c.push(commit("c2 b.ts"));
+    write("README.md", "r3\n");
+    c.push(commit("c3"));
+  }, 30_000);
+  afterAll(() => {
+    if (dir) fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const stmt = (date, at, decl) => `Premise verified ${date} at origin/main ${at}: holds. Premise depends on: ${decl}`;
+  const runFields = (description, notes) => {
+    const base = completeBead();
+    const bead = { ...base, description: `${base.description}\n\n${description}`, notes };
+    const file = path.join(dir, `beads-${Math.random().toString(36).slice(2)}.json`);
+    fs.writeFileSync(file, JSON.stringify([bead]));
+    return runCliAllowFail(["--beads", file, "--repo", dir, "--head", c[3]]);
+  };
+  const freshLine = (stdout) => stdout.split("\n").find((l) => /^\s+(ok|FAIL)\s+premise-fresh\b/.test(l)) || "";
+
+  it("the round-5 repro: a description rewritten after the notes, fresher and wider, is judged -- fails naming c2 touching src/b.ts", () => {
+    const res = runFields(stmt("2026-10-15", c[1], "src/a.ts, src/b.ts"), stmt("2026-10-13", c[0], "src/a.ts"));
+    expect(res.status).toBe(1);
+    expect(failedChecks(res.stdout)).toEqual(["premise-fresh"]);
+    const line = freshLine(res.stdout);
+    expect(line).toContain(`premise verified at ${short(c[1])} (2 commit(s) behind origin/main ${short(c[3])}) is stale`);
+    expect(line).toContain(`${short(c[2])} touched src/b.ts`);
+    expect(line).toContain(`Judged: the description's last premise statement, fresher on main than the notes' last at ${c[0]} (3 commit(s) behind), which is not judged.`);
+    expect(line).not.toContain("none of those commits touched");
+  });
+
+  it("the reviewer's inverse: a fresher, narrower description is judged at its own commit, and the notes' older, wider statement does not over-fire", () => {
+    // description at c2 declaring src/a.ts; notes at c0 declaring both. c3
+    // touched only README.md, so judged at c2 the premise is fresh.
+    const res = runFields(stmt("2026-10-16", c[2], "src/a.ts"), stmt("2026-10-13", c[0], "src/a.ts, src/b.ts"));
+    expect(res.status).toBe(0);
+    const line = freshLine(res.stdout);
+    expect(line).toContain(`premise verified at ${short(c[2])} (1 commit(s) behind origin/main ${short(c[3])}); none of those commits touched its declared path(s): src/a.ts`);
+    expect(line).toContain(`Judged: the description's last premise statement, fresher on main than the notes' last at ${c[0]} (3 commit(s) behind), which is not judged.`);
+  });
+
+  it("the brief's inverse: fresher notes and a narrower description -- judged at the notes' commit, as its paths dictate", () => {
+    // Position order and commit order agree here (the notes are last AND
+    // fresher), so this case reads the same under the round-4 rule; it pins
+    // the direction the two tests above do not.
+    const fresh = runFields(stmt("2026-10-13", c[0], "src/a.ts"), stmt("2026-10-16", c[2], "src/a.ts, src/b.ts"));
+    expect(fresh.status).toBe(0);
+    expect(freshLine(fresh.stdout)).toContain(`premise verified at ${short(c[2])} (1 commit(s) behind origin/main ${short(c[3])}); none of those commits touched its declared path(s): src/a.ts, src/b.ts`);
+    expect(freshLine(fresh.stdout)).toContain(`Judged: the notes' last premise statement, fresher on main than the description's last at ${c[0]} (3 commit(s) behind), which is not judged.`);
+    const stale = runFields(stmt("2026-10-13", c[0], "src/a.ts"), stmt("2026-10-15", c[1], "src/a.ts, src/b.ts"));
+    expect(stale.status).toBe(1);
+    expect(freshLine(stale.stdout)).toContain(`premise verified at ${short(c[1])} (2 commit(s) behind origin/main ${short(c[3])}) is stale`);
+    expect(freshLine(stale.stdout)).toContain(`${short(c[2])} touched src/b.ts`);
+  });
+
+  it("the same commit in both fields: the UNION of the two declarations is judged, so a touch either one alone would miss is caught", () => {
+    // c2 touched src/b.ts. Each layout puts src/b.ts in a different field,
+    // so judging the description's declaration alone misses it in the
+    // first, and judging the notes' alone misses it in the second.
+    for (const [description, notes] of [
+      [stmt("2026-10-15", c[0], "src/a.ts"), stmt("2026-10-13", c[0], "src/b.ts")],
+      [stmt("2026-10-15", c[0], "src/b.ts"), stmt("2026-10-13", c[0], "src/a.ts")],
+    ]) {
+      const res = runFields(description, notes);
+      expect(res.status, description).toBe(1);
+      expect(failedChecks(res.stdout), description).toEqual(["premise-fresh"]);
+      const line = freshLine(res.stdout);
+      expect(line, description).toContain(`premise verified at ${short(c[0])} (3 commit(s) behind origin/main ${short(c[3])}) is stale`);
+      expect(line, description).toContain(`${short(c[2])} touched src/b.ts`);
+      expect(line, description).toContain(`Both the description's and the notes' last premise statements name ${short(c[0])}, so their declarations are judged together.`);
+    }
+    // and with neither declaring src/b.ts the same commit passes, so the
+    // failures above come from the union and nothing else
+    const res = runFields(stmt("2026-10-15", c[0], "src/a.ts"), stmt("2026-10-13", c[0], "src/a.ts"));
+    expect(res.status).toBe(0);
+    expect(freshLine(res.stdout)).toMatch(/^\s+ok\s+premise-fresh\b/);
+    expect(freshLine(res.stdout)).toContain(`none of those commits touched its declared path(s): src/a.ts. Both the description's`);
+  });
+
+  it("a typo'd (or commitless) description statement fails the bead, naming its token, even when the notes' statement is valid and fresh", () => {
+    const notes = stmt("2026-10-16", c[3], "src/a.ts");
+    // the notes alone pass, so every failure below is the description's
+    expect(runFields("", notes).status).toBe(0);
+    const typo = `${c[2].slice(0, 39)}${c[2].endsWith("0") ? "1" : "0"}`;
+    const res = runFields(stmt("2026-10-17", typo, "src/a.ts, src/b.ts"), notes);
+    expect(res.status).toBe(1);
+    expect(failedChecks(res.stdout)).toEqual(["premise-fresh"]);
+    const line = freshLine(res.stdout);
+    expect(line).toContain(`the description's last premise statement names ${typo}, which does not resolve in this repo`);
+    expect(line).toContain("The notes' last premise statement is not judged in its place.");
+    expect(line).not.toContain("premise verified at");
+
+    const none = runFields("Premise re-checked 2026-10-17: by eye. Premise depends on: src/a.ts", notes);
+    expect(none.status).toBe(1);
+    expect(freshLine(none.stdout)).toContain("the description's last premise statement names no commit");
+    expect(freshLine(none.stdout)).toContain("The notes' last premise statement is not judged in its place.");
+  });
+
+  it("a notes statement off main fails the bead, naming its commit, even when the description's statement is valid and fresh", () => {
+    const description = stmt("2026-10-16", c[3], "src/a.ts");
+    expect(runFields(description, "").status).toBe(0);
+    const res = runFields(description, stmt("2026-10-15", s1, "src/a.ts"));
+    expect(res.status).toBe(1);
+    expect(failedChecks(res.stdout)).toEqual(["premise-fresh"]);
+    const line = freshLine(res.stdout);
+    expect(line).toContain(`the notes' last premise statement names ${s1}, and premise commit ${s1} is not on origin/main`);
+    expect(line).toContain("The description's last premise statement is not judged in its place.");
+    // and the mirror, where the field-order rule judged the valid notes and passed
+    const mirror = runFields(stmt("2026-10-15", s1, "src/a.ts"), description);
+    expect(mirror.status).toBe(1);
+    expect(freshLine(mirror.stdout)).toContain(`the description's last premise statement names ${s1}, and premise commit ${s1} is not on origin/main`);
+    expect(freshLine(mirror.stdout)).toContain("The notes' last premise statement is not judged in its place.");
+  });
+
+  it("an older candidate with no declaration fails the bead too: both fields' last statements must be sound", () => {
+    // The description is fresher (c3) and would pass; the notes' statement
+    // at c0 declares nothing. It is not the one judged, and it still fails.
+    const res = runFields(stmt("2026-10-16", c[3], "src/a.ts"), `Premise verified 2026-10-13 at origin/main ${c[0]}: holds.`);
+    expect(res.status).toBe(1);
+    const line = freshLine(res.stdout);
+    expect(line).toContain(`the notes' last premise statement: premise verified at ${short(c[0])} (3 commit(s) behind origin/main ${short(c[3])}) has no \`Premise depends on:\` line`);
+    expect(line).toContain("The description's last premise statement is not judged in its place.");
+    // and the mirror: an undeclared description statement under fresh, valid notes
+    const mirror = runFields(`Premise verified 2026-10-13 at origin/main ${c[0]}: holds.`, stmt("2026-10-16", c[3], "src/a.ts"));
+    expect(mirror.status).toBe(1);
+    expect(freshLine(mirror.stdout)).toContain(`the description's last premise statement: premise verified at ${short(c[0])} (3 commit(s) behind origin/main ${short(c[3])}) has no \`Premise depends on:\` line`);
+    expect(freshLine(mirror.stdout)).toContain("The notes' last premise statement is not judged in its place.");
+  });
+
+  it("both candidates unsound: each failure is named", () => {
+    const res = runFields(stmt("2026-10-16", "deadbee0deadbee0", "src/a.ts"), stmt("2026-10-15", s1, "src/a.ts"));
+    expect(res.status).toBe(1);
+    const line = freshLine(res.stdout);
+    expect(line).toContain("the description's last premise statement names deadbee0deadbee0, which does not resolve");
+    expect(line).toContain(`. The notes' last premise statement names ${s1}, and premise commit ${s1} is not on origin/main`);
+    expect(line).not.toContain("is not judged in its place");
+  });
+
+  it("one field only: its last statement is judged as before, in the description as in the notes", () => {
+    for (const [description, notes] of [
+      [stmt("2026-10-15", c[1], "src/b.ts"), ""],
+      ["", stmt("2026-10-15", c[1], "src/b.ts")],
+    ]) {
+      const res = runFields(description, notes);
+      expect(res.status).toBe(1);
+      expect(freshLine(res.stdout)).toContain(`premise verified at ${short(c[1])} (2 commit(s) behind origin/main ${short(c[3])}) is stale`);
+      expect(freshLine(res.stdout)).toContain(`${short(c[2])} touched src/b.ts`);
+      expect(freshLine(res.stdout)).not.toContain("Judged:");
+    }
+    for (const [description, notes] of [
+      [stmt("2026-10-16", c[2], "src/a.ts, src/b.ts"), ""],
+      ["", stmt("2026-10-16", c[2], "src/a.ts, src/b.ts")],
+    ]) {
+      expect(runFields(description, notes).status).toBe(0);
+    }
+    // an older statement in the same field is still ignored
+    const res = runFields(`${stmt("2026-10-10", "deadbee0deadbee0", "src/b.ts")}\n${stmt("2026-10-16", c[2], "src/a.ts")}`, "");
+    expect(res.status).toBe(0);
+  });
+});
+
+describe("M1 round 5: two different on-main commits at the same distance are not ordered by guesswork (stubbed git)", { timeout: 30_000 }, () => {
+  // Only a main with merge commits can give two different on-main commits
+  // the same `rev-list --count`; the stub makes that shape directly.
+  it("fails the bead, naming both commits, rather than judge either", () => {
+    const git = {
+      head: "f".repeat(40),
+      headShort: "fffffff",
+      resolveCommit: (sha) => sha.padEnd(40, "0"),
+      commitsAhead: () => 4,
+      commitsNotOnMain: () => 0,
+      commitsTouching: () => [],
+      pathExists: () => true,
+    };
+    const base = completeBead();
+    const bead = {
+      ...base,
+      description: `${base.description}\n\nPremise verified 2026-10-15 at origin/main abc1234. Premise depends on: f3.txt`,
+      notes: "Premise verified 2026-10-14 at origin/main def5678. Premise depends on: f3.txt",
+    };
+    const fresh = validateBead(bead, { git, headShort: "fffffff" }).results.find((r) => r.id === "premise-fresh");
+    expect(fresh.ok).toBe(false);
+    expect(fresh.detail).toContain("name different commits, abc1234 and def5678, each 4 commit(s) behind origin/main fffffff, so which of them is fresher cannot be decided");
   });
 });
 
