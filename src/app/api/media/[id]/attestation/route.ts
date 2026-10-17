@@ -100,7 +100,8 @@ function alreadyAttested() {
  * as an answer. `null` when the body is not a JSON object at all.
  *
  * WHY A SEPARATE FUNCTION. The raw object is a local of this function and
- * of nothing else, so `POST` holds only what `parseAttestation` returned.
+ * of nothing else, so all `POST` takes from the body is what
+ * `parseAttestation` returned (and `readJsonBody`'s own failure fields).
  * Anything else in the body (an `attestedByUserId`, a `mediaId`, a
  * `publishedAt`, a key nobody has thought of yet) is out of reach of the
  * write below, which is what makes the actor and the target the session's

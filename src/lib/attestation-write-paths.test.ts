@@ -119,8 +119,8 @@ export function userIdBindingsIn(file: string): string[] {
  * function. `bindingsNamed` (shared with POST /api/media's guard, and left
  * alone here) sees only the first. A plain variable is reported as its
  * initialiser's text, the way `bindingsNamed` reports it; every other shape
- * as its kind and the text of the node that declares it, so it can never be
- * mistaken for the one plain declaration a caller expects.
+ * as its kind and the text of the node that declares it, so it does not
+ * read as the one plain declaration a caller expects.
  */
 export function declarationsNamed(file: string, name: string): string[] {
   const source = sourceFileOf(file);
@@ -216,8 +216,9 @@ function returnsNull(statement: ts.Statement): boolean {
 /**
  * ugcportal-gkax M1-r2: every place the late-attestation route's file reads
  * the request body other than through `parseAttestation`, as `line N: why:
- * text`. Empty means the body reaches nothing but the parser, whatever key
- * a mutation might read and whatever binding shape it reads it into. The
+ * text`. Empty means the body reaches nothing but its object-shape check
+ * and the parser, whatever key a mutation might read and whatever binding
+ * shape it reads it into. The
  * rule, all of it checked over the AST of that one file:
  *
  *  A. `POST` reads its `request` parameter only as the first argument of a
@@ -229,13 +230,15 @@ function returnsNull(statement: ts.Statement): boolean {
  *     a bare reference, not another property.
  *  C. In `attestationFromBody`, the parameter is read only in the condition
  *     of an `if` whose branch is `return null`, or as the whole initialiser
- *     of a declaration (an alias such as `fields`). Each alias is read only
- *     inside the reader arrow passed to a returned `parseAttestation(…)`
- *     call, and there only as `Object.hasOwn(alias, name)` or `alias[name]`,
- *     where `name` is that arrow's one parameter.
+ *     of a declaration, through parentheses or `as` at most (an alias such
+ *     as `fields`). Each alias is read only inside the reader arrow passed
+ *     to a returned `parseAttestation(…)` call, and there only as
+ *     `Object.hasOwn(alias, name)` or `alias[name]`, where `name` is that
+ *     arrow's one parameter.
  *
- * So the raw object never reaches `POST`, and inside the one function that
- * holds it, it reaches nothing but the keys `parseAttestation` asks for.
+ * So `POST` reads nothing of the raw object but `readJsonBody`'s failure
+ * fields, and inside the one function that holds it, it is read at nothing
+ * but the keys `parseAttestation` asks for.
  */
 export function rawBodyLeaksIn(file: string): string[] {
   const source = sourceFileOf(file);
