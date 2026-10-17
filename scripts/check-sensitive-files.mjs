@@ -15,9 +15,11 @@
  * PR, exactly the dedicated-PR-for-human-review shape CLAUDE.md's own policy
  * demands -- was red on this check by construction. A sensitive-file-only PR
  * passing this CI guard does not make it eligible for pr-review-merge's
- * auto-merge: that skill's own sensitive-path step (see
- * .claude/skills/pr-review-merge/SKILL.md) independently routes any
- * `.claude/**` or `CLAUDE.md` diff to a human, regardless of what CI says.
+ * auto-merge: that skill's own sensitive-path step (step 2 of
+ * .claude/skills/pr-review-merge/SKILL.md) decides what routes to a human,
+ * with its own list, regardless of what CI says. That list is the authority;
+ * it is not restated here. This script's pattern matches only the two
+ * `.claude/settings*.json` files and `CLAUDE.md`.
  *
  * Sensitive paths are matched exactly (not as a substring) against each
  * changed file, mirroring the original step's `grep -Ex`: a changed file

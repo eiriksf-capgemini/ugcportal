@@ -254,7 +254,8 @@ describe("isSensitivePath", () => {
     ["apps/web/.env.local", true],
     ["src/app/page.tsx", false],
     ["scripts/check-human-merge-labels.mjs", false],
-    [".claude/agents/worker-reviewer.md", false],
+    [".claude/agents/worker-reviewer.md", true],
+    [".claude/agents/sub/x.md", true],
   ])("%s -> %s", (p, expected) => expect(isSensitivePath(p)).toBe(expected));
 });
 

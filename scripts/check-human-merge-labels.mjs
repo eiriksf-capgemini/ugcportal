@@ -73,9 +73,15 @@ export const COMMENT_WINDOW = 100;
 /** `gh pr list --json files` fetches files(first: 100). */
 export const FILE_WINDOW = 100;
 
+/**
+ * Mirrors the sensitive-path list in .claude/skills/pr-review-merge/SKILL.md
+ * step 2, which is the authority: change that list first, then this one and
+ * its test rows in the same PR.
+ */
 const SENSITIVE_PATH_RES = [
   /^\.claude\/settings(\.local)?\.json$/,
   /^\.claude\/skills\//,
+  /^\.claude\/agents\//,
   /^CLAUDE\.md$/,
   /^\.github\/workflows\//,
   /(^|\/)docker-compose\.yml$/,
