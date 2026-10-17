@@ -2,15 +2,18 @@
 /**
  * The dispatch gate: a bead fails a mechanical check BEFORE work starts on
  * it (ugcportal-kt3k). Exits non-zero when a bead is missing any required
- * element of the bead-template form, or when its premise is stale. Stale
- * means one of: its `Premise verified` line names a commit that is not on
- * `main` at all (not an ancestor of `origin/main`, usually a branch commit
- * whose PR was since squash-merged -- main has the change, under the squash
- * commit's different sha -- and sometimes a branch not yet merged; either
- * way it cannot be path-compared with main's HEAD); or a commit on `main`
- * since the premise touched a path the bead's `Premise depends on:` line
- * declares; or the bead declares no dependency at all -- a premise with no
- * `Premise depends on:` line fails, because absent must not read as `none`;
+ * element of the bead-template form, or when its premise is stale. Only
+ * the bead's NEWEST premise statement is judged, and stale means one of:
+ * that statement names no commit, or one that does not resolve in this
+ * repo (an older statement is never judged in its place); or it names a
+ * commit that is not on `main` at all (not an ancestor of `origin/main`,
+ * usually a branch commit whose PR was since squash-merged -- main has the
+ * change, under the squash commit's different sha -- and sometimes a branch
+ * not yet merged; either way it cannot be path-compared with main's HEAD);
+ * or a commit on `main` since the premise touched a path its
+ * `Premise depends on:` line declares; or it declares no dependency at all
+ * -- a premise with no `Premise depends on:` line fails, because absent
+ * must not read as `none`;
  * or the declaration cannot be checked (it lists nothing, an item is not
  * a repo-relative path, or `none` is combined with anything but one
  * parenthesised reason); or a declared path does not exist at origin/main's
@@ -128,23 +131,32 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
  * The rule, in the order the check applies it:
  *
  *   1. The premise commit must be ON main: an ancestor of `origin/main` (or
- *      HEAD itself). `premiseCommits` counts both directions -- `behind`,
+ *      HEAD itself). `premise-fresh` counts both directions -- `behind`,
  *      main's commits the premise lacks, and `notOnMain`, the premise's own
  *      commits main lacks. A commit built on top of HEAD (a premise verified
  *      inside a branch) has `behind === 0` and is still not on main; in this
  *      repo's squash-merge flow it STAYS off main after its PR merges. Its
- *      changes cannot be path-compared with main's history, so it fails, and
- *      an off-main premise never rescues a stale on-main one.
- *   2. The FRESHEST on-main premise statement is the one judged -- the one
- *      the fewest main commits have passed. Each statement is dated by the
- *      first commit-shaped token after its label (7-40 hex characters, an
- *      all-digit one included), and by nothing else on its line: if that
- *      token does not resolve -- a typo, or a branch commit pruned after its
- *      PR was squash-merged -- the statement names no commit and dates
- *      nothing; a later commit on the same line never stands in for it. A
- *      bead re-verified today still carries yesterday's line in its log,
- *      and the newer verification and its declaration supersede the older
- *      ones.
+ *      changes cannot be path-compared with main's history, so it fails.
+ *   2. The NEWEST premise statement -- the last one in the order
+ *      `findPremiseLines` returns them: the description's, then the notes',
+ *      each top to bottom -- is the one judged, and only its declaration is
+ *      read. It is dated by the first commit-shaped token after its label
+ *      (7-40 hex characters, an all-digit one included), and by nothing else
+ *      on its line; a later commit on the same line never stands in for it.
+ *      If that statement names no commit, or its token does not resolve (a
+ *      typo, or a branch commit pruned after its PR was squash-merged), or
+ *      it resolves to a commit off main (rule 1), the bead FAILS: an older
+ *      statement is never judged in its place. A bead's premise is whatever
+ *      its author last asserted, and an older statement can carry a
+ *      narrower declaration -- falling back to it would check main's
+ *      movement against paths the author has since said are not enough,
+ *      which is the understated-declaration pass K5 forbids, introduced by
+ *      the gate rather than the author (PR #289 review round 4, M1). The
+ *      cure for an old typo'd or pruned line is to append a fresh verified
+ *      one, which re-verification requires anyway. This check ignores
+ *      older statements rather than failing on them: a bead re-verified
+ *      today still carries yesterday's line in its log, garbled or not
+ *      (`premise-present` still passes when any statement resolves).
  *   3. That statement must carry a `Premise depends on:` declaration
  *      (`PREMISE_DEPENDS_FORM`). Absent is a FAILURE, never read as "none":
  *      a check that matched nothing must not look like one that passed. A
@@ -242,17 +254,16 @@ const SHA_RE = /\b([0-9a-f]{7,40})\b/g;
  *     at" / "6da3675: read ...", ugcportal-48zb's shape). The next line is
  *     otherwise never read for commits. It used to be joined whole, and a
  *     log line under a premise ("Dispatched ... from origin/main <newer>")
- *     then lent the premise a commit it was never verified at; the freshest
- *     such commit is the one judged, so the premise was compared with main
+ *     then lent the premise a commit it was never verified at; the rule
+ *     then judged the freshest commit, so the premise was compared with main
  *     only from the borrowed commit on, and a touch in between was never
  *     seen (PR #289 review, M1; ugcportal-5x8 and ugcportal-rma carried the
  *     shape on 2026-10-17, borrowing d23add1 from a SCOPE EXTENDED line).
  *
- * A statement whose commit cannot be isolated this way names no commit and
- * is skipped, not failed: `premise-present` fails the bead loudly when NO
- * statement names a commit, and when another statement does, judging that
- * one instead can only examine the same or more of main's history -- an
- * unreadable statement never makes the judged commit fresher.
+ * A statement whose commit cannot be isolated this way names no commit.
+ * `premise-present` fails the bead when NO statement names a resolvable
+ * commit; `premise-fresh` fails it when the NEWEST statement does not,
+ * whatever the older ones name (`PREMISE_FRESHNESS_COST`'s comment, rule 2).
  *
  * A premise statement is a line where the word `premise` is used as a
  * LABEL: followed by `verified`, `checked`, `measured` or `confirmed`
@@ -267,9 +278,13 @@ const SHA_RE = /\b([0-9a-f]{7,40})\b/g;
  * shapes in rounds 1 and 2).
  *
  * A statement's `shas` are the commit-shaped tokens after its label, in
- * order; `premiseCommits` dates the statement by the FIRST of them and only
- * that one, whether or not it resolves -- see `premiseCommits` for why a
+ * order; `resolveStatement` dates the statement by the FIRST of them and only
+ * that one, whether or not it resolves -- see `resolveStatement` for why a
  * later token never stands in for an unresolvable first one.
+ *
+ * Statements are returned oldest first as far as the fields allow: the
+ * description's (written when the bead was filed) before the notes'
+ * (appended since), each top to bottom. `premise-fresh` judges the last.
  *
  * A line that OPENS with `Premise depends on:` is a declaration, not a
  * premise statement, and starts none of its own; and on any statement, the
@@ -283,7 +298,7 @@ const SHA_RE = /\b([0-9a-f]{7,40})\b/g;
  */
 export function findPremiseLines(notes, description = "") {
   const out = [];
-  for (const field of [String(notes || ""), String(description || "")]) {
+  for (const field of [String(description || ""), String(notes || "")]) {
     const lines = field.split("\n");
     for (let i = 0; i < lines.length; i++) {
       if (!isPremiseStatementStart(lines[i])) continue;
@@ -770,8 +785,9 @@ export const CHECKS = [
     const lines = findPremiseLines(notes(b), desc(b));
     if (lines.length === 0)
       return { ok: false, detail: "no `Premise verified` line in the notes or the description" };
-    const { resolved, unresolved } = premiseCommits(lines, ctx);
-    if (resolved.length === 0) {
+    const dated = lines.map((st) => resolveStatement(st, ctx));
+    if (!dated.some((d) => d.kind === "resolved")) {
+      const unresolved = dated.filter((d) => d.kind === "unresolved").map((d) => d.token);
       return {
         ok: false,
         detail:
@@ -784,44 +800,53 @@ export const CHECKS = [
   }),
 
   check("premise-fresh", "no main commit since the premise touched a path it depends on", ["notes", "description"], (b, ctx) => {
-    const { resolved, unresolved } = premiseCommits(findPremiseLines(notes(b), desc(b)), ctx);
-    if (resolved.length === 0) {
+    const lines = findPremiseLines(notes(b), desc(b));
+    if (lines.length === 0) {
       // premise-present already reported the real problem; do not report it
       // twice under a different name.
-      return { ok: false, detail: "no resolvable premise commit to check freshness against" };
+      return { ok: false, detail: "no premise statement to check freshness against" };
     }
+    // The NEWEST statement -- the last one, in the order findPremiseLines
+    // returns them -- is the one judged, and only its declaration is read
+    // (PREMISE_FRESHNESS_COST's comment, rule 2). When it cannot be dated,
+    // the bead fails here; an older statement is never judged in its place.
+    const newest = lines[lines.length - 1];
+    const notJudged = lines.length > 1 ? ` The ${lines.length - 1} older premise statement(s) on this bead are not judged in its place.` : "";
+    const at = resolveStatement(newest, ctx);
+    if (at.kind === "none") {
+      return {
+        ok: false,
+        detail: `the newest premise statement names no commit (${JSON.stringify(newest.line.length > 80 ? `${newest.line.slice(0, 80)}...` : newest.line)}), so its freshness cannot be checked.${notJudged} ${PREMISE_FRESHNESS_COST}`,
+      };
+    }
+    if (at.kind === "unresolved") {
+      return {
+        ok: false,
+        detail: `the newest premise statement names ${at.token}, which does not resolve in this repo (a typo, or a branch commit pruned after its PR was squash-merged), so its freshness cannot be checked.${notJudged} ${PREMISE_FRESHNESS_COST}`,
+      };
+    }
+    const behind = ctx.git.commitsAhead(at.full);
+    const notOnMain = ctx.git.commitsNotOnMain(at.full);
     // An unanswerable count (`git rev-list` failed) is Infinity: the
     // comparison was not made, so say so rather than print a count -- and
     // fail, since a comparison that was not made cannot have found the
     // premise fresh.
-    const unmeasured = resolved.find((r) => !Number.isFinite(r.behind) || !Number.isFinite(r.notOnMain));
-    if (unmeasured) {
+    if (!Number.isFinite(behind) || !Number.isFinite(notOnMain)) {
       return {
         ok: false,
-        detail: `premise commit ${unmeasured.short} could not be compared with head ref ${ctx.git.head}: \`git rev-list\` failed, so no commit count was measured. ${PREMISE_FRESHNESS_COST}`,
+        detail: `premise commit ${at.short} could not be compared with head ref ${ctx.git.head}: \`git rev-list\` failed, so no commit count was measured. ${PREMISE_FRESHNESS_COST}`,
       };
     }
     // Only a premise commit ON main can be path-compared with main's
-    // history; an off-main one never rescues a stale on-main one. See
-    // PREMISE_FRESHNESS_COST's comment, rule 1.
-    const onMain = resolved.filter((r) => r.notOnMain === 0);
-    if (onMain.length === 0) {
-      const off = resolved[0];
+    // history (rule 1).
+    if (notOnMain !== 0) {
       return {
         ok: false,
-        detail: `premise commit ${off.short} is not on origin/main: ${off.notOnMain} commit(s) of its history are not in origin/main ${ctx.headShort}. It is usually a branch commit whose PR was since squash-merged (main then has the change under a different sha), sometimes one not yet merged; either way it is not in main's history, so it cannot be compared with main's HEAD -- re-verify against origin/main's HEAD. ${PREMISE_FRESHNESS_COST}`,
+        detail: `premise commit ${at.short} is not on origin/main: ${notOnMain} commit(s) of its history are not in origin/main ${ctx.headShort}. It is usually a branch commit whose PR was since squash-merged (main then has the change under a different sha), sometimes one not yet merged; either way it is not in main's history, so it cannot be compared with main's HEAD -- re-verify against origin/main's HEAD.${notJudged} ${PREMISE_FRESHNESS_COST}`,
       };
     }
-    // Judge the freshest on-main premise (rule 2). Several statements can
-    // tie -- the same commit named twice -- and their declarations combine.
-    const behind = Math.min(...onMain.map((r) => r.behind));
-    const freshest = onMain.filter((r) => r.behind === behind);
-    const at = freshest[0];
-    // A statement skipped because its first token does not resolve is named
-    // up front, so a run that judged an older statement says why.
-    const skipped = unresolved.length === 0 ? "" : `[${unresolved.length} other premise statement(s) skipped, dating nothing: ${unresolvedPhrase(unresolved)}] `;
-    const where = `${skipped}premise verified at ${at.full.slice(0, 7)} (${behind === 0 ? "origin/main's current HEAD" : `${behind} commit(s) behind origin/main ${ctx.headShort}`})`;
-    const decl = combineDeclarations(freshest.map((r) => r.depends));
+    const where = `premise verified at ${at.full.slice(0, 7)} (${behind === 0 ? "origin/main's current HEAD" : `${behind} commit(s) behind origin/main ${ctx.headShort}`})`;
+    const decl = newest.depends || { kind: "missing" };
     if (decl.kind === "missing") {
       return {
         ok: false,
@@ -894,57 +919,40 @@ export const CHECKS = [
 export const EXAMINED_FIELDS = [...new Set(CHECKS.flatMap((c) => c.fields))];
 
 /**
- * Resolve each premise statement to at most ONE commit -- its first
- * commit-shaped token -- each with how many commits `origin/main` is ahead
- * of it (`behind`), how many of its own commits are not on `origin/main`
- * (`notOnMain`), and the declaration of the statement it came from. Both
- * counts are needed: HEAD and every descendant of HEAD have `behind === 0`.
+ * Resolve ONE premise statement to at most one commit: its first
+ * commit-shaped token. `{kind: "none"}` when the statement names no commit,
+ * `{kind: "unresolved", token}` when that token does not resolve, and
+ * `{kind: "resolved", short, full}` otherwise. `premise-fresh` calls this for
+ * the newest statement only, and fails the bead on anything but `resolved`;
+ * `premise-present` calls it for every statement, and fails when none
+ * resolves.
  *
- * `unresolved` lists the first token of every statement that does not
- * resolve; such a statement contributes no commit. Leaving it out can only
- * make the judged commit OLDER or leave none (`premise-present` then fails,
- * naming the token), never fresher -- unlike dating it by a later token.
- *
- * @returns {{resolved: Array<{short: string, full: string, behind: number, notOnMain: number, depends: Declaration}>, unresolved: string[]}}
+ * @returns {{kind: "none"} | {kind: "unresolved", token: string} | {kind: "resolved", short: string, full: string}}
  */
-function premiseCommits(lines, ctx) {
-  const resolved = [];
-  const unresolved = [];
-  for (const { shas, depends } of lines) {
-    // A statement is dated by its FIRST commit-shaped token and by nothing
-    // else on its line. A bd note is one line, and a later commit mentioned
-    // in the same note ("... merged at a532388 during this audit") would
-    // otherwise date the premise from there and hide every touch in between
-    // (PR #289 review round 2, M1; ugcportal-vl32's live shape). That holds
-    // when the first token does NOT resolve too: a typo'd verified-at sha,
-    // or a branch commit pruned after its PR was squash-merged and its
-    // branch deleted (this repo deletes merged branches), would otherwise
-    // hand the date to the next token on the line, often a newer commit
-    // (PR #289 review round 3, M1). So no token after the
-    // first is ever tried. An all-digit token (a CI run id) is a candidate
-    // like any other: an abbreviated sha is all digits about one time in
-    // 27 at seven characters, and skipping those would reopen the same
-    // fall-through for them. A run id written before the sha therefore
-    // fails, naming it, which is the fail-closed direction. If the first
-    // commit is off main, the statement is off main and a later on-main
-    // commit on the line does not rescue it (ugcportal-y6ol: verified at
-    // branch commit 2cd6d60, its line later cites PR #97's 35800c9).
-    const [sha] = shas;
-    if (sha === undefined) continue;
-    const full = ctx.git.resolveCommit(sha);
-    if (!full) {
-      unresolved.push(sha);
-      continue;
-    }
-    resolved.push({
-      short: sha,
-      full,
-      behind: ctx.git.commitsAhead(full),
-      notOnMain: ctx.git.commitsNotOnMain(full),
-      depends: depends || { kind: "missing" },
-    });
-  }
-  return { resolved, unresolved };
+function resolveStatement({ shas }, ctx) {
+  // A statement is dated by its FIRST commit-shaped token and by nothing
+  // else on its line. A bd note is one line, and a later commit mentioned
+  // in the same note ("... merged at a532388 during this audit") would
+  // otherwise date the premise from there and hide every touch in between
+  // (PR #289 review round 2, M1; ugcportal-vl32's live shape). That holds
+  // when the first token does NOT resolve too: a typo'd verified-at sha,
+  // or a branch commit pruned after its PR was squash-merged and its
+  // branch deleted (this repo deletes merged branches), would otherwise
+  // hand the date to the next token on the line, often a newer commit
+  // (PR #289 review round 3, M1). So no token after the
+  // first is ever tried. An all-digit token (a CI run id) is a candidate
+  // like any other: an abbreviated sha is all digits about one time in
+  // 27 at seven characters, and skipping those would reopen the same
+  // fall-through for them. A run id written before the sha therefore
+  // fails, naming it, which is the fail-closed direction. If the first
+  // commit is off main, the statement is off main and a later on-main
+  // commit on the line does not rescue it (ugcportal-y6ol: verified at
+  // branch commit 2cd6d60, its line later cites PR #97's 35800c9).
+  const [sha] = shas;
+  if (sha === undefined) return { kind: "none" };
+  const full = ctx.git.resolveCommit(sha);
+  if (!full) return { kind: "unresolved", token: sha };
+  return { kind: "resolved", short: sha, full };
 }
 
 /** "the commit this premise names, X, does not resolve in this repo", for one or several. */
@@ -952,28 +960,6 @@ function unresolvedPhrase(tokens) {
   return tokens.length === 1
     ? `the commit this premise names, ${tokens[0]}, does not resolve in this repo`
     : `the commits these premises name, ${tokens.join(", ")}, do not resolve in this repo`;
-}
-
-/**
- * Combine the declarations of premise statements that tie for freshest.
- * Fails closed: any unparseable declaration wins; otherwise path lists are
- * UNIONED (stricter than either); `none` only when no tied statement lists
- * paths; `missing` only when none of them declares anything.
- *
- * @param {Declaration[]} decls
- * @returns {Declaration}
- */
-export function combineDeclarations(decls) {
-  const lists = decls.filter((d) => d.kind === "paths");
-  if (lists.length > 0) {
-    return {
-      kind: "paths",
-      paths: [...new Set(lists.flatMap((d) => d.paths))],
-      problems: [...new Set(lists.flatMap((d) => d.problems))],
-      raw: lists.map((d) => d.raw).join(" | "),
-    };
-  }
-  return decls.find((d) => d.kind === "none") || { kind: "missing" };
 }
 
 // --- running the checks ------------------------------------------------------

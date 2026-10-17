@@ -196,7 +196,9 @@ when a bead is missing any element of the `bead-template` form — user story,
 both scope lines, K-numbered criteria, a `Verified by` on each, a guardrail,
 a premise, `model`/`model_effort`, `cc_type`/`cc_scope` — or when its
 premise is stale. Stale is scoped by the paths the premise declares
-(`ugcportal-ul2j`): the freshest `Premise verified` line on `main` must carry
+(`ugcportal-ul2j`): the bead's newest premise line is the one judged — an
+older one never stands in for it, so a newest line that names no commit, or
+one that does not resolve, fails — and it must carry
 a `Premise depends on: <path>, <path>` line (or `Premise depends on: none
 (<the external fact>)`), and fails when a commit since it touched a declared
 path — naming the commit and the path — when that line is absent, when it

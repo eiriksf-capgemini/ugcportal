@@ -65,9 +65,14 @@ Premise depends on: none (<the external fact the premise rests on>)
 
 Paths are repo-relative, comma-separated, matched literally (`[id]` is a
 directory name, not a glob); a directory covers everything under it. The
-gate judges the bead's *freshest* premise line that is on `origin/main`, and
-fails it when:
+gate judges the bead's *newest* premise line — the last one, reading the
+description first and then the notes, each top to bottom — and reads only
+that line's declaration. It fails the bead when:
 
+- that line names no commit, or a commit that does not resolve (a typo, or
+  a branch commit pruned after its PR was squash-merged) — an older premise
+  line is never judged in its place, because it may declare fewer paths
+  than the newest one; append a freshly verified line instead;
 - a commit on `origin/main` since that premise touched a declared path — it
   names the first five such commits, oldest first, each with up to five of
   the declared files it touched, then counts the rest;

@@ -37,7 +37,6 @@ import {
   MODEL_TIERS,
   SUBSTANCE_CHECKS_NOT_MADE,
   USER_STORY_WINDOW,
-  combineDeclarations,
   findDeclaration,
   findPremiseLines,
   formatReport,
@@ -421,7 +420,7 @@ describe("K2: premise freshness against origin/main (kt3k's cases, under ul2j's 
     expect(one.stdout).toContain(`(1 commit(s) behind origin/main ${HEAD().slice(0, 7)}) is stale`);
   });
 
-  it("the freshest premise on a bead wins when several are recorded", () => {
+  it("the newest premise on a bead is judged when several are recorded", () => {
     // A bead re-verified today still carries yesterday's line in its log.
     const bead = completeBead({
       notes: [
@@ -484,9 +483,10 @@ describe("K2: premise freshness against origin/main (kt3k's cases, under ul2j's 
     });
   }
 
-  it("an off-main premise does not rescue a bead whose on-main premise is stale", () => {
+  it("a newest premise verified off main fails as off main, and the older on-main statement is not judged in its place", () => {
     // The old freshest-wins reduction picked the descendant (0 behind) over
-    // the stale main commit and passed the bead.
+    // the stale main commit and passed the bead; rounds 1-3 of PR #289
+    // dropped the off-main statement and judged the older one instead.
     const bead = completeBead({
       notes: [
         `Premise verified 2026-10-10 at origin/main ${OLDEST()}.`,
@@ -498,7 +498,9 @@ describe("K2: premise freshness against origin/main (kt3k's cases, under ul2j's 
     const res = runFixture(bead);
     expect(res.status).toBe(1);
     expect(failedChecks(res.stdout)).toEqual(["premise-fresh"]);
-    expect(res.stdout).toContain(`premise verified at ${OLDEST().slice(0, 7)} (2 commit(s) behind origin/main ${HEAD().slice(0, 7)}) is stale`);
+    expect(res.stdout).toContain(`premise commit ${descendant} is not on origin/main`);
+    expect(res.stdout).toContain("The 1 older premise statement(s) on this bead are not judged in its place.");
+    expect(res.stdout).not.toContain(`premise verified at ${OLDEST().slice(0, 7)}`);
   });
 
   it("M1 round 2: a statement whose first commit token is off main is not rescued by an on-main commit later on its line", () => {
@@ -742,7 +744,7 @@ describe("ul2j: premise freshness is scoped by the paths the premise declares", 
     expect(runNotes(premise(6, "src/lib/a.ts")).status).toBe(0);
   });
 
-  it("K3: the freshest premise is the one judged, so an older declaration does not cover a newer premise", () => {
+  it("K3: the newest premise is the one judged, so an older declaration does not cover a newer premise", () => {
     const res = runNotes([premise(0, "none (an external fact)"), premise(3)].join("\n"));
     expect(res.status).toBe(1);
     expect(freshLine(res.stdout)).toContain(`premise verified at ${short(c[3])} (3 commit(s) behind`);
@@ -780,12 +782,19 @@ describe("ul2j: premise freshness is scoped by the paths the premise declares", 
     const acrossBlank = `${premise(0)}\n\nPremise depends on: none (an external fact)`;
     const fromAnother = `${premise(0)}\n${premise(1, "none (an external fact)")}`;
     expect(freshLine(runNotes(acrossBlank).stdout)).toContain("has no `Premise depends on:` line");
-    // in the second, c1 is the freshest and carries its own none -- so the
+    // in the second, c1 is the newest and carries its own none -- so the
     // OLDER c0 statement is not what is judged; assert the c1 one was.
     expect(freshLine(runNotes(fromAnother).stdout)).toContain(`premise verified at ${short(c[1])}`);
-    const olderOnly = `${premise(1)}\nPremise measured 2026-10-01 at ${c[0]}.\nPremise depends on: none (an external fact)`;
-    // c1 is freshest; the declaration two lines down belongs to the c0 statement, not to it
-    expect(freshLine(runNotes(olderOnly).stdout)).toContain(`premise verified at ${short(c[1])} (5 commit(s) behind origin/main ${short(c[6])}) has no`);
+    // Here the c0 statement comes last, so it is the newest and is judged
+    // with its own none; the c1 statement above it, which declares nothing,
+    // neither lends it a commit nor takes its declaration.
+    const newestLast = `${premise(1)}\nPremise measured 2026-10-01 at ${c[0]}.\nPremise depends on: none (an external fact)`;
+    const res = runNotes(newestLast);
+    expect(res.status).toBe(0);
+    expect(freshLine(res.stdout)).toContain(`premise verified at ${short(c[0])} (6 commit(s) behind origin/main ${short(c[6])}) declares \`Premise depends on: none\``);
+    // and with the order reversed, the c1 statement is the newest, and fails for declaring nothing
+    const c1Last = `Premise measured 2026-10-01 at ${c[0]}.\nPremise depends on: none (an external fact)\n${premise(1)}`;
+    expect(freshLine(runNotes(c1Last).stdout)).toContain(`premise verified at ${short(c[1])} (5 commit(s) behind origin/main ${short(c[6])}) has no`);
   });
 
   // --- PR #289 review, M1: a premise is dated by its OWN commit, never by a
@@ -824,7 +833,9 @@ describe("ul2j: premise freshness is scoped by the paths the premise declares", 
   it("M1: a premise line naming no commit does not take one from the note under it (ugcportal-5x8 / ugcportal-rma's shape)", () => {
     // 5x8 and rma: a premise statement with no sha, then a SCOPE EXTENDED
     // note naming d23add1, which the old line-pair join read as the premise's
-    // commit -- the freshest one on the bead, so the one judged.
+    // commit -- the freshest one on the bead, so the one judged. That
+    // statement is now the newest, names no commit, and fails the bead; the
+    // older c0 statement is not judged in its place (round 4).
     const notes = [
       `${ABOUT_C0()}\nPremise depends on: src/lib/a.ts`,
       'Premise re-verified 2026-10-12: "the review scope names none of these."',
@@ -832,7 +843,11 @@ describe("ul2j: premise freshness is scoped by the paths the premise declares", 
     ].join("\n");
     const res = runNotes(notes);
     expect(res.status).toBe(1);
-    STALE_AT_C0(res.stdout);
+    expect(failedChecks(res.stdout)).toEqual(["premise-fresh"]);
+    expect(freshLine(res.stdout)).toContain('the newest premise statement names no commit ("Premise re-verified 2026-10-12');
+    expect(freshLine(res.stdout)).toContain("The 1 older premise statement(s) on this bead are not judged in its place.");
+    expect(freshLine(res.stdout)).not.toContain(`premise verified at ${short(c[2])}`);
+    expect(freshLine(res.stdout)).not.toContain(`premise verified at ${short(c[0])}`);
     expect(findPremiseLines(notes).map((s) => s.shas)).toEqual([[c[0]], []]);
   });
 
@@ -896,9 +911,9 @@ describe("ul2j: premise freshness is scoped by the paths the premise declares", 
     expect(res.stdout).not.toContain(`premise verified at ${short(c[2])}`);
   });
 
-  it("M1 round 3: a statement whose first token does not resolve is skipped, so an older statement is judged and the skip is named", () => {
-    // Leaving the unresolvable statement out makes the judged commit older
-    // (c0, stale), never fresher (c2, which the line merely mentions).
+  it("M1 round 4: a newest statement whose first token does not resolve fails the bead, and neither an older statement nor a later token is judged", () => {
+    // Round 3 skipped this statement and judged the older c0 one; round 4
+    // fails it instead (PREMISE_FRESHNESS_COST's comment, rule 2).
     const notes = [
       ABOUT_C0(),
       "Premise depends on: src/lib/a.ts",
@@ -907,10 +922,12 @@ describe("ul2j: premise freshness is scoped by the paths the premise declares", 
     const res = runNotes(notes);
     expect(res.status).toBe(1);
     expect(failedChecks(res.stdout)).toEqual(["premise-fresh"]);
-    STALE_AT_C0(res.stdout);
-    expect(freshLine(res.stdout)).toContain(
-      "[1 other premise statement(s) skipped, dating nothing: the commit this premise names, deadbee0deadbee0, does not resolve in this repo]",
-    );
+    const line = freshLine(res.stdout);
+    expect(line).toContain("the newest premise statement names deadbee0deadbee0, which does not resolve in this repo");
+    expect(line).toContain("Re-run the premise check against origin/main's current HEAD");
+    expect(line).not.toContain(`premise verified at ${short(c[0])}`);
+    expect(line).not.toContain(`premise verified at ${short(c[2])}`);
+    expect(line).not.toContain("skipped");
   });
 
   it("M1 round 3: an all-digit token (a CI run id) ahead of the sha is the statement's commit, so it fails naming the run id", () => {
@@ -1119,7 +1136,156 @@ describe("M1 round 3: only the first commit token is ever tried (stubbed git)", 
   });
 });
 
-describe("parseDeclaration / findDeclaration / combineDeclarations", { timeout: 30_000 }, () => {
+describe("M1 round 4: the newest premise statement is judged, and an older one never stands in for it", { timeout: 60_000 }, () => {
+  // The round-4 reviewer's layout: c0 has src/a.ts and src/b.ts, c1 touches
+  // only README.md, c2 touches src/b.ts, c3 (HEAD) touches README.md. s1 is
+  // a side-branch commit forked from c1. Statement A is verified at c0 and
+  // declares src/a.ts only; statement B, newer, is verified at c1 and also
+  // declares src/b.ts -- which c2 touched. Judged on B, the bead is stale.
+  // Judged on A (as rounds 1-3 did whenever B could not be dated), it passes:
+  // nothing since c0 touched src/a.ts.
+  let dir;
+  let c;
+  let s1;
+  const run = (args) => execFileSync("git", args, { cwd: dir, encoding: "utf8" }).trim();
+  const short = (sha) => sha.slice(0, 7);
+  beforeAll(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "ul2j-newest-"));
+    run(["init", "-q", "-b", "main"]);
+    run(["config", "user.email", "test@example.com"]);
+    run(["config", "user.name", "Test"]);
+    const write = (rel, text) => {
+      fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      fs.writeFileSync(path.join(dir, rel), text);
+    };
+    const commit = (msg) => {
+      run(["add", "-A"]);
+      run(["commit", "-q", "-m", msg]);
+      return run(["rev-parse", "HEAD"]);
+    };
+    write("src/a.ts", "a v0\n");
+    write("src/b.ts", "b v0\n");
+    write("README.md", "r0\n");
+    c = [commit("c0")];
+    write("README.md", "r1\n");
+    c.push(commit("c1 readme"));
+    run(["checkout", "-q", "-b", "side"]);
+    write("side.txt", "side\n");
+    s1 = commit("s1 side branch");
+    run(["checkout", "-q", "main"]);
+    write("src/b.ts", "b v1\n");
+    c.push(commit("c2 b.ts"));
+    write("README.md", "r3\n");
+    c.push(commit("c3"));
+  }, 30_000);
+  afterAll(() => {
+    if (dir) fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const A = () => `Premise verified 2026-10-13 at origin/main ${c[0]}: a.ts holds v0. Premise depends on: src/a.ts`;
+  const B = (at) => `Premise verified 2026-10-15 at origin/main ${at}: b.ts holds v0 and a.ts holds v0. Premise depends on: src/a.ts, src/b.ts`;
+  const runNotes = (notes) => {
+    const file = path.join(dir, `beads-${Math.random().toString(36).slice(2)}.json`);
+    fs.writeFileSync(file, JSON.stringify([completeBead({ notes })]));
+    return runCliAllowFail(["--beads", file, "--repo", dir, "--head", c[3]]);
+  };
+  const freshLine = (stdout) => stdout.split("\n").find((l) => /^\s+(ok|FAIL)\s+premise-fresh\b/.test(l)) || "";
+  /** Not judged at c0 on src/a.ts: the round-1-3 fallback's PASS. */
+  const NOT_JUDGED_AT_A = (line) => {
+    expect(line).not.toContain(`premise verified at ${short(c[0])}`);
+    expect(line).not.toContain("none of those commits touched");
+    expect(line).toContain("The 1 older premise statement(s) on this bead are not judged in its place.");
+  };
+
+  it("B written correctly: fails, naming c2 touching src/b.ts", () => {
+    const res = runNotes([A(), B(c[1])].join("\n"));
+    expect(res.status).toBe(1);
+    expect(failedChecks(res.stdout)).toEqual(["premise-fresh"]);
+    expect(freshLine(res.stdout)).toContain(`premise verified at ${short(c[1])} (2 commit(s) behind origin/main ${short(c[3])}) is stale`);
+    expect(freshLine(res.stdout)).toContain(`${short(c[2])} touched src/b.ts`);
+  });
+
+  it("B with a typo'd sha: fails, naming the token -- not judged at c0 on src/a.ts", () => {
+    const typo = `${c[1].slice(0, 39)}${c[1].endsWith("0") ? "1" : "0"}`;
+    const res = runNotes([A(), B(typo)].join("\n"));
+    expect(res.status).toBe(1);
+    expect(failedChecks(res.stdout)).toEqual(["premise-fresh"]);
+    const line = freshLine(res.stdout);
+    expect(line).toContain(`the newest premise statement names ${typo}, which does not resolve in this repo`);
+    expect(line).toContain("Re-run the premise check against origin/main's current HEAD");
+    NOT_JUDGED_AT_A(line);
+  });
+
+  it("B with a 7-letter a-f English word ahead of its sha (`effaced`): fails, naming the word", () => {
+    const b = `Premise re-verified 2026-10-16 once the effaced section was restored, at origin/main ${c[1]}: b.ts holds v0. Premise depends on: src/a.ts, src/b.ts`;
+    const res = runNotes([A(), b].join("\n"));
+    expect(res.status).toBe(1);
+    expect(failedChecks(res.stdout)).toEqual(["premise-fresh"]);
+    const line = freshLine(res.stdout);
+    expect(line).toContain("the newest premise statement names effaced, which does not resolve in this repo");
+    NOT_JUDGED_AT_A(line);
+  });
+
+  it("B at a side-branch commit: fails as off main naming it while it resolves, and fails naming the token once it is pruned", () => {
+    const notes = [A(), B(s1)].join("\n");
+    const off = runNotes(notes);
+    expect(off.status).toBe(1);
+    expect(failedChecks(off.stdout)).toEqual(["premise-fresh"]);
+    expect(freshLine(off.stdout)).toContain(`premise commit ${s1} is not on origin/main`);
+    NOT_JUDGED_AT_A(freshLine(off.stdout));
+
+    run(["branch", "-D", "side"]);
+    run(["reflog", "expire", "--expire=now", "--all"]);
+    run(["gc", "-q", "--prune=now"]);
+    // the precondition the shape needs: s1 is really gone
+    expect(() => run(["cat-file", "-e", `${s1}^{commit}`])).toThrow();
+
+    const pruned = runNotes(notes);
+    expect(pruned.status).toBe(1);
+    expect(failedChecks(pruned.stdout)).toEqual(["premise-fresh"]);
+    expect(freshLine(pruned.stdout)).toContain(`the newest premise statement names ${s1}, which does not resolve in this repo`);
+    NOT_JUDGED_AT_A(freshLine(pruned.stdout));
+  });
+
+  it("a statement in the notes is newer than one in the description, so it is the one judged", () => {
+    // ugcportal-ul2j's own shape: the description's premise (filed first)
+    // declares less than the notes' later one.
+    const base = completeBead();
+    const bead = { ...base, description: `${base.description}\n\n${A()}`, notes: B(c[1]) };
+    const file = path.join(dir, `beads-${Math.random().toString(36).slice(2)}.json`);
+    fs.writeFileSync(file, JSON.stringify([bead]));
+    const res = runCliAllowFail(["--beads", file, "--repo", dir, "--head", c[3]]);
+    expect(res.status).toBe(1);
+    expect(failedChecks(res.stdout)).toEqual(["premise-fresh"]);
+    expect(freshLine(res.stdout)).toContain(`premise verified at ${short(c[1])} (2 commit(s) behind origin/main ${short(c[3])}) is stale`);
+    expect(freshLine(res.stdout)).toContain(`${short(c[2])} touched src/b.ts`);
+  });
+
+  it("older statements that are garbage are ignored, not errors: the newest one is judged and passes", () => {
+    // Newest at c2 declaring src/a.ts: c3 touched only README.md, so it is
+    // fresh. Above it: a typo'd sha, a sha nothing resolves, a line with no
+    // sha, and a line naming HEAD itself (fresher than the newest) with no
+    // declaration -- which the freshest-wins rule of rounds 1-3 judged and
+    // failed. None of them is judged, and none is reported.
+    const notes = [
+      `Premise verified 2026-10-10 at origin/main deadbee0deadbee0: typo'd. Premise depends on: src/b.ts`,
+      `Premise verified 2026-10-11 on the side branch at ${"0".repeat(40)}. Premise depends on: src/b.ts`,
+      "Premise re-checked 2026-10-12: by eye, no sha.",
+      `Premise checked 2026-10-14 at origin/main ${c[3]}: declares nothing.`,
+      `Premise verified 2026-10-16 at origin/main ${c[2]}: a.ts holds v0. Premise depends on: src/a.ts`,
+    ].join("\n");
+    const res = runNotes(notes);
+    expect(res.status).toBe(0);
+    expect(failedChecks(res.stdout)).toEqual([]);
+    const line = freshLine(res.stdout);
+    expect(line).toMatch(
+      new RegExp(`^\\s+ok\\s+premise-fresh\\s+no main commit since the premise touched a path it depends on -- premise verified at ${short(c[2])} \\(1 commit\\(s\\) behind origin/main ${short(c[3])}\\); none of those commits touched its declared path\\(s\\): src/a\\.ts$`),
+    );
+    expect(line).not.toContain("skipped");
+    expect(line).not.toContain("deadbee0");
+  });
+});
+
+describe("parseDeclaration / findDeclaration", { timeout: 30_000 }, () => {
   it("parses a path list, stripping quoting, ./ and trailing punctuation", () => {
     expect(parseDeclaration("`src/a.ts`, ./docs/b.md, 'c/'.")).toEqual({
       kind: "paths",
@@ -1146,9 +1312,12 @@ describe("parseDeclaration / findDeclaration / combineDeclarations", { timeout: 
     const notes =
       "Premise verified 2026-10-17 at origin/main 3aa650846057e2d4ea2dc02c7e26da33d6dfc312 by the orchestrator: sed -n 563,583p scripts/check-bead-dispatch.mjs -- HOLDS. Premise depends on: scripts/check-bead-dispatch.mjs, scripts/check-bead-dispatch.test.mjs, .claude/skills/dispatch-bead/SKILL.md\nDispatched 2026-10-17 by the orchestrator.";
     const found = findPremiseLines(notes, description);
+    // the description's statement first and the notes' after it, so the
+    // last -- the one premise-fresh judges -- is the notes' newer one with
+    // its wider declaration
     expect(found.map((f) => [f.shas, f.depends.kind === "paths" ? f.depends.paths : f.depends.kind])).toEqual([
-      [["3aa650846057e2d4ea2dc02c7e26da33d6dfc312"], ["scripts/check-bead-dispatch.mjs", "scripts/check-bead-dispatch.test.mjs", ".claude/skills/dispatch-bead/SKILL.md"]],
       [["4c8584e58430f1c42d9a50966821ec0eb7047c7f"], ["scripts/check-bead-dispatch.mjs"]],
+      [["3aa650846057e2d4ea2dc02c7e26da33d6dfc312"], ["scripts/check-bead-dispatch.mjs", "scripts/check-bead-dispatch.test.mjs", ".claude/skills/dispatch-bead/SKILL.md"]],
     ]);
   });
 
@@ -1185,15 +1354,6 @@ describe("parseDeclaration / findDeclaration / combineDeclarations", { timeout: 
     expect(findDeclaration(["Premise verified at abc1234."], 0)).toEqual({ kind: "missing" });
   });
 
-  it("combineDeclarations fails closed on a tie: paths are unioned, none only without paths, missing only without either", () => {
-    const a = parseDeclaration("a.ts");
-    const b = parseDeclaration("b.ts");
-    const none = parseDeclaration("none (x)");
-    expect(combineDeclarations([a, none, b]).paths).toEqual(["a.ts", "b.ts"]);
-    expect(combineDeclarations([{ kind: "missing" }, none]).kind).toBe("none");
-    expect(combineDeclarations([{ kind: "missing" }])).toEqual({ kind: "missing" });
-    expect(combineDeclarations([a, parseDeclaration("")]).problems).toEqual(["the declaration lists nothing"]);
-  });
 });
 
 // --- K3: the run reports what it examined ------------------------------------
