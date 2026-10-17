@@ -21,8 +21,8 @@ import {
  *
  * Deliberately presentational and hook-free: every decision it makes is a
  * function of its props, so the whole of it can be rendered to static markup
- * in a test (the repo's vitest runs in a node environment — see
- * vitest.config.ts — so `renderToStaticMarkup` is the only rendering
+ * in a test (the repo's vitest runs in a node environment by default — see
+ * vitest.config.ts — where `renderToStaticMarkup` is the rendering
  * available, and this is the shape that suits it).
  *
  * One child keeps state of its own: `AttestExistingUpload`

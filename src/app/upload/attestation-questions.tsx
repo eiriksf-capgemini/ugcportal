@@ -82,7 +82,7 @@ export function AttestationFields({
   refusalEnding?: string;
   /**
    * The `data-*` attribute the block's outer fieldset carries, so a test
-   * (and only a test) can tell the upload form's block from a queue row's.
+   * can tell the upload form's block from a queue row's.
    */
   marker: "data-upload-attestation" | "data-attest-existing-upload";
 }) {

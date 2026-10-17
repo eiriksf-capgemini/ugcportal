@@ -220,9 +220,10 @@ export function mediaItemPath(previewId: string): string {
 /**
  * Where the owner answers the rights questions for a file they already
  * uploaded without them (ugcportal-gkax, POST /api/media/[id]/attestation).
- * Keyed on the row's own `Media.id`, which only its owner ever holds (the
- * 201 of their own upload): this is an owner-only write, not a public
- * handle, and the route refuses anybody else's id regardless.
+ * Keyed on the row's own `Media.id`, the id the queue row holds from its
+ * own upload's 201, rather than on the public `previewId`: this is an
+ * owner-only write, and the route's ownership gate (`requireOwnedMedia`)
+ * looks the row up by that id and refuses anybody else's.
  */
 export function mediaAttestationApiPath(mediaId: string): string {
   return `${MEDIA_UPLOAD_PATH}/${encodeURIComponent(mediaId)}/attestation`;

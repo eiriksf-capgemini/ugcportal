@@ -28,9 +28,10 @@ import {
  * own upload, and the route re-checks that anyway: an id that is not theirs
  * is a 403.
  *
- * WHERE, AND THE GAP THAT LEAVES. The upload queue is the only place an
- * owner sees their own uploads today, and it is component state that empties
- * when the page is left (ugcportal-smk). A file uploaded in an earlier visit
+ * WHERE, AND THE GAP THAT LEAVES. The upload queue is the only page on
+ * which an owner sees their own uploads at this commit (GET /api/media lists
+ * them, but no page renders that list), and it is component state that
+ * empties when the page is left (ugcportal-smk). A file uploaded in an earlier visit
  * therefore has nowhere to be answered from until the owner's library page
  * exists (ugcportal-bk57). Not built here.
  *

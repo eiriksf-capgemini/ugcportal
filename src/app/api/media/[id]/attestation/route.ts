@@ -25,9 +25,10 @@ type RouteContext = { params: Promise<{ id: string }> };
  *
  * THE RULE IS "THE SESSION USER OWNS THE FILE AND IT HAS NO ROW", and nothing
  * else. It is deliberately NOT keyed on whether the uploader is configured:
- * configured users are the population that lacks a row today, but any row
- * without one — a file published before ugcportal-3ae, say — is one its
- * uploader may answer for, and nobody else may.
+ * a configured user's upload is the one POST /api/media stores without a
+ * row since ugcportal-ho7j, but any file without one — a file published
+ * before ugcportal-3ae, say — is one its uploader may answer for, and
+ * nobody else may.
  *
  * WHAT IT REFUSES, and the status each refusal gets:
  *  - not signed in: 401; a file that is not the caller's: 403; no such file:
