@@ -520,6 +520,7 @@ describe("different people get different users (K2)", () => {
       delete process.env.ALLOWED_SIGNIN_EMAILS;
     }
 
+    expect(august).toHaveProperty("userId");
     const ids = [eirik, gry, august].map(
       (outcome) => (outcome as { userId: string }).userId,
     );

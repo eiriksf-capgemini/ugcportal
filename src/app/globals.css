@@ -122,7 +122,7 @@
 @source not "../../e2e/**/*.spec.ts";
 @source not "../../e2e/**/*.spec.tsx";
 @import "tw-animate-css";
-@import "shadcn/tailwind.css";
+@import "./vendor/shadcn-tailwind.css";
 /*
  * PhotoSwipe's own stylesheet (ugcportal-71y). Imported here rather than from
  * the gallery component so nothing in src/ has to import a .css file — the

@@ -181,6 +181,9 @@ describe("a configured uploader's image publishes on upload (ugcportal-ho7j K2)"
     expect(response.status).toBe(201);
     expect(body.publishRefusal).toBeNull();
     expect(typeof body.publishedAt).toBe("string");
+    // Stored without an attestation, and the 201 says so: this is what the
+    // upload page reads to offer the questions afterwards (ugcportal-gkax).
+    expect(body.attested).toBe(false);
 
     const row = await prisma.media.findUniqueOrThrow({
       where: { id: body.id },
@@ -282,6 +285,8 @@ describe("a configured uploader who DOES answer is held to the answer (ugcportal
     ).json();
 
     expect(body.publishRefusal).toBeNull();
+    // Stored WITH one, so the page offers nothing afterwards (ugcportal-gkax).
+    expect(body.attested).toBe(true);
     const row = await prisma.media.findUniqueOrThrow({ where: { id: body.id } });
     expect(await publicPreviewIds()).toEqual([row.previewId]);
   });
@@ -309,6 +314,8 @@ describe("an upload by anybody else is never published automatically (ugcportal-
     expect(body.publishedAt).toBeNull();
     // The ordinary uploader's body is unchanged by this bead: no new key.
     expect(body).not.toHaveProperty("publishRefusal");
+    // Nor by ugcportal-gkax: their upload always carries an attestation.
+    expect(body).not.toHaveProperty("attested");
     const row = await prisma.media.findUniqueOrThrow({ where: { id: body.id } });
     expect(row.publishedAt).toBeNull();
     expect(await publicPreviewIds()).toEqual([]);
