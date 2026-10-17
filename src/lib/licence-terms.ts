@@ -35,10 +35,10 @@
 export const MAX_LICENCE_TERMS_LENGTH = 2_000;
 
 /**
- * Why a grant was refused. Both are properties of the text alone, so both
- * are decided before any row is read.
+ * Why a grant was refused. All three are properties of the text alone, so
+ * all three are decided before any row is read.
  */
-export type LicenceTermsRefusal = "too_long" | "instagram_url";
+export type LicenceTermsRefusal = "too_long" | "instagram_url" | "bidi_control";
 
 export type LicenceTermsCheck =
   | { ok: true; value: string | null }
@@ -46,8 +46,8 @@ export type LicenceTermsCheck =
 
 /**
  * Code points a buyer cannot see, removed from the comparison text by CLASS
- * rather than by a hand list (round 1 of PR #297 found nine kinds of
- * invisible character, listed below, that a list of six had missed):
+ * rather than by a hand list, so that a kind nobody listed is caught as long
+ * as it is in one of these classes:
  *
  * - `\p{Default_Ignorable_Code_Point}` — Unicode's own set of code points a
  *   renderer shows as nothing when it has no glyph for them: zero-width
@@ -66,17 +66,26 @@ export type LicenceTermsCheck =
  *   as "instagram".
  * - `\p{Variation_Selector}`, already inside the first two, named anyway.
  *
- * Except `\p{White_Space}`: a line break, tab or space SEPARATES words for a
- * reader, so it is kept as a separator rather than glued over (gluing would
- * read "instagram.com is" as "instagram.comis" and let it through). Note
- * this is the Unicode property, not JavaScript's `\s`, which also counts
- * U+FEFF as space.
+ * Except `\p{White_Space}`. The only White_Space code points inside the
+ * classes above are the line-break and tab controls U+0009-U+000D and U+0085
+ * (all `\p{Cc}`; measured over every code point under Node 24's Unicode
+ * data); a plain space is in none of them and was never stripped.
+ * A line break or tab SEPARATES words for a reader, so it is kept as a
+ * separator rather than glued over: gluing would read "instagram.com\nis" as
+ * "instagram.comis" and let it through. Note this is the Unicode property,
+ * not JavaScript's `\s`, which also counts U+FEFF as space.
+ *
+ * Stripping is right for the INSTAGRAM comparison only while stripped code
+ * points change nothing about the ORDER a buyer reads. Bidi controls do
+ * change it, which is why they are refused outright (see
+ * {@link BIDI_CONTROL}) rather than relied on being stripped here.
  */
 const INVISIBLE =
   /(?!\p{White_Space})[\p{Default_Ignorable_Code_Point}\p{Cf}\p{Cc}\p{Mn}\p{Me}\p{Variation_Selector}]/gu;
 
 /**
- * The text as a buyer reads it, for comparison only — never what is stored:
+ * The text as a buyer reads it, in stored order, for comparison only — never
+ * what is stored:
  * compatibility-decomposed (NFKD folds full-width "ｉｎｓｔａｇｒａｍ" and the
  * other compatibility forms onto plain letters, the same mapping as NFKC but
  * without recomposing an accent back onto its letter), every
@@ -85,6 +94,23 @@ const INVISIBLE =
 function readableSkeleton(text: string): string {
   return text.normalize("NFKD").replace(INVISIBLE, "").toLowerCase();
 }
+
+/**
+ * Every code point with the Unicode `Bidi_Control` property: U+061C,
+ * U+200E-U+200F, U+202A-U+202E and U+2066-U+2069. These REORDER what a buyer
+ * sees: `"See \u202Emoc.margatsni\u202C"` is stored in one order and
+ * displayed as "See instagram.com". The skeleton above compares the stored
+ * (logical) order, so it cannot see an address that only exists in the
+ * displayed (visual) order.
+ *
+ * So a grant carrying one is REFUSED, not stripped and not stored. That is
+ * the fail-closed direction: a grant that needs a bidi override to read
+ * correctly is not one this site can show a buyer and be sure what they read,
+ * and stripping would store something other than what the admin typed. Right-
+ * to-left SCRIPT is not refused — Hebrew or Arabic letters with no control
+ * among them are accepted, and the browser orders them by itself.
+ */
+const BIDI_CONTROL = /\p{Bidi_Control}/u;
 
 /** Does the text hold nothing a buyer could read — only spaces and invisibles? */
 function isBlank(text: string): boolean {
@@ -126,7 +152,12 @@ function isBlank(text: string): boolean {
 const INSTAGRAM_HOST =
   /instagram[^\p{L}\p{N}]*com(?![\p{L}\p{N}])|instagr[^\p{L}\p{N}]+am(?![\p{L}\p{N}])/u;
 
-/** Does this text name an Instagram host, read the way a buyer would read it? */
+/**
+ * Does this text name an Instagram host, read with what a buyer cannot see
+ * removed? In STORED order: an address that appears only once bidi controls
+ * reorder the text is not found here, which is why `checkLicenceTerms`
+ * refuses every bidi control as well.
+ */
 export function mentionsInstagramHost(text: string): boolean {
   return INSTAGRAM_HOST.test(readableSkeleton(text));
 }
@@ -147,7 +178,11 @@ export function mentionsInstagramHost(text: string): boolean {
  * - Longer than {@link MAX_LICENCE_TERMS_LENGTH} after normalising is
  *   refused, not truncated: a grant cut off mid-sentence is a different
  *   grant from the one the admin wrote.
- * - Naming an Instagram host is refused (K4).
+ * - Naming an Instagram host is refused (K4), on the skeleton.
+ * - Carrying any {@link BIDI_CONTROL} code point is refused (K4): the
+ *   skeleton compares stored order and a buyer reads displayed order, and a
+ *   bidi control is what makes the two differ. A grant of ONLY bidi controls
+ *   (and spaces or invisibles) is blank first, and so null, not refused.
  */
 export function checkLicenceTerms(raw: string): LicenceTermsCheck {
   const text = raw.replace(/\r\n?/g, "\n").trim();
@@ -157,6 +192,9 @@ export function checkLicenceTerms(raw: string): LicenceTermsCheck {
   }
   if (mentionsInstagramHost(text)) {
     return { ok: false, refusal: "instagram_url" };
+  }
+  if (BIDI_CONTROL.test(text)) {
+    return { ok: false, refusal: "bidi_control" };
   }
   return { ok: true, value: text };
 }

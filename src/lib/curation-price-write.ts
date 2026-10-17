@@ -80,6 +80,7 @@ export const PRICE_WRITE_REFUSALS = [
   "price_amount_invalid",
   "price_terms_too_long",
   "price_terms_instagram_url",
+  "price_terms_bidi_control",
 ] as const;
 
 export type PriceWriteRefusal = (typeof PRICE_WRITE_REFUSALS)[number];
@@ -98,6 +99,7 @@ export type PriceWriteOutcome =
   | { kind: "price_amount_invalid" }
   | { kind: "price_terms_too_long" }
   | { kind: "price_terms_instagram_url" }
+  | { kind: "price_terms_bidi_control" }
   | { kind: "price_not_sellable"; blocker: SellabilityBlocker };
 
 /**
@@ -132,9 +134,11 @@ export type RecordPriceInput = {
    *
    * Three readings, the same shape `currency` has: `undefined` leaves the
    * stored grant alone (a JSON caller that only changed the amount);
-   * `null`, `""` or whitespace only REMOVES it, so the item page falls back
-   * to the site-wide /licence; anything else is stored, trimmed, after
-   * `checkLicenceTerms` (src/lib/licence-terms.ts) has accepted it.
+   * `null` or nothing readable (white space and invisibles only, as
+   * `checkLicenceTerms` decides) REMOVES it, so the item page falls back to
+   * the site-wide /licence; anything else is stored, trimmed, once
+   * `checkLicenceTerms` (src/lib/licence-terms.ts) has accepted it, or
+   * refused by name if it does not.
    *
    * Like `currency`, only meaningful alongside a price and IGNORED on an
    * un-pricing call — neither checked nor written — because withdrawing an
@@ -151,9 +155,10 @@ export type RecordPriceInput = {
  *
  * Before any row is read, the request itself can be refused:
  * `price_amount_invalid` (an amount or currency nothing can charge),
- * `price_terms_too_long` and `price_terms_instagram_url` (the grant text,
- * ugcportal-74w.1 — see `checkLicenceTerms`). None of the three opens the
- * transaction, so none of them writes anything.
+ * `price_terms_too_long`, `price_terms_instagram_url` and
+ * `price_terms_bidi_control` (the grant text, ugcportal-74w.1 — see
+ * `checkLicenceTerms`). None of the four opens the transaction, so none of
+ * them writes anything.
  *
  * THEN THREE REFUSALS ABOUT THE ROW, and the order they are checked in is the
  * contract:
@@ -224,9 +229,20 @@ export async function recordPrice({
   if (!unpricing && licenceTerms !== undefined) {
     const checked = checkLicenceTerms(licenceTerms ?? "");
     if (!checked.ok) {
-      return checked.refusal === "too_long"
-        ? { kind: "price_terms_too_long" }
-        : { kind: "price_terms_instagram_url" };
+      switch (checked.refusal) {
+        case "too_long":
+          return { kind: "price_terms_too_long" };
+        case "instagram_url":
+          return { kind: "price_terms_instagram_url" };
+        case "bidi_control":
+          return { kind: "price_terms_bidi_control" };
+        default: {
+          // A refusal added to `checkLicenceTerms` and not mapped here is a
+          // type error, and never a fall-through into the write.
+          const unmapped: never = checked.refusal;
+          throw new Error(`unmapped licence-terms refusal: ${String(unmapped)}`);
+        }
+      }
     }
     termsToStore = { value: checked.value };
   }

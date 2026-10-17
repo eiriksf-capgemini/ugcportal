@@ -114,8 +114,9 @@ function parsePriceInput(body: unknown): ParseResult {
  * Four refusals, deliberately distinct:
  *   403 — not an admin. Same answer for signed-out and signed-in non-admin.
  *   400 — the body is not a well-formed price, or its licence grant is
- *         over the length bound or names an Instagram host
- *         (ugcportal-74w.1; both refused by `recordPrice`).
+ *         over the length bound, names an Instagram host, or carries a
+ *         bidi control (ugcportal-74w.1; all three refused by
+ *         `recordPrice`).
  *   404 — no such listing.
  *   422 — the listing exists and the caller is allowed, but its uploader has
  *         no current resale-rights clearance, the upload itself is not
@@ -223,6 +224,14 @@ export async function POST(request: Request, { params }: RouteContext) {
     // keeps Instagram a discovery aid, never part of what a buyer is sold.
     return NextResponse.json(
       { error: "licenceTerms must not contain an Instagram address" },
+      { status: 400 },
+    );
+  }
+  if (outcome.kind === "price_terms_bidi_control") {
+    // 400 again: a bidi control can make the displayed grant differ from
+    // the stored one, so the text is refused (see `checkLicenceTerms`).
+    return NextResponse.json(
+      { error: "licenceTerms must not contain a bidi control character" },
       { status: 400 },
     );
   }

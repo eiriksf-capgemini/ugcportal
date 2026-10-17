@@ -59,6 +59,8 @@ const OUTCOME_MESSAGES: Record<TriageOutcomeCode, string> = {
   price_terms_too_long: `The licence terms are longer than the ${MAX_LICENCE_TERMS_LENGTH.toLocaleString("en-GB")} characters an item page can carry, so nothing was recorded — not the price either, because the two are saved together. Shorten the grant; anything that needs more is a contract to agree with the buyer in writing.`,
   price_terms_instagram_url:
     "The licence terms mention an Instagram address, so nothing was recorded — not the price either. What a buyer pays for is the uploaded original, never an Instagram post, so the grant must not point at one. Remove the address and save again.",
+  price_terms_bidi_control:
+    "The licence terms contain an invisible text-direction control (a bidi mark, embedding, override or isolate), so nothing was recorded — not the price either. Such a control can make a buyer see different words from the ones stored, so a grant may not carry one. Retype the grant without it, or paste it as plain text; right-to-left letters on their own are fine.",
   alcohol_with_commercial_links:
     "That upload already carries a commercial link, and nothing commercial may sit on a picture showing alcohol (alkoholloven § 9-2). Nothing was recorded — not even your other answers, because a half-recorded triage would put your name on a set you did not finish. Detach the item’s commercial links first, then answer the alcohol question.",
 };

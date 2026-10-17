@@ -193,8 +193,9 @@ export function publicOffer(
   // while the item was sellable is not shown once it is not
   // (ugcportal-74w.1 K3; sellable-media.test.ts "K3: returns no offer"). Blank reads as no grant, and the page falls back
   // to /licence (K2). A stored grant the writer would REFUSE — over the
-  // bound, or naming an Instagram host (K4) — withdraws the whole offer
-  // rather than showing the price with the site-wide licence instead: the
+  // bound, naming an Instagram host, or carrying a bidi control (K4) —
+  // withdraws the whole offer rather than showing the price with the
+  // site-wide licence instead: the
   // admin priced the item under that grant, and the same amount under
   // different terms is not an offer anybody made.
   const terms = checkLicenceTerms(listing.licenceTerms ?? "");

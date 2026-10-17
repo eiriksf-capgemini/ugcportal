@@ -387,7 +387,13 @@ describe("the licence grant on the offer (ugcportal-74w.1)", () => {
     // Also only reachable by bypassing `recordPrice`. Re-checked on read for
     // the reason the currency and amount are: do not trust that a row was
     // written through the validator.
-    for (const bad of ["See instagram.com/p/abc", "instagram.c\u200Eom/p/x", "x".repeat(2_001)]) {
+    for (const bad of [
+      "See instagram.com/p/abc",
+      "instagram.c\u200Eom/p/x",
+      "x".repeat(2_001),
+      // Displayed as "See instagram.com ..." once bidi-reordered.
+      "See \u202Emoc.margatsni\u202C for the original.",
+    ]) {
       await prisma.mediaListing.update({
         where: { mediaId: MEDIA_ID },
         data: { licenceTerms: bad },

@@ -355,9 +355,10 @@ describe("ugcportal-74w.1: the licence grant is stored with the price", () => {
   });
 
   it("K2: stores empty, whitespace-only, invisible-only and null input as null", async () => {
-    // The invisible-only three (PR #297 round 1, F2): a zero-width space,
-    // two bidi marks, and spaces around a soft hyphen. `trim()` keeps all of
-    // them, and each would render the grant heading over an empty block.
+    // The invisible-only three: a zero-width space, two bidi marks, and
+    // spaces around a soft hyphen. `trim()` keeps all of them, and each
+    // would render the grant heading over an empty block. The two bidi marks
+    // are blank, not refused: blankness is decided before the bidi rule.
     for (const blank of ["", "   \n\t ", "\u200B", "\u200E\u200F", " \u00AD ", null]) {
       // Set first, so a writer that ignored blank input would leave the old
       // grant in place and fail here rather than pass on a null it never wrote.
@@ -382,7 +383,7 @@ describe("ugcportal-74w.1: the licence grant is stored with the price", () => {
       "https://www.Instagram.com/p/abc",
       "http://instagram.com",
       "www.instagram.com/eirik",
-      // Spelled with what a buyer cannot see (PR #297 round 1, F1).
+      // Spelled with what a buyer cannot see: the skeleton strips it.
       "instagram.c\u200Eom/p/x",
       "insta\u2066gram.com/p/x",
       "instagram\uFF61com/p/x",
@@ -414,6 +415,40 @@ describe("ugcportal-74w.1: the licence grant is stored with the price", () => {
         licenceTerms: "See the original file.",
       }),
     ).resolves.toMatchObject({ kind: "priced", licenceTerms: "See the original file." });
+  });
+
+  it("K4: refuses a grant carrying a bidi control, which a buyer would read reordered, and writes nothing", async () => {
+    await recordPrice({ target: { mediaId: MEDIA_ID }, priceCents: 500, licenceTerms: GRANT });
+
+    // Each is stored with no Instagram host in it and displayed by a browser
+    // as "See instagram.com ...".
+    for (const bad of [
+      "See \u202Emoc.margatsni\u202C for the original.",
+      "See instagram.\u202Emoc\u202C now",
+      "See \u202Bcom\u200F.\u200Finstagram\u202C now",
+      "See \u2067com\u200F.\u200Finstagram\u2069 now",
+    ]) {
+      await expect(
+        recordPrice({
+          target: { mediaId: MEDIA_ID },
+          priceCents: 9_999,
+          currency: "EUR",
+          licenceTerms: bad,
+        }),
+        JSON.stringify(bad),
+      ).resolves.toEqual({ kind: "price_terms_bidi_control" });
+    }
+    await expect(storedListing()).resolves.toMatchObject({
+      priceCents: 500,
+      currency: "NOK",
+      licenceTerms: GRANT,
+    });
+
+    // THE MUTATION: right-to-left letters with no control among them are stored.
+    const hebrew = "\u05E9\u05D9\u05DE\u05D5\u05E9 \u05D1\u05E8\u05E9\u05EA";
+    await expect(
+      recordPrice({ target: { mediaId: MEDIA_ID }, priceCents: 9_999, licenceTerms: hebrew }),
+    ).resolves.toMatchObject({ kind: "priced", licenceTerms: hebrew });
   });
 
   it("refuses a grant over the length bound by name, and writes nothing", async () => {

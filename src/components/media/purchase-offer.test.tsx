@@ -56,8 +56,8 @@ describe("no grant falls back to /licence (K2)", () => {
   });
 
   it("draws no grant block for an invisible-only grant, because the writer stores it as null", () => {
-    // PR #297 round 1, F2. The value rendered is the one `checkLicenceTerms`
-    // (the rule `recordPrice` stores by) returns, not a hand-written null.
+    // The value rendered is the one `checkLicenceTerms` (the rule
+    // `recordPrice` stores by) returns, not a hand-written null.
     for (const blank of ["\u200B", "\u200E\u200F", " \u00AD "]) {
       const checked = checkLicenceTerms(blank);
       expect(checked, JSON.stringify(blank)).toEqual({ ok: true, value: null });
@@ -97,12 +97,32 @@ describe("the grant is text, never markup (K4)", () => {
       "insta\u2066gram.com/p/x",
       "instagram\uFF61com/p/x",
       "https://instagram.c\u{E0020}om/p/x",
+      // Displayed by a browser as "See instagram.com ..." through bidi
+      // reordering. Never stored by the writer (asserted in the next test).
+      "See \u202Emoc.margatsni\u202C for the original.",
+      "See \u2067com\u200F.\u200Finstagram\u2069 now",
     ]) {
       const html = render(offer(stored));
       expect(html, JSON.stringify(stored)).toContain(stored);
       expect(html, JSON.stringify(stored)).not.toMatch(/href="[^"]*instagr/i);
       // The one anchor in the panel is still the /licence link.
       expect([...html.matchAll(/<a\s/g)], JSON.stringify(stored)).toHaveLength(1);
+    }
+  });
+
+  it("never receives a bidi-reordered Instagram address: the writer refuses it before render", () => {
+    for (const text of [
+      "See \u202Emoc.margatsni\u202C for the original.",
+      "See instagram.\u202Emoc\u202C now",
+      "See \u202Bcom\u200F.\u200Finstagram\u202C now",
+      "See \u2067com\u200F.\u200Finstagram\u2069 now",
+    ]) {
+      // `checkLicenceTerms` is the rule `recordPrice` stores by and
+      // `publicOffer` re-applies on read; refused means no offer carries it.
+      expect(checkLicenceTerms(text), JSON.stringify(text)).toEqual({
+        ok: false,
+        refusal: "bidi_control",
+      });
     }
   });
 });

@@ -293,4 +293,12 @@ describe("setPrice: the licence grant (ugcportal-74w.1 K1/K2/K4)", () => {
     await expect(storedTerms()).resolves.toBeNull();
     expect(lastRedirect()).toContain("error=price_terms_instagram_url");
   });
+
+  it("sends a bidi control back as its own code, with neither price nor grant stored", async () => {
+    await setPrice(priceForm({ licenceTerms: "See \u2067com\u200F.\u200Finstagram\u2069 now" }));
+
+    await expect(storedListing()).resolves.toMatchObject({ priceCents: null });
+    await expect(storedTerms()).resolves.toBeNull();
+    expect(lastRedirect()).toContain("error=price_terms_bidi_control");
+  });
 });

@@ -262,6 +262,20 @@ describe("ugcportal-74w.1 K1/K4: the licence grant through the HTTP entry point"
     expect(await termsOf()).toBeNull();
   });
 
+  it("refuses a grant carrying a bidi control with 400 and writes neither price nor grant", async () => {
+    await setReview("CLEARED");
+
+    // Displayed as "See instagram.com", stored reversed inside an override.
+    const response = await POST(
+      priceRequest({ priceCents: 300, licenceTerms: "See \u202Emoc.margatsni\u202C now" }),
+      context(),
+    );
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toMatch(/bidi control/);
+    expect(await priceOf()).toBeNull();
+    expect(await termsOf()).toBeNull();
+  });
+
   it("refuses an over-long grant with 400, inside the body bound", async () => {
     await setReview("CLEARED");
     const { MAX_LICENCE_TERMS_LENGTH } = await import("@/lib/licence-terms");
