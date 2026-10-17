@@ -1523,3 +1523,19 @@ describe("tokens_qa_convention (ugcportal-zu0a): a flagged tokens_qa is not coun
     expect(aggregate(rows).qaTotal).toBe(250000 + 249220);
   });
 });
+
+describe("an excluded tokens_impl the notes call an estimate does not mark the total (ugcportal-zu0a)", () => {
+  // tokens_impl is flagged summed-snapshots, so it is excluded; the notes call it an estimate.
+  // tokens_qa is counted and exact: the total is tokens_qa alone and carries no tilde.
+  const bead = { id: "ugcportal-impl1", title: "excluded estimated impl", notes: "tokens_impl is a rough estimate.", metadata: { cc_type: "fix", tokens_impl: 480000, tokens_impl_convention: "summed-snapshots", tokens_qa: 120000 } };
+  const release = { version: "v9.9.9", ids: [bead.id], entries: new Map([[bead.id, { title: bead.title, type: "Fixes" }]]) };
+  const rows = buildRows(release, new Map([[bead.id, bead]]), new Map());
+  const report = renderReport({ releases: ["v9.9.9"], rowsByRelease: new Map([["v9.9.9", rows]]), membershipChecks: [], unmerged: [], generatedAt: "2026-10-17", reviewer: "x", prCount: 0 });
+
+  it("the total is tokens_qa alone and no cell of the bead's row carries a tilde on it", () => {
+    expect(rows[0]).toMatchObject({ impl: null, implEstimated: true, qa: 120000, qaEstimated: false, total: 120000 });
+    const cells = report.split("\n").find((l) => l.startsWith("| `impl1` |")).split("|").map((c) => c.trim());
+    expect(cells).toContain(fmt(120000));
+    expect(cells).not.toContain(`~${fmt(120000)}`);
+  });
+});
