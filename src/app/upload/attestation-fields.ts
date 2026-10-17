@@ -13,16 +13,19 @@ import {
  * (ugcportal-15r).
  *
  * Its own module for the reason `alt-text.ts` and `tag-selection.ts` are:
- * this repo's vitest runs in a node environment with no DOM, so a decision
- * reachable only through a React event handler is in practice untested.
- * `upload-form.tsx` holds state wiring; the decisions live here.
+ * this repo's vitest runs in a node environment by default (a test file opts
+ * into jsdom with a per-file environment pragma), so a decision reachable
+ * only through a React event handler is in practice untested. The callers
+ * (`upload-form.tsx` for the upload batch, `attest-existing-upload.tsx` for
+ * a late attestation of one existing upload) hold state wiring; the
+ * decisions live here.
  *
  * That is load-bearing here rather than a convention. The decision below —
  * "an unanswered question is not a `no`" — is the whole of ugcportal-15r K4
  * on the client side, and inside a JSX callback it would have shipped with no
  * test that could fail without it.
  *
- * BATCH-LEVEL, NOT PER-FILE, exactly like the alt text and the tag picker
+ * BATCH-LEVEL IN THE UPLOAD FORM, NOT PER-FILE, exactly like the alt text and the tag picker
  * beside it, and for the same reason: this page has no staging step, a drop
  * starts uploading immediately, and per-file questions would need one. For a
  * single file — the common case — this is exactly right. For a multi-file
@@ -30,7 +33,9 @@ import {
  * limitation and is recorded as such in alt-text.ts's own docstring for the
  * sibling fields. It is not a correctness gap: the answers are the uploader's
  * own, given about files they chose together, and the server stores one row
- * per file either way.
+ * per file either way. The late-attestation control
+ * (`attest-existing-upload.tsx`) is per-file by construction: it answers
+ * for the one upload its queue row shows.
  */
 
 /**
@@ -73,7 +78,7 @@ export function setAttestationAnswer(
  * name. Empty means the draft is complete.
  *
  * Returned as a LIST rather than a boolean because the form marks each
- * unanswered question individually once an add has been refused — "fill
+ * unanswered question individually once an add (or a late attestation) has been refused — "fill
  * something in" under a nine-question block is not a usable message.
  *
  * `typeof === "boolean"` rather than a presence check on the key, for the
@@ -92,19 +97,28 @@ export function unansweredAttestationFields(draft: AttestationDraft): string[] {
 }
 
 /**
- * The message to show when an add was refused for an incomplete attestation,
+ * The message to show when an add, or a late attestation, was refused for an
+ * incomplete attestation,
  * or null when there is nothing to refuse.
  *
  * The count is interpolated from `unansweredAttestationFields` rather than
  * written out, so the sentence cannot come to disagree with the rule — the
  * same reason `tagCapMessage` interpolates its own constant.
  */
-export function attestationDraftError(draft: AttestationDraft): string | null {
+export function attestationDraftError(
+  draft: AttestationDraft,
+  /**
+   * What the incomplete draft is blocking, as the sentence's ending: the
+   * upload form's "choosing files", or a queue row's "recording them"
+   * (ugcportal-gkax). The count and the rule are the same either way.
+   */
+  blocking: string = "choosing files",
+): string | null {
   const missing = unansweredAttestationFields(draft);
   if (missing.length === 0) return null;
   return missing.length === 1
-    ? "Answer the remaining rights question before choosing files."
-    : `Answer the remaining ${missing.length} rights questions before choosing files.`;
+    ? `Answer the remaining rights question before ${blocking}.`
+    : `Answer the remaining ${missing.length} rights questions before ${blocking}.`;
 }
 
 /**

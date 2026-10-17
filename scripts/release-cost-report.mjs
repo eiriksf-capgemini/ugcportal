@@ -1189,6 +1189,13 @@ export function outcomeOf(bead, prAnalyses, rounds) {
 // flags a value that added one resumed agent's cumulative snapshots and is
 // not counted; any other value is unknown and is not counted either. Both
 // exclusions are listed under Data gaps.
+//
+// tokens_qa_convention (ugcportal-zu0a) reads the same way for tokens_qa:
+// absent or `last-per-agent` counts it; ANY other value -- `summed-snapshots`,
+// `undeterminable` (the audit could not tie the figure to its reviewer
+// agents' transcripts), or one nobody defined -- is not counted and is listed
+// under Data gaps with its value. A bead with no tokens_qa_convention is read
+// at face value, as before; so does one whose value is blank.
 
 export const CONTEXT_LABEL = "context-size, not cost";
 export const SUMMED_SNAPSHOTS = "summed-snapshots";
@@ -1241,7 +1248,7 @@ export function costUnitOf(meta = {}) {
       ite[side] = null;
     }
   }
-  const base = { implSummedExcluded: false, implConventionUnknown: null, iteRejected, iteIncomplete };
+  const base = { implSummedExcluded: false, implConventionUnknown: null, qaConventionExcluded: null, iteRejected, iteIncomplete };
   if (ite.impl !== null || ite.qa !== null) return { ...base, unit: "ite", impl: ite.impl, qa: ite.qa };
   const ctxImpl = toInt(meta.tokens_impl);
   const ctxQa = toInt(meta.tokens_qa);
@@ -1249,7 +1256,9 @@ export function costUnitOf(meta = {}) {
   const conv = normaliseConvention(meta.tokens_impl_convention);
   const summed = ctxImpl !== null && conv === SUMMED_SNAPSHOTS;
   const unknown = ctxImpl !== null && conv !== null && conv !== SUMMED_SNAPSHOTS && conv !== LAST_PER_AGENT ? String(meta.tokens_impl_convention) : null;
-  return { ...base, unit: "context", impl: summed || unknown !== null ? null : ctxImpl, qa: ctxQa, implSummedExcluded: summed, implConventionUnknown: unknown };
+  const qaConv = normaliseConvention(meta.tokens_qa_convention);
+  const qaExcluded = ctxQa !== null && qaConv !== null && qaConv !== "" && qaConv !== LAST_PER_AGENT ? String(meta.tokens_qa_convention).trim() : null;
+  return { ...base, unit: "context", impl: summed || unknown !== null ? null : ctxImpl, qa: qaExcluded !== null ? null : ctxQa, implSummedExcluded: summed, implConventionUnknown: unknown, qaConventionExcluded: qaExcluded };
 }
 
 /**
@@ -1418,6 +1427,7 @@ export function buildRows(release, beadsById, prAnalysesByNumber) {
       unit: cost.unit,
       implSummedExcluded: cost.implSummedExcluded,
       implConventionUnknown: cost.implConventionUnknown,
+      qaConventionExcluded: cost.qaConventionExcluded,
       iteRejected: cost.iteRejected,
       iteIncomplete: cost.iteIncomplete,
       impl,
@@ -1648,8 +1658,9 @@ function renderReleaseTable(rows) {
       r.scope ?? "—",
       r.tier ? `${r.tier}/${r.effort ?? "?"}` : "—",
       r.unit === "ite" ? fmt(r.iteImpl) : r.implSummedExcluded ? "excluded (summed snapshots)" : fmtTokens(r.impl, r.implEstimated),
-      r.unit === "ite" ? fmt(r.iteQa) : fmtTokens(r.qa, r.qaEstimated),
-      r.unit === "ite" ? fmt(r.iteTotal) : fmtTokens(r.total, r.implEstimated || r.qaEstimated),
+      r.unit === "ite" ? fmt(r.iteQa) : r.qaConventionExcluded ? `excluded (${r.qaConventionExcluded})` : fmtTokens(r.qa, r.qaEstimated),
+      // The total is marked as an estimate only by a side that contributes to it (not excluded, not absent).
+      r.unit === "ite" ? fmt(r.iteTotal) : fmtTokens(r.total, (r.impl !== null && r.implEstimated) || (r.qa !== null && r.qaEstimated)),
       unitLabel(r.unit),
       r.prs.length ? r.prs.map((n) => `#${n}`).join(", ") : "—",
       r.rounds === null ? "—" : `${r.rounds}${r.roundsSource === "close reason" ? " (cr)" : r.roundsSource.startsWith("markers (") ? " (!)" : ""}`,
@@ -1751,7 +1762,7 @@ function renderDataGaps(rowsByRelease, prAnalysesByNumber, unmerged) {
     // no QA figure here, and is listed with its unit so that reads right.
     const unitOf = (r) => `${r.id.replace("ugcportal-", "")} (${r.unit ?? "none"})`;
     const noImpl = rows.filter((r) => r.impl === null && r.iteImpl == null && !r.implSummedExcluded && !r.implConventionUnknown).map(unitOf);
-    const noQa = rows.filter((r) => r.qa === null && r.iteQa == null).map(unitOf);
+    const noQa = rows.filter((r) => r.qa === null && r.iteQa == null && !r.qaConventionExcluded).map(unitOf);
     const noRounds = rows.filter((r) => r.prs.length && r.rounds === null).map((r) => r.id.replace("ugcportal-", ""));
     const noPr = rows.filter((r) => !r.prs.length).map((r) => r.id.replace("ugcportal-", ""));
     const crRounds = rows.filter((r) => r.roundsSource === "close reason").map((r) => r.id.replace("ugcportal-", ""));
@@ -1770,6 +1781,8 @@ function renderDataGaps(rowsByRelease, prAnalysesByNumber, unmerged) {
     if (unknownConv.length) lines.push(`  - \`tokens_impl\` not counted, unknown \`tokens_impl_convention\` (${unknownConv.length}): ${unknownConv.join("; ")}`);
     const summedOut = rows.filter((r) => r.implSummedExcluded).map((r) => r.id.replace("ugcportal-", ""));
     if (summedOut.length) lines.push(`  - \`tokens_impl\` not counted, flagged \`tokens_impl_convention=${SUMMED_SNAPSHOTS}\` (${summedOut.length}): ${summedOut.join(", ")}`);
+    const qaOut = rows.filter((r) => r.qaConventionExcluded).map((r) => `${r.id.replace("ugcportal-", "")} (${r.qaConventionExcluded})`);
+    if (qaOut.length) lines.push(`  - \`tokens_qa\` not counted, flagged \`tokens_qa_convention\` (${qaOut.length}): ${qaOut.join("; ")}`);
     lines.push(`  - no PR in \`prs\` (${noPr.length}): ${noPr.join(", ") || "—"}`);
     lines.push(`  - PR but no round count from markers or close reason (${noRounds.length}): ${noRounds.join(", ") || "—"}`);
     lines.push(`  - round count from the close reason, not markers (${crRounds.length}): ${crRounds.join(", ") || "—"}`);

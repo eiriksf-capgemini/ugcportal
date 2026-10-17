@@ -455,9 +455,13 @@ describe("the legal-pages startup check", () => {
     vi.stubEnv("NEXT_RUNTIME", "nodejs");
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     await register();
-    return errors.mock.calls
+    const lines = errors.mock.calls
       .map((call) => String(call[0]))
       .filter((line) => line.startsWith("[legal]"));
+    // vitest 4 hands back the same spy when a method is already spied, so
+    // a second boot in one test would otherwise see the first boot's calls.
+    errors.mockRestore();
+    return lines;
   }
 
   it("names an unset LEGAL_* variable at boot, in production and out", async () => {

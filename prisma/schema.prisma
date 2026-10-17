@@ -1276,8 +1276,10 @@ enum MediaAuthorship {
 ///
 /// NOTHING BACKFILLS. An upload made before this existed has no attestation
 /// and is therefore not sellable (`attestation_missing`), which is the honest
-/// state: nobody asked its uploader anything. Re-attesting an old upload is a
-/// product decision nobody has taken and no code path offers.
+/// state: nobody asked its uploader anything. Its uploader may answer for it
+/// afterwards (POST /api/media/[id]/attestation, ugcportal-gkax), once;
+/// re-attesting a file that already has a row is a product decision nobody
+/// has taken and no code path offers.
 model MediaAttestation {
   id      String @id @default(cuid())
   mediaId String @unique
@@ -1289,7 +1291,7 @@ model MediaAttestation {
   /// admin ticking the boxes on an uploader's behalf is precisely the
   /// admin-asserts-what-they-cannot-know failure this table exists to end.
   /// The database cannot express "equal to the parent row's userId", so that
-  /// check lives in the gate and in the single write path (K3).
+  /// check lives in the gate and in the two write paths (K3; ugcportal-gkax).
   attestedByUserId String
 
   /// Which text the uploader was shown, from docs/legal/upload-rights-attestation.md.

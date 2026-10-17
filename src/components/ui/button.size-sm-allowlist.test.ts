@@ -52,6 +52,9 @@ const ALLOWED_SM_CALLERS: Readonly<Record<string, number>> = {
   "src/app/admin/settings/rights/decision-form.tsx": 1,
   "src/app/admin/settings/users/page.tsx": 1,
   "src/app/auth/error/page.tsx": 2,
+  // ugcportal-gkax: the toggle and the submit button of the rights questions
+  // on an upload-queue row, beside that row's own `sm` controls.
+  "src/app/upload/attest-existing-upload.tsx": 2,
   "src/app/upload/upload-queue-list.tsx": 5,
   "src/components/consent/cookie-banner.tsx": 2,
 };
