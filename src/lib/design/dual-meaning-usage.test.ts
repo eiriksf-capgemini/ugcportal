@@ -354,10 +354,35 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   // ink-muted-usage.test.ts). Neither is TEXT_LABEL_CLASS's own text-ink
   // (ugcportal-4r0e, a different token on the <label> elements themselves,
   // not in this file's scope or this bead's).
+  //
+  // text-foreground: 7 -> 2 and text-muted-foreground: 10 -> 7
+  // (ugcportal-gkax): the rights questions block (`AttestationFields`) moved
+  // out of this file, unchanged, into attestation-questions.tsx below — its
+  // 5 text-foreground and 3 text-muted-foreground went with it.
   "src/app/upload/upload-form.tsx": {
-    "text-foreground": 7,
-    "text-muted-foreground": 10,
+    "text-foreground": 2,
+    "text-muted-foreground": 7,
   },
+  // ugcportal-gkax: the rights questions block, moved here from
+  // upload-form.tsx so a queue row can ask the same questions. Its 5
+  // text-foreground (the block's legend, each question's legend, each
+  // radio's label) and 3 text-muted-foreground (the intro, the authorship
+  // help line, each yes/no question's "why") are the counts it had there,
+  // and both its callers render it on --background: the upload form
+  // directly on the page canvas (the case audited above), and the queue
+  // row inside attest-existing-upload.tsx's own `bg-background` panel,
+  // which exists for exactly this reason.
+  "src/app/upload/attestation-questions.tsx": {
+    "text-foreground": 5,
+    "text-muted-foreground": 3,
+  },
+  // text-ink: 2 (ugcportal-gkax): the "Stored without your rights
+  // answers..." line and the "recorded" confirmation that replaces the
+  // block. Both inside the queue row's own bg-surface-1 <li>, the same
+  // well-interior case as upload-queue-list.tsx's two below — NOT inside
+  // the bg-background panel, which holds only the questions, the alert
+  // (text-destructive) and the submit button.
+  "src/app/upload/attest-existing-upload.tsx": { "text-ink": 2 },
   // text-ink: 1 (low finding 5) - the queued file's name (ugcportal-n3c),
   // inside the queue row's own bg-surface-1 <li>.
   //

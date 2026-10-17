@@ -152,7 +152,7 @@ person attesting has the legal **capacity** to grant anything is
 
 | Blocker | When |
 | --- | --- |
-| `attestation_missing` | no attestation at all — every upload made before this existed, every upload by a configured user who was not asked (§5), and anything a future second write path creates without one |
+| `attestation_missing` | no attestation at all — every upload made before this existed (until its uploader answers through `POST /api/media/[id]/attestation`), every upload by a configured user who was not asked (§5), and anything a future second write path creates without one |
 | `attestation_incomplete` | a row with an answer missing or of the wrong shape (not reachable through the upload form; a data fault) |
 | `attestation_not_by_uploader` | the declaration names somebody other than the file's own owner |
 | `attestation_version_retired` | a version no longer in `ACCEPTED_ATTESTATION_VERSIONS` |
@@ -178,7 +178,10 @@ row, which nothing can coerce into a row of "no"s.
 Nothing backfills. An upload made before this existed has no attestation and
 is therefore not sellable, which is the honest state: nobody asked its
 uploader anything, and inventing an answer would be the system warranting
-rights on a person's behalf. No code path offers to re-attest an old upload.
+rights on a person's behalf. Nobody but the uploader can supply one: since
+`ugcportal-gkax` the uploader can answer the questions themselves for a file
+of theirs that has no row (`POST /api/media/[id]/attestation`, see §5). A
+file that already has a row cannot be re-attested or edited.
 
 The row is deleted with the file and with the account (`onDelete: Cascade` on
 both edges — see the delete-cascade runbook in `docs/access-control.md`).
@@ -223,12 +226,23 @@ drops them. Since `ugcportal-ho7j`, on Eirik's instruction of 2026-10-15
   anybody else's (§3). `docs/legal/manual-upload-rights-review.md` §4 item 7
   requires that attestation to be made by the uploader (`Media.userId`), "not
   by an admin on their behalf", and `attestation_not_by_uploader` enforces
-  that. At this commit the only place an attestation is written is
-  `POST /api/media`, with the uploader's own session
-  (`src/lib/attestation-write-paths.test.ts` asserts there is no second
-  writer). The upload page does not offer configured users the questions, so
-  for them the only way to give one is an upload that carries the parts.
-  There is no way to attest a file that is already uploaded.
+  that. Two places write an attestation, both with the uploader's own
+  session: `POST /api/media` at upload, and `POST /api/media/[id]/attestation`
+  (`ugcportal-gkax`) afterwards, for a file the caller owns that has no
+  attestation yet — refused with 403 for anybody else's file, an
+  administrator's session included, and with 409 for a file that already
+  has one (`src/lib/attestation-write-paths.test.ts` asserts there is no
+  third writer and that both name the session's user).
+- **They can answer afterwards, from the upload page.** The upload page does
+  not ask configured users the questions before upload. Instead, the queue
+  row of an upload that was stored without answers offers to answer them
+  for that one file, posting to the route above. The queue lives only as
+  long as the page: a file uploaded in an earlier visit has no surface to
+  answer from until the owner's own library page (`ugcportal-bk57`) exists.
+  An answer given afterwards counts exactly as one given at upload,
+  including on the public pages: a file that shows an identifiable person
+  with no `PEOPLE` clearance, or whose uploader answers `NEITHER`, is taken
+  off them, though its `publishedAt` is not touched.
 - **Their uploads published before this change come back too.** The public
   scope is evaluated on every read, so a configured user's row that is
   already published and has no attestation (for example an upload made

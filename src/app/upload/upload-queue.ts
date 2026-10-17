@@ -54,6 +54,16 @@ export type QueueMedia = {
    * state, not a refusal.
    */
   publishRefusal: string | null;
+  /**
+   * Whether the upload was stored WITH the uploader's rights attestation, as
+   * the 201 reported it in `attested` (ugcportal-gkax): `false` only for a
+   * configured uploader's upload stored without one, which is the one row
+   * the queue offers the questions on afterwards. `null` when the 201 did
+   * not say — every upload by anybody else, whose upload cannot be stored
+   * without one — and read as "offer nothing", so a body of an unexpected
+   * shape never puts the questions in front of a file that may have them.
+   */
+  attested: boolean | null;
 };
 
 function stringOrNull(value: unknown): string | null {
@@ -83,6 +93,7 @@ export function toQueueMedia(payload: unknown): QueueMedia | null {
     originalName: stringOrNull(row.originalName) ?? "Untitled",
     publishedAt: stringOrNull(row.publishedAt),
     publishRefusal: refusalMessage(row.publishRefusal),
+    attested: typeof row.attested === "boolean" ? row.attested : null,
   };
 }
 

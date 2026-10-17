@@ -8,6 +8,7 @@ import {
   signInPath,
 } from "@/lib/routes";
 
+import { AttestExistingUpload } from "./attest-existing-upload";
 import { formatBytes, mayRetry, secondsUntilRetry } from "./outcomes";
 import {
   percentComplete,
@@ -20,9 +21,13 @@ import {
  *
  * Deliberately presentational and hook-free: every decision it makes is a
  * function of its props, so the whole of it can be rendered to static markup
- * in a test (the repo's vitest runs in a node environment — see
- * vitest.config.ts — so `renderToStaticMarkup` is the only rendering
+ * in a test (the repo's vitest runs in a node environment by default — see
+ * vitest.config.ts — where `renderToStaticMarkup` is the rendering
  * available, and this is the shape that suits it).
+ *
+ * One child keeps state of its own: `AttestExistingUpload`
+ * (ugcportal-gkax), the rights questions for one stored file. Whether it
+ * renders at all is still decided here, from the props.
  */
 
 export type UploadQueueListProps = {
@@ -31,8 +36,8 @@ export type UploadQueueListProps = {
    * The moment the list is being rendered at, for the retry countdown.
    *
    * Passed in rather than read from the clock inside, so the component stays
-   * a pure function of its props: renderToStaticMarkup is the only rendering
-   * this repo can do in tests, and a Date.now() inside would make the
+   * a pure function of its props: a test can then render it with
+   * renderToStaticMarkup or mount it in a jsdom file, and a Date.now() inside would make the
    * throttled state unassertable.
    */
   now: number;
@@ -487,6 +492,21 @@ export function UploadQueueList({
                   Clear
                 </Button>
               </div>
+            ) : null}
+
+            {/*
+              ugcportal-gkax: the rights questions, afterwards, for an upload
+              its own 201 said was stored WITHOUT them (a configured
+              uploader's). `=== false`, never a falsy check: `null` means the
+              201 did not say, and a row that may already carry an
+              attestation is offered nothing. Keyed on the Media row's id,
+              which is what the route takes.
+            */}
+            {item.status === "succeeded" && item.media?.attested === false ? (
+              <AttestExistingUpload
+                mediaId={item.media.id}
+                fileName={item.name}
+              />
             ) : null}
 
             <Failure

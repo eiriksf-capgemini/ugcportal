@@ -102,7 +102,7 @@ const mediaCreateOutsideTransaction = vi.fn(() => {
 /**
  * The same tripwire for the attestation (ugcportal-15r). A Media row
  * committed without the declaration its uploader just gave is an upload that
- * can never be sold and whose uploader has already answered the questions;
+ * stays unsellable until it is attested late and whose uploader has already answered the questions;
  * outside the transaction, a failure between the two writes leaves exactly
  * that. A `$transaction` mock that hands back the same client cannot tell the
  * two apart, so this makes the non-transactional path throw.
@@ -3245,7 +3245,7 @@ describe("POST /api/media — the uploader's rights attestation (ugcportal-15r)"
     // The module-level `prisma.mediaAttestation.create` throws (see the
     // tripwire at the top of this file), so a route that wrote outside the
     // transaction would fail here rather than quietly leaving a media row
-    // that can never be sold behind a failed second write.
+    // that stays unsellable behind a failed second write.
     const response = await POST(buildRequest(imageFile()));
 
     expect(response.status).toBe(201);
