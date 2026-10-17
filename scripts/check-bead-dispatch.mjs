@@ -149,8 +149,9 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
  *      not a glob) and renames count as touching both names.
  *   6. A declared path that does not exist at origin/main's HEAD fails,
  *      even when nothing touched it. A typo is otherwise the quietest
- *      possible understatement: a path that matches no file can never be
- *      touched, so a misspelt declaration would pass forever. A premise that
+ *      possible understatement: a path that matches no file is touched only
+ *      by a commit that creates a file there, so a misspelt declaration
+ *      would in practice pass on every merge. A premise that
  *      rests on something being ABSENT declares the nearest existing parent
  *      directory, which a commit adding the thing will touch.
  *
@@ -224,10 +225,10 @@ const SHA_RE = /\b([0-9a-f]{7,40})\b/g;
  *     hard-wraps stored text, so "Premise verified 2026-10-08 at" and its
  *     sha routinely land on different lines.
  *
- * A `Premise depends on:` line is a declaration, not a premise statement:
- * it never starts a statement of its own, and any text from it onwards is
- * cut before commit tokens are looked for, so a hex-looking path segment is
- * never read as a commit. Each statement carries the declaration that
+ * A line that OPENS with `Premise depends on:` is a declaration, not a
+ * premise statement, and starts none of its own; and on any statement, the
+ * text from `Premise depends on:` onwards is cut before commit tokens are
+ * looked for, so a hex-looking path segment is not read as a commit. Each statement carries the declaration that
  * belongs to it -- see `findDeclaration`.
  *
  * @param {string} notes
@@ -750,7 +751,7 @@ export const CHECKS = [
     if (absent.length > 0) {
       return {
         ok: false,
-        detail: `${where} declares ${absent.map((p) => JSON.stringify(p)).join(", ")}, which does not exist at origin/main ${ctx.headShort}. A path that matches no file can never be touched, so a misspelt declaration would pass forever; to depend on something being absent, declare the nearest existing parent directory.`,
+        detail: `${where} declares ${absent.map((p) => JSON.stringify(p)).join(", ")}, which does not exist at origin/main ${ctx.headShort}. A path that matches no file is touched only by a commit that creates it, so a misspelt declaration would in practice pass on every merge; to depend on something being absent, declare the nearest existing parent directory.`,
       };
     }
     return {

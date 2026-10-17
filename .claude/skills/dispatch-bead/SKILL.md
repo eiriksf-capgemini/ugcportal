@@ -73,8 +73,9 @@ fails it when:
 - the line has **no** `Premise depends on:` — absent is never read as
   `none`, because a check that matched nothing must not look like one that
   passed;
-- a declared path does not exist at `origin/main`'s HEAD — a typo would
-  otherwise never be touched and pass forever (to rest on something being
+- a declared path does not exist at `origin/main`'s HEAD — a typo is
+  touched only by a commit that creates it, so it would otherwise pass on
+  every merge (to rest on something being
   *absent*, declare its nearest existing parent directory);
 - the premise commit is not on `origin/main` at all — usually a branch
   commit whose PR was since squash-merged (`main` has the change under a

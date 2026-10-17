@@ -687,8 +687,8 @@ describe("ul2j: premise freshness is scoped by the paths the premise declares", 
   });
 
   it("a declared path that does not exist at HEAD fails, even when nothing touched it", () => {
-    // `src/lib/a.t` is a typo: it matches no file, so it could never be
-    // touched, and without this it would pass on every future merge.
+    // `src/lib/a.t` is a typo: it matches no file, so only a commit creating
+    // it would touch it, and without this it would pass on every merge.
     for (const [i, decl] of [
       [1, "src/lib/a.t"], // behind HEAD, and no commit since touched it
       [6, "src/lib/typo.ts"], // at HEAD itself
