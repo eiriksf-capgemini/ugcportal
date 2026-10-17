@@ -6,6 +6,7 @@ import {
   PURCHASE_OFFER_ID,
   PurchaseOffer,
 } from "@/components/media/purchase-offer";
+import { checkLicenceTerms } from "@/lib/licence-terms";
 import { LICENCE_PATH } from "@/lib/routes";
 import type { PublicOffer } from "@/lib/pricing";
 
@@ -54,6 +55,19 @@ describe("no grant falls back to /licence (K2)", () => {
     expect(some).toContain("What this licence grants");
   });
 
+  it("draws no grant block for an invisible-only grant, because the writer stores it as null", () => {
+    // PR #297 round 1, F2. The value rendered is the one `checkLicenceTerms`
+    // (the rule `recordPrice` stores by) returns, not a hand-written null.
+    for (const blank of ["\u200B", "\u200E\u200F", " \u00AD "]) {
+      const checked = checkLicenceTerms(blank);
+      expect(checked, JSON.stringify(blank)).toEqual({ ok: true, value: null });
+      const html = render(offer(checked.ok ? checked.value : "unreachable"));
+      expect(html, JSON.stringify(blank)).not.toContain(LICENCE_GRANT_ATTRIBUTE);
+      expect(html, JSON.stringify(blank)).not.toContain("What this licence grants");
+      expect(html, JSON.stringify(blank)).toContain(`href="${LICENCE_PATH}"`);
+    }
+  });
+
   it("renders nothing at all for no offer, grant or not", () => {
     expect(render(null)).toBe("");
   });
@@ -71,5 +85,24 @@ describe("the grant is text, never markup (K4)", () => {
     expect(html).not.toContain('href="https://evil.example/"');
     // The one anchor in the panel is the /licence link.
     expect([...html.matchAll(/<a\s/g)]).toHaveLength(1);
+  });
+
+  it("renders an invisibly-spelled Instagram address as inert text, if one were ever stored", () => {
+    // DEFENCE IN DEPTH only. The primary control is the write refusal
+    // (`checkLicenceTerms`, applied by `recordPrice`, and again by
+    // `publicOffer` on read, which withdraws the offer). This pins that even
+    // past both, the panel draws no link: the grant is a text node.
+    for (const stored of [
+      "instagram.c\u200Eom/p/x",
+      "insta\u2066gram.com/p/x",
+      "instagram\uFF61com/p/x",
+      "https://instagram.c\u{E0020}om/p/x",
+    ]) {
+      const html = render(offer(stored));
+      expect(html, JSON.stringify(stored)).toContain(stored);
+      expect(html, JSON.stringify(stored)).not.toMatch(/href="[^"]*instagr/i);
+      // The one anchor in the panel is still the /licence link.
+      expect([...html.matchAll(/<a\s/g)], JSON.stringify(stored)).toHaveLength(1);
+    }
   });
 });

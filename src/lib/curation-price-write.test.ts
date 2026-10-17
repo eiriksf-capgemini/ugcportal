@@ -354,8 +354,11 @@ describe("ugcportal-74w.1: the licence grant is stored with the price", () => {
     await expect(storedListing()).resolves.toMatchObject({ priceCents: 2, licenceTerms: GRANT });
   });
 
-  it("K2: stores empty, whitespace-only and null input as null", async () => {
-    for (const blank of ["", "   \n\t ", null]) {
+  it("K2: stores empty, whitespace-only, invisible-only and null input as null", async () => {
+    // The invisible-only three (PR #297 round 1, F2): a zero-width space,
+    // two bidi marks, and spaces around a soft hyphen. `trim()` keeps all of
+    // them, and each would render the grant heading over an empty block.
+    for (const blank of ["", "   \n\t ", "\u200B", "\u200E\u200F", " \u00AD ", null]) {
       // Set first, so a writer that ignored blank input would leave the old
       // grant in place and fail here rather than pass on a null it never wrote.
       await recordPrice({ target: { mediaId: MEDIA_ID }, priceCents: 10, licenceTerms: GRANT });
@@ -379,6 +382,10 @@ describe("ugcportal-74w.1: the licence grant is stored with the price", () => {
       "https://www.Instagram.com/p/abc",
       "http://instagram.com",
       "www.instagram.com/eirik",
+      // Spelled with what a buyer cannot see (PR #297 round 1, F1).
+      "instagram.c\u200Eom/p/x",
+      "insta\u2066gram.com/p/x",
+      "instagram\uFF61com/p/x",
     ]) {
       await expect(
         recordPrice({

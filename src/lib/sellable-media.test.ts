@@ -370,19 +370,24 @@ describe("the licence grant on the offer (ugcportal-74w.1)", () => {
 
   it("K2: reads a blank stored grant as none", async () => {
     // Written straight to the column — `recordPrice` stores blank as null,
-    // so this state is only reachable by some other writer.
-    await prisma.mediaListing.update({
-      where: { mediaId: MEDIA_ID },
-      data: { licenceTerms: "  \n " },
-    });
-    await expect(getPublicOffer(PREVIEW_ID)).resolves.toMatchObject({ licenceTerms: null });
+    // so this state is only reachable by some other writer. The second is
+    // blank to a buyer though not to `trim()`: zero-width and bidi marks.
+    for (const blank of ["  \n ", " \u200B\u2066\u00AD "]) {
+      await prisma.mediaListing.update({
+        where: { mediaId: MEDIA_ID },
+        data: { licenceTerms: blank },
+      });
+      await expect(getPublicOffer(PREVIEW_ID), JSON.stringify(blank)).resolves.toMatchObject({
+        licenceTerms: null,
+      });
+    }
   });
 
   it("K4: withdraws the offer for a stored grant the writer would refuse", async () => {
     // Also only reachable by bypassing `recordPrice`. Re-checked on read for
     // the reason the currency and amount are: do not trust that a row was
     // written through the validator.
-    for (const bad of ["See instagram.com/p/abc", "x".repeat(2_001)]) {
+    for (const bad of ["See instagram.com/p/abc", "instagram.c\u200Eom/p/x", "x".repeat(2_001)]) {
       await prisma.mediaListing.update({
         where: { mediaId: MEDIA_ID },
         data: { licenceTerms: bad },
