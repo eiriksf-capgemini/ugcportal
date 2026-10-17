@@ -149,7 +149,7 @@ beforeEach(async () => {
   });
   await prisma.mediaListing.update({
     where: { mediaId: MEDIA_ID },
-    data: { priceCents: null, currency: "NOK" },
+    data: { priceCents: null, currency: "NOK", licenceTerms: null },
   });
 });
 
@@ -251,5 +251,54 @@ describe("setPrice: the admin screen's price action (ugcportal-yzo7 K1)", () => 
       priceCents: 4_200,
       currency: "USD",
     });
+  });
+});
+
+describe("setPrice: the licence grant (ugcportal-74w.1 K1/K2/K4)", () => {
+  const GRANT = "Print and web use.\nCredit the photographer.";
+
+  async function storedTerms(): Promise<string | null> {
+    const listing = await prisma.mediaListing.findUniqueOrThrow({
+      where: { mediaId: MEDIA_ID },
+      select: { licenceTerms: true },
+    });
+    return listing.licenceTerms;
+  }
+
+  it("passes the textarea to the write with the price, and stores it", async () => {
+    // As a browser submits a textarea: CRLF line breaks.
+    await setPrice(priceForm({ licenceTerms: "Print and web use.\r\nCredit the photographer." }));
+
+    await expect(storedTerms()).resolves.toBe(GRANT);
+    await expect(storedListing()).resolves.toMatchObject({ priceCents: 125_000 });
+    expect(lastRedirect()).toContain("price=priced");
+  });
+
+  it("takes a blank textarea as removing the grant", async () => {
+    await setPrice(priceForm({ licenceTerms: GRANT }));
+    await setPrice(priceForm({ licenceTerms: "   " }));
+    await expect(storedTerms()).resolves.toBeNull();
+  });
+
+  it("leaves the grant alone when the field is absent entirely", async () => {
+    await setPrice(priceForm({ licenceTerms: GRANT }));
+    await setPrice(priceForm({ priceCents: "4200" }));
+    await expect(storedTerms()).resolves.toBe(GRANT);
+  });
+
+  it("sends an Instagram address back as a code, with neither price nor grant stored", async () => {
+    await setPrice(priceForm({ licenceTerms: "instagram.com/p/abc" }));
+
+    await expect(storedListing()).resolves.toMatchObject({ priceCents: null });
+    await expect(storedTerms()).resolves.toBeNull();
+    expect(lastRedirect()).toContain("error=price_terms_instagram_url");
+  });
+
+  it("sends a bidi control back as its own code, with neither price nor grant stored", async () => {
+    await setPrice(priceForm({ licenceTerms: "See \u2067com\u200F.\u200Finstagram\u2069 now" }));
+
+    await expect(storedListing()).resolves.toMatchObject({ priceCents: null });
+    await expect(storedTerms()).resolves.toBeNull();
+    expect(lastRedirect()).toContain("error=price_terms_bidi_control");
   });
 });

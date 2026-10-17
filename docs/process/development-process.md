@@ -195,9 +195,27 @@ thing you are about to ship, or say explicitly that you did not.
 when a bead is missing any element of the `bead-template` form — user story,
 both scope lines, K-numbered criteria, a `Verified by` on each, a guardrail,
 a premise, `model`/`model_effort`, `cc_type`/`cc_scope` — or when its
-`Premise verified` line names any commit other than `origin/main`'s current
-HEAD. For an older commit on `main` it prints how many commits stale that
-premise is; for a commit that is not on `main` at all it says so. That is
+premise is stale. Stale is scoped by the paths the premise declares
+(`ugcportal-ul2j`): the last premise line in the description and the last
+in the notes are the candidates, and each must be sound — name a commit
+that resolves and is on `main`, and carry a `Premise depends on: <path>,
+<path>` line (or `Premise depends on: none (<the external fact>)`) that can
+be checked — or the bead fails, naming the field, and the other field's
+line is never judged in its place. Of two sound candidates the one whose
+commit descends from the other's is judged (on a shared commit, the union of
+both declarations), because the description can be rewritten after notes
+were appended and where a line sits says nothing about when it was written;
+two different commits neither of which is an ancestor of the other (either
+side of a merge commit) cannot be ordered and fail. Ordering is by ancestry,
+not by commit count, so it does not depend on `main` being linear. The
+bead then fails when a commit since the judged premise
+touched a declared path — naming the commit and the path — or when a
+declared path does not exist at `origin/main`'s HEAD. A declaration that is
+absent or cannot be checked (empty, a path with whitespace, an absolute
+path, a `..` segment, a glob, or `none` combined with anything but one
+parenthesised reason) fails on either candidate. The declaration is the
+author's and is trusted: a premise resting on a file it leaves out passes. A
+premise commit that is not on `main` at all still fails as before. That is
 usually a branch commit whose PR was since squash-merged — `main` has the
 change, but under the squash commit's different sha — and sometimes a branch
 not yet merged; either way the commit is not in `main`'s history, so it
@@ -222,9 +240,13 @@ every check — the gate's own wiring failing open.
 Measured the day it was written, at `origin/main a3d55c9` over the 95 open
 beads: **12** fail at least one of the eight presence-only elements the
 2026-10-12 audit counted, **21** fail at least one of the gate's stricter
-checks, and **95 of 95** fail premise freshness — which is the point of the
-freshness rule rather than an argument against it. The 12 are
-`ugcportal-ydbi`'s scope.
+checks, and **95 of 95** fail premise freshness under the identity rule the
+gate then had (premise sha equal to `origin/main`'s HEAD). That rule was
+replaced (`ugcportal-ul2j`) because of results like this one: a gate that
+fails nearly every bead on every merge is cleared by copying the sha forward
+without re-running the observation, so freshness is now scoped by the paths a
+premise declares, and a backlog-wide failure rate is a cost to explain, not
+the point. The 12 are `ugcportal-ydbi`'s scope.
 
 What the gate does **not** do is the reason a green run is not a verdict.
 Every run, passing or failing, prints the substance checks it did not make:

@@ -318,9 +318,15 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   // inside the price well on page.tsx (`bg-muted`), which now reads the
   // paper scale, so the helper text under the amount label is
   // text-muted-foreground now, not text-ink-muted.
+  //
+  // text-muted-foreground: 1 -> 2 (ugcportal-74w.1): the helper text under
+  // the new licence-terms label, inside the same `bg-muted` price well as
+  // the amount label's helper above it — the same surface, so the same
+  // pairing. The textarea takes the shared field class, so `text-ink`
+  // stays at 1.
   "src/app/admin/curation/price-form.tsx": {
     "text-ink": 1,
-    "text-muted-foreground": 1,
+    "text-muted-foreground": 2,
   },
   "src/app/admin/settings/users/page.tsx": { "text-muted-foreground": 4 },
   "src/app/admin/settings/instagram/page.tsx": { "text-muted-foreground": 3 },

@@ -1,5 +1,6 @@
 import { cache } from "react";
 
+import { checkLicenceTerms } from "@/lib/licence-terms";
 import {
   isStorablePriceCents,
   isSupportedCurrency,
@@ -86,7 +87,8 @@ import {
 
 /**
  * Prisma `select` for {@link OfferUpload}: the whole gate select, plus the
- * two money columns.
+ * two money columns and the licence grant stored with them
+ * (ugcportal-74w.1).
  *
  * SPREAD FROM `MEDIA_GATE_SELECT`, never re-spelled. A narrower select here
  * would read as `undefined` on whatever it omitted, and the gate's own
@@ -99,8 +101,8 @@ import {
  * `Media.userId` and the uploader's review, exactly as `MEDIA_GATE_SELECT`
  * does — the same "a select that is not a third audience" case
  * `MEDIA_PREVIEW_DELIVERY_SELECT` documents in src/lib/media-access.ts.
- * Nothing it reads is serialised: `publicOffer` below returns two scalars
- * the admin chose to publish, and the test file asserts that no other field
+ * Nothing it reads is serialised: `publicOffer` below returns the three
+ * fields the admin chose to publish (amount, currency, grant), and the test file asserts that no other field
  * of the row survives the function.
  */
 export const SELLABLE_MEDIA_SELECT = {
@@ -110,14 +112,16 @@ export const SELLABLE_MEDIA_SELECT = {
       ...MEDIA_GATE_SELECT.listing.select,
       priceCents: true,
       currency: true,
+      licenceTerms: true,
     },
   },
 } as const;
 
-/** The two money columns, as this module reads them. */
+/** The two money columns and the grant, as this module reads them. */
 export type OfferListing = GateListing & {
   priceCents: number | null;
   currency: string;
+  licenceTerms: string | null;
 };
 
 /** One upload as the offer decision sees it: the gate's view, plus a price. */
@@ -183,7 +187,22 @@ export function publicOffer(
   if (!isSupportedCurrency(listing.currency)) {
     return null;
   }
-  return { priceCents, currency: listing.currency };
+  // THE GRANT, re-checked on read by the same rule the writer applies
+  // (`checkLicenceTerms`, src/lib/licence-terms.ts), for the reason the two
+  // checks above give. Read after the gate said yes, so a grant stored
+  // while the item was sellable is not shown once it is not
+  // (ugcportal-74w.1 K3; sellable-media.test.ts "K3: returns no offer"). Blank reads as no grant, and the page falls back
+  // to /licence (K2). A stored grant the writer would REFUSE — over the
+  // bound, naming an Instagram host, or carrying a bidi control (K4) —
+  // withdraws the whole offer rather than showing the price with the
+  // site-wide licence instead: the
+  // admin priced the item under that grant, and the same amount under
+  // different terms is not an offer anybody made.
+  const terms = checkLicenceTerms(listing.licenceTerms ?? "");
+  if (!terms.ok) {
+    return null;
+  }
+  return { priceCents, currency: listing.currency, licenceTerms: terms.value };
 }
 
 /**
