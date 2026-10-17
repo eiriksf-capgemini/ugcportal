@@ -362,8 +362,8 @@ describe("after the reconciliation, the person owns one user (K4)", () => {
 
   it("leaves a user matched only by provider alone, or by domain, untouched (K5)", async () => {
     // `WRONG_PROVIDER_USER` holds August's listed ADDRESS but arrived
-    // through Facebook, and the array lists him as `google:`. Adopting it
-    // would be merging two different people.
+    // through Facebook. The array no longer lists him — only the migration
+    // snapshot does. Adopting it would be merging two different people.
     const wrongProvider = await prisma.user.findUniqueOrThrow({
       where: { id: WRONG_PROVIDER_USER },
     });
@@ -543,8 +543,9 @@ describe("no reconciliation migration's copy of the array has drifted", () => {
   /**
    * People a migration adopted who have since been REMOVED from the array,
    * each with the bead that removed them. A migration is history and is not
-   * edited when the array shrinks (docs/access-control.md, "Renaming a
-   * person"), so the guard below has to be told which names are gone on
+   * edited when the array shrinks (docs/access-control.md, "The one-off
+   * reconciliation for people who already have two users", which covers adding
+   * a person), so the guard below has to be told which names are gone on
    * purpose; a name that is neither here nor in the array is still the
    * drift it exists to catch.
    *

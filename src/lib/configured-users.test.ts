@@ -175,8 +175,10 @@ describe("the array's identities are permitted in addition to the env vars (K3)"
   });
 
   it("refuses an address that was removed from the real array (ugcportal-m82q)", () => {
-    // August's address is no longer a source of permission by itself; only an
-    // ALLOWED_SIGNIN_EMAILS entry could admit it, and NO_ENV has none.
+    // August's address is no longer a source of permission by itself. The
+    // permittedIdentities (src/lib/sign-in-policy.ts) unites ALLOWED_SIGNIN_EMAILS
+    // and ADMIN_BOOTSTRAP_EMAILS; neither is set in NO_ENV, so the address is
+    // refused.
     expect(decideSignIn(attempt(AUGUST_GOOGLE, "google"), NO_ENV)).toEqual({
       permitted: false,
       reason: "not-permitted",
