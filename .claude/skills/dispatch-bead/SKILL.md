@@ -425,9 +425,9 @@ review may not be listed in `prs` yet, and GitHub numbers only rise).
   still on the bead (no PR can be read off them; rename them first), or when
   the per-PR count is above the bead-wide one (one of them is wrong).
 
-**The cross-check against a stale count.** Every round that blocked required a
-pushed pass before the next round could review anything, so with current
-bookkeeping the pass count is usually not lower than the highest round
+**The cross-check against a stale count.** A round that blocked is normally
+followed by a pushed fix pass before the next round reviews anything, so with
+current bookkeeping the pass count is usually not lower than the highest round
 recorded. Not always: a round can have no pass behind it. `pr-review-merge`
 step 5's BEHIND recovery, when `update-branch` changes the PR's own lines, has
 a fresh run review the new head as the next round with no implementation pass
@@ -456,10 +456,14 @@ It reads `bd show <id> --json` and its exit status is the verdict:
 
 The script prints how many metadata keys it examined, how many were findings
 keys and how many of those it counted. A bead whose pass count the
-orchestrator has not written, or has not kept current, comes back UNKNOWN,
-never PROCEED: an absent field read as zero, or a stale one read as current,
-would make the rule fire on nothing, and the beads it exists for are the ones
-where bookkeeping lagged.
+orchestrator has not written, whose count lags its rounds, or whose second PR
+has no per-PR count, comes back UNKNOWN, never PROCEED: an absent field read
+as zero, or a stale one read as current, would make the rule fire on nothing,
+and the beads it exists for are the ones where bookkeeping lagged. What the
+script cannot see is a count that is stale but still at or above R (a pass
+whose run stopped at red CI, which reviews nothing and stamps no round, left
+out of the count, say); the record-before-running step above is the only guard
+there.
 
 **On STOP, in this order:**
 

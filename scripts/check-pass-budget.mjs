@@ -189,9 +189,9 @@ export function checkPassBudget(bead) {
   const passes = Number(count.text);
   const counted = sel.rounds.filter((r) => r.counted);
   const seenRounds = counted.length ? counted.map((r) => `${r.key}=${r.value}`).join("; ") : "none recorded";
-  // M2 of PR #296 round 1, L1 of round 2: every round that BLOCKED required a
-  // pushed pass before the next round, so a count below the highest recorded
-  // round is usually stale bookkeeping. Not always: pr-review-merge step 5's
+  // M2 of PR #296 round 1, L1 of round 2: a round that BLOCKED is normally
+  // followed by a pushed fix pass before the next round, so a count below the
+  // highest recorded round is usually stale bookkeeping. Not always: pr-review-merge step 5's
   // BEHIND recovery stamps a round on an update-branch commit with no pass
   // behind it, and a round can re-review a fix a human pushed, so a count one
   // below the round number can be right. Refuse either way, and leave the
