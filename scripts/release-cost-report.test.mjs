@@ -28,10 +28,14 @@
  * INCOMPLETE when a transcript is missing, the coverage checks
  * (uncoveredByAgents, coverageIncomplete across two recordings), the
  * INCOMPLETE note forms (formatAgentCost) and runAgentCost's arguments.
- * The last suite, "findings_rN keys" (ugcportal-2jvh), covers the keyed
+ * "findings_rN keys" (ugcportal-2jvh) covers the keyed
  * severity reader (parseFindingsKey, withFindingsKeys, the `clean` verdict
  * read from an approval-shaped verdict line only, keyedConflicts, roundsSplit, and the
  * orphan/unstamped key reports), with fixtures from real review comments.
+ * "tokens_qa_convention" (ugcportal-zu0a) covers how excluded tokens_qa
+ * (flagged with tokens_qa_convention) are handled in the report.
+ * "an excluded tokens_impl the notes call an estimate does not mark the total" (ugcportal-zu0a)
+ * covers when tokens_impl is excluded and notes call it an estimate.
  */
 import fs from "node:fs";
 import os from "node:os";
