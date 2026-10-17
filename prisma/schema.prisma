@@ -630,6 +630,29 @@ enum RightsLayer {
   WINE_ACCESSORY
 }
 
+// What a MUSIC clearance rests on (ugcportal-hx2,
+// docs/legal/manual-upload-rights-review.md section 2, C.4.1). Only the
+// MUSIC layer carries one; every other layer's clearance has basis NULL.
+//
+//   * LICENCE - the track is licensed for this use. Needs basisEvidence: a
+//     pointer (an object key, a document reference) to the licence itself.
+//   * ORIGINAL_SCORE - the music is the uploader's own composition and
+//     performance.
+//   * MUTED_DELIVERY - "the buyer gets the video with the sound off". A
+//     PERMANENTLY REFUSED value while the sold file is the raw original
+//     (Media.key, written untouched at upload; there is no transcoding
+//     step). The writer (src/lib/curation-clearance-write.ts) refuses it,
+//     and the gate (layerIsCleared in src/lib/resale-rights.ts) refuses a
+//     row carrying it even if one is written some other way. It is in the
+//     enum, rather than left out, so that the refusal at the gate is a
+//     tested branch and not an unconstructible state: a row written by hand
+//     with this value is the case the gate has to hold against.
+enum ClearanceBasis {
+  LICENCE
+  ORIGINAL_SCORE
+  MUTED_DELIVERY
+}
+
 // What a ResaleRightsEvent row was recorded against.
 //
 // Exists because this table is append-only and outlives its subjects, so it
@@ -927,12 +950,20 @@ model MediaListing {
 // durability is the ResaleRightsEvent table's job, not this one's - these
 // rows describe current state.
 model MediaRightsClearance {
-  id              String      @id @default(cuid())
+  id              String          @id @default(cuid())
   listingId       String
   layer           RightsLayer
   reason          String
+  // The structured ground for a MUSIC clearance (ugcportal-hx2); NULL on
+  // every other layer, and on MUSIC rows written before this column existed
+  // - which the gate therefore no longer counts as cleared. See the
+  // ClearanceBasis enum.
+  basis           ClearanceBasis?
+  // The licence's evidence reference when basis is LICENCE: an object key or
+  // a document reference, free text, non-blank. NULL otherwise.
+  basisEvidence   String?
   clearedByUserId String?
-  clearedAt       DateTime    @default(now())
+  clearedAt       DateTime        @default(now())
 
   listing   MediaListing @relation(fields: [listingId], references: [id], onDelete: Cascade)
   clearedBy User?        @relation("MediaRightsClearer", fields: [clearedByUserId], references: [id])

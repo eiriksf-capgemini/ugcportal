@@ -863,6 +863,9 @@ describe("the rights-layer well (ugcportal-qfy9)", () => {
         listingId: listing.id,
         layer: RightsLayer.MUSIC,
         reason: "Licence purchased, ref 4412",
+        // A MUSIC clearance counts only with a basis (ugcportal-hx2).
+        basis: "LICENCE",
+        basisEvidence: "rights-evidence/owner-1/music-licence.pdf",
         clearedByUserId: "admin-1",
       },
     });
@@ -893,6 +896,9 @@ describe("the rights-layer well (ugcportal-qfy9)", () => {
         listingId: listing.id,
         layer: RightsLayer.MUSIC,
         reason: "Licence purchased",
+        // A MUSIC clearance counts only with a basis (ugcportal-hx2).
+        basis: "LICENCE",
+        basisEvidence: "rights-evidence/owner-1/music-licence.pdf",
         clearedByUserId: "demoted-1",
       },
     });

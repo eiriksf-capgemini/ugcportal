@@ -178,6 +178,11 @@ const UPLOAD_SELECT = {
         select: {
           layer: true,
           reason: true,
+          // The MUSIC layer's basis (ugcportal-hx2): `layerIsCleared` reads
+          // both, so `unsettledLayers` below needs them, and the register
+          // shows the basis beside the reason.
+          basis: true,
+          basisEvidence: true,
           clearedAt: true,
           clearedByUserId: true,
           clearedBy: { select: { name: true, email: true, role: true } },
@@ -686,7 +691,9 @@ export default async function AdminCurationPage({
                               {recorded.layer} cleared:{" "}
                             </dt>
                             <dd className="inline">
-                              {recorded.reason} —{" "}
+                              {recorded.reason}
+                              {recorded.basis ? ` (basis: ${recorded.basis})` : null}{" "}
+                              —{" "}
                               {recorded.clearedBy?.name ??
                                 recorded.clearedBy?.email ??
                                 recorded.clearedByUserId ??

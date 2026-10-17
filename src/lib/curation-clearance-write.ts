@@ -1,6 +1,10 @@
-import type { RightsLayer } from "@/generated/prisma/enums";
+import type { ClearanceBasis, RightsLayer } from "@/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
-import { isClearableLayer } from "@/lib/resale-rights";
+import {
+  BASIS_LAYER,
+  isClearableLayer,
+  musicClearanceBasisProblem,
+} from "@/lib/resale-rights";
 
 /**
  * THE ONE PLACE A MediaRightsClearance ROW IS WRITTEN (ugcportal-qfy9).
@@ -49,6 +53,15 @@ export const CLEARANCE_WRITE_REFUSALS = [
   "clearance_reason_blank",
   "clearance_listing_not_found",
   "clearance_already_recorded",
+  // The MUSIC layer's structured basis (ugcportal-hx2). One code per
+  // `musicClearanceBasisProblem` answer, mapped by an exhaustive switch
+  // below, plus the one refusal for a basis on any other layer.
+  "clearance_basis_missing",
+  "clearance_basis_unrecognised",
+  "clearance_basis_muted_delivery",
+  "clearance_basis_evidence_blank",
+  "clearance_basis_evidence_unexpected",
+  "clearance_basis_not_applicable",
 ] as const;
 
 export type ClearanceWriteRefusal = (typeof CLEARANCE_WRITE_REFUSALS)[number];
@@ -68,6 +81,23 @@ export type RecordLayerClearanceInput = {
   layer: RightsLayer;
   /** The admin's justification for this layer. Stored trimmed. */
   reason: string;
+  /**
+   * What a MUSIC clearance rests on (ugcportal-hx2): LICENCE (with
+   * `basisEvidence`) or ORIGINAL_SCORE. MUTED_DELIVERY and a missing basis
+   * are refused for MUSIC; ANY basis is refused for every other layer.
+   *
+   * Typed as a string rather than `ClearanceBasis` because it arrives as a
+   * form field and is re-checked at runtime by `musicClearanceBasisProblem`
+   * — the same reasoning `layer` gives above. `""`, `null` and `undefined`
+   * all mean "no basis given".
+   */
+  basis?: string | null;
+  /**
+   * The licence's evidence reference (an object key or a document
+   * reference) when `basis` is LICENCE. Stored trimmed; required non-blank
+   * for LICENCE and refused on any other basis or layer.
+   */
+  basisEvidence?: string | null;
   /** The acting admin, recorded as `clearedByUserId`. */
   actorUserId: string;
   /** Injectable only so a test can pin `clearedAt`; defaults to now. */
@@ -134,6 +164,8 @@ export async function recordLayerClearance({
   mediaId,
   layer,
   reason,
+  basis,
+  basisEvidence,
   actorUserId,
   now = new Date(),
 }: RecordLayerClearanceInput): Promise<ClearanceWriteOutcome> {
@@ -157,6 +189,54 @@ export async function recordLayerClearance({
   const trimmedReason = reason.trim();
   if (!trimmedReason) {
     return { kind: "clearance_reason_blank" };
+  }
+
+  // The basis (ugcportal-hx2), still before the transaction: like the two
+  // checks above it is a property of the request, not of any row.
+  //
+  // For MUSIC, the same `musicClearanceBasisProblem` the gate reads, so a
+  // row this writes is a row `layerIsCleared` counts and a row it refuses
+  // is one the gate would not — the rule exists once. "Deliver it muted" is
+  // refused here by name: the sold file is Media.key, the untouched
+  // original, so a clearance resting on muting would sell the track with
+  // its audio intact.
+  //
+  // For every other layer, a basis or evidence is refused rather than
+  // dropped. The basis vocabulary is about music; a "licence" basis on a
+  // PEOPLE clearance would read in the register as a stated ground the gate
+  // never consults, and silently discarding what the admin chose would hide
+  // that from them.
+  const trimmedEvidence =
+    typeof basisEvidence === "string" ? basisEvidence.trim() : "";
+  const givenBasis = basis === "" || basis === undefined ? null : basis;
+  let basisToStore: ClearanceBasis | null = null;
+  if (layer === BASIS_LAYER) {
+    const problem = musicClearanceBasisProblem(givenBasis, trimmedEvidence);
+    if (problem !== null) {
+      switch (problem) {
+        case "missing":
+          return { kind: "clearance_basis_missing" };
+        case "unrecognised":
+          return { kind: "clearance_basis_unrecognised" };
+        case "muted_delivery":
+          return { kind: "clearance_basis_muted_delivery" };
+        case "evidence_blank":
+          return { kind: "clearance_basis_evidence_blank" };
+        case "evidence_unexpected":
+          return { kind: "clearance_basis_evidence_unexpected" };
+        default: {
+          // A problem added to `musicClearanceBasisProblem` and not mapped
+          // here is a type error, and never a fall-through into the write.
+          const unmapped: never = problem;
+          throw new Error(`unmapped clearance-basis problem: ${String(unmapped)}`);
+        }
+      }
+    }
+    // `problem === null` means the value is exactly LICENCE or
+    // ORIGINAL_SCORE, so the narrowing is the function's, not a cast's.
+    basisToStore = givenBasis as ClearanceBasis;
+  } else if (givenBasis !== null || trimmedEvidence !== "") {
+    return { kind: "clearance_basis_not_applicable" };
   }
 
   return prisma.$transaction(async (tx): Promise<ClearanceWriteOutcome> => {
@@ -197,6 +277,10 @@ export async function recordLayerClearance({
           listingId: listing.id,
           layer,
           reason: trimmedReason,
+          basis: basisToStore,
+          // Only a LICENCE carries evidence; `musicClearanceBasisProblem`
+          // has already refused it on anything else, so "" here is "none".
+          basisEvidence: trimmedEvidence === "" ? null : trimmedEvidence,
           clearedByUserId: actorUserId,
           clearedAt: now,
         },
