@@ -38,8 +38,9 @@ Measured at origin/main 3aa6508 from a clean `npm ci`, with npm 11 on Node 24.20
 shadcn is **not** a dependency any more, and it was never unused: `src/app/globals.css`
 imported `shadcn/tailwind.css`. That stylesheet is vendored at
 `src/app/vendor/shadcn-tailwind.css` (header records version and sha256), and
-`src/app/vendor/shadcn-tailwind.test.ts` fails if the import is dropped or the
-vendored bytes change. Do not remove the import on the belief it is unused.
+`src/app/vendor/shadcn-tailwind.test.ts` fails if the import is deleted or
+commented out, if the compiled globals.css loses the vendored `no-scrollbar` utility,
+or if the vendored bytes change. Do not remove the import on the belief it is unused.
 Dropping the package took four advisories out of the tree (shadcn, ts-morph,
 @ts-morph/common, @modelcontextprotocol/sdk). fast-glob, micromatch and braces
 stay, because `eslint-config-next` reaches them too.
