@@ -46,8 +46,8 @@ export type LicenceTermsCheck =
 
 /**
  * Code points a buyer cannot see, removed from the comparison text by CLASS
- * rather than by a hand list (round 1 of PR #297 found eleven invisible
- * characters a list of six had missed):
+ * rather than by a hand list (round 1 of PR #297 found nine kinds of
+ * invisible character, listed below, that a list of six had missed):
  *
  * - `\p{Default_Ignorable_Code_Point}` — Unicode's own set of code points a
  *   renderer shows as nothing when it has no glyph for them: zero-width
