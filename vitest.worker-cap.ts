@@ -5,9 +5,9 @@
 //
 // Rule: an empty (or whitespace-only) value counts as unset, for both
 // variables. A value that is set but is not a positive integer throws. This
-// mapping is stricter than vitest 3, which used plain Number.parseInt and
-// accepted values like 1.5, 2abc, and 0 (measured on vitest 3.2.7, PR #295
-// round 2), rather than silently running uncapped.
+// mapping is stricter than vitest 3, which used Number.parseInt (measured on
+// vitest 3.2.7 with four 1.5 s files): 1.5 ran capped at 1 and 2abc ran capped
+// at 2; 0 ran no tests; abc, -1 and a lone space were refused.
 // Precedence: VITEST_MAX_FORKS, then VITEST_MAX_THREADS; the first one that is
 // set wins (both are validated), and neither set means no cap (vitest's own default).
 export function resolveWorkerCap(env: NodeJS.ProcessEnv): number | undefined {

@@ -12,6 +12,15 @@ import { resolveWorkerCap } from "./vitest.worker-cap";
 // because vitest applies it after this config is resolved.
 const workerCap = resolveWorkerCap(process.env);
 
+// Entries vitest 3.2.7's defaultExclude had and vitest 4.1.12's dropped; copied
+// verbatim from vitest 3.2.7 dist/chunks/defaults.B7q_naMc.js:6-12.
+export const vitest3DroppedExcludes = [
+  "**/dist/**",
+  "**/cypress/**",
+  "**/.{idea,git,cache,output,temp}/**",
+  "**/{karma,rollup,webpack,vite,vitest,jest,ava,babel,nyc,cypress,tsup,build,eslint,prettier}.config.*",
+];
+
 export default defineConfig({
   resolve: {
     alias: {
@@ -25,8 +34,12 @@ export default defineConfig({
     // the watermark concurrency gate sizes itself, and so whether unrelated
     // tests pass (ugcportal-e86). See the file for the specific failures.
     setupFiles: ["./vitest.setup.ts"],
-    // Vitest's defaultExclude covers node_modules, dist, cypress and a short
-    // list of dot-directories — none of which match .claude/, where agent
+    // Vitest 4 narrowed defaultExclude to node_modules and .git
+    // (node_modules/vitest/dist/chunks/defaults.9aQKnqFk.js:6). vitest 3.2.7
+    // (dist/chunks/defaults.B7q_naMc.js:6-12) also excluded dist, cypress,
+    // .{idea,git,cache,output,temp} and the *.config.* pattern, so those
+    // entries are re-added below to keep collection identical to vitest 3.
+    // None of defaultExclude matches .claude/, where agent
     // worktrees live. Without this, a local `vitest run` also collects those
     // sibling checkouts and reports their stale failures as if they were
     // yours (ugcportal-97y). eslint.config.mjs ignores .claude/worktrees/**
@@ -60,6 +73,12 @@ export default defineConfig({
     // first-party ever lives under .next/, so the same "exclude the whole
     // directory" reasoning above applies here too, not just a narrower
     // .next/standalone/**.
-    exclude: [...defaultExclude, ".claude/**", "e2e/**", ".next/**"],
+    exclude: [
+      ...defaultExclude,
+      ...vitest3DroppedExcludes,
+      ".claude/**",
+      "e2e/**",
+      ".next/**",
+    ],
   },
 });
