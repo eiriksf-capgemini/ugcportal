@@ -1,6 +1,14 @@
 import { DeleteObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import sharp from "sharp";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 
 import {
   MAX_ALT_TEXT_LENGTH,
@@ -1123,7 +1131,7 @@ describe("POST /api/media — object storage unreachable (ugcportal-1b2c)", () =
     return error;
   }
 
-  let errorSpy: ReturnType<typeof vi.spyOn>;
+  let errorSpy: MockInstance<typeof console.error>;
 
   beforeEach(() => {
     authMock.mockResolvedValue({ user: { id: "user-1" } });

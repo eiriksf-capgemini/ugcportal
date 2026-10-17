@@ -2,6 +2,18 @@ import path from "node:path";
 
 import { defaultExclude, defineConfig } from "vitest/config";
 
+// Worker cap (ugcportal-gdi0). Several agents share one machine and an
+// uncapped run oversubscribes it, so every local command and agent brief sets
+// VITEST_MAX_FORKS / VITEST_MAX_THREADS. vitest 3 read those two variables
+// itself (dist/chunks/coverage.*.js); vitest 4 reads only VITEST_MAX_WORKERS
+// (maxWorkers) and silently ignores them, so without this mapping the cap
+// would stop applying. VITEST_MAX_WORKERS still wins, because vitest applies
+// it after this config is resolved.
+const workerCap = Number.parseInt(
+  process.env["VITEST_MAX_FORKS"] ?? process.env["VITEST_MAX_THREADS"] ?? "",
+  10,
+);
+
 export default defineConfig({
   resolve: {
     alias: {
@@ -10,6 +22,7 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    ...(Number.isInteger(workerCap) && workerCap > 0 ? { maxWorkers: workerCap } : {}),
     // Removes host environment variables that would otherwise change how
     // the watermark concurrency gate sizes itself, and so whether unrelated
     // tests pass (ugcportal-e86). See the file for the specific failures.

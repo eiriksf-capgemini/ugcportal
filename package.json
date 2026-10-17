@@ -57,7 +57,7 @@
     "prisma": "^7.10.0",
     "tailwindcss": "^4",
     "typescript": "^5",
-    "vitest": "^3.2.7"
+    "vitest": "^4.1.12"
   },
   "overrides": {
     "source-map-js": "1.2.2"
