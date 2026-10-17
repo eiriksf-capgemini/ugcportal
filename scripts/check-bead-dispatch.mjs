@@ -10,8 +10,11 @@
  * way it cannot be path-compared with main's HEAD); or a commit on `main`
  * since the premise touched a path the bead's `Premise depends on:` line
  * declares; or the bead declares no dependency at all -- a premise with no
- * `Premise depends on:` line fails, because absent must not read as `none`
- * (ugcportal-ul2j).
+ * `Premise depends on:` line fails, because absent must not read as `none`;
+ * or the declaration cannot be checked (it lists nothing, or an item is not
+ * a repo-relative path); or a declared path does not exist at origin/main's
+ * HEAD (ugcportal-ul2j). `PREMISE_FRESHNESS_COST`'s comment gives the rules
+ * in the order the check applies them.
  *
  * Why this exists: `~/.claude/skills/bead-template/SKILL.md` has defined the
  * required form -- user story, In/Out of scope, K-numbered Given/When/Then
@@ -143,8 +146,10 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
  *      behaviour, a vendor document, a legal rule) -- does not go stale on a
  *      merge at all.
  *   5. Otherwise, any commit in `<premise>..<origin/main>` that touched a
- *      declared path makes it stale, and the failure names each such commit
- *      and the declared paths it touched. A declared directory covers
+ *      declared path makes it stale. The failure names the first five such
+ *      commits, oldest first, each with up to five of the declared files it
+ *      touched, and then counts the rest ("and N more commit(s)", "and N
+ *      more file(s)"). A declared directory covers
  *      everything under it; matching is literal (`[id]` is a directory name,
  *      not a glob) and renames count as touching both names.
  *   6. A declared path that does not exist at origin/main's HEAD fails,
@@ -221,9 +226,31 @@ const SHA_RE = /\b([0-9a-f]{7,40})\b/g;
  *     notes, but ugcportal-48zb (and others) carry it in the description, and
  *     a premise that was genuinely verified should not fail for sitting one
  *     field over.
- *   - A statement is the premise line plus the line after it, joined: `bd`
- *     hard-wraps stored text, so "Premise verified 2026-10-08 at" and its
- *     sha routinely land on different lines.
+ *   - A sha that wrapped onto the next line is still found -- but only that
+ *     wrap, narrowly: when the premise line itself names no commit and the
+ *     next line OPENS with one ("Premise verified 2026-10-10 against <branch>
+ *     at" / "6da3675: read ...", ugcportal-48zb's shape). The next line is
+ *     otherwise never read for commits. It used to be joined whole, and a
+ *     log line under a premise ("Dispatched ... from origin/main <newer>")
+ *     then lent the premise a commit it was never verified at; the freshest
+ *     such commit is the one judged, so the premise was compared with main
+ *     only from the borrowed commit on, and a touch in between was never
+ *     seen (PR #289 review, M1; ugcportal-5x8 and ugcportal-rma carried the
+ *     shape on 2026-10-17, borrowing d23add1 from a SCOPE EXTENDED line).
+ *
+ * A statement whose commit cannot be isolated this way names no commit and
+ * is skipped, not failed: `premise-present` fails the bead loudly when NO
+ * statement names a commit, and when another statement does, judging that
+ * one instead can only examine the same or more of main's history -- an
+ * unreadable statement never makes the judged commit fresher.
+ *
+ * A premise statement is a line where the word `premise` is used as a
+ * LABEL: followed by `verified`, `checked`, `measured` or `confirmed`
+ * (each also with `re-`), by `corrected`, or by a colon -- after optional
+ * `,` or `(` ("premise (verified 2026-10-08 at ...)"). A line that merely
+ * mentions the word ("the premise-fresh gate run at <sha> was green") is not
+ * one: it would otherwise date the premise from that sha and take the
+ * declaration under it (PR #289 review, M1's sibling shape).
  *
  * A line that OPENS with `Premise depends on:` is a declaration, not a
  * premise statement, and starts none of its own; and on any statement, the
@@ -241,22 +268,37 @@ export function findPremiseLines(notes, description = "") {
     const lines = field.split("\n");
     for (let i = 0; i < lines.length; i++) {
       if (!isPremiseStatementStart(lines[i])) continue;
-      const statement = [lines[i], lines[i + 1] || ""].join(" ").trim();
-      const shaText = statement.split(DEPENDS_RE)[0];
-      const shas = [...shaText.matchAll(SHA_RE)].map((m) => m[1]);
-      out.push({ line: statement, shas, depends: findDeclaration(lines, i) });
+      const own = shasIn(lines[i]);
+      const next = lines[i + 1] || "";
+      const wrapped = own.length === 0 && !isPremiseStatementStart(next) && !DEPENDS_LINE_RE.test(next) ? LEADING_SHA_RE.exec(next) : null;
+      const statement = wrapped ? `${lines[i].trim()} ${next.trim()}` : lines[i].trim();
+      out.push({ line: statement, shas: wrapped ? [wrapped[1]] : own, depends: findDeclaration(lines, i) });
     }
   }
   return out;
 }
 
-/** The declaration label, anywhere on a line. */
-const DEPENDS_RE = /\bpremise depends on\s*:/i;
+/**
+ * The declaration label, anywhere on a line. Not `\b`: `_` is a word
+ * character, so `\b` would miss `_Premise depends on:_`, a line
+ * DEPENDS_LINE_RE accepts as a declaration -- the two must agree.
+ */
+const DEPENDS_RE = /(?<![A-Za-z0-9])premise depends on\s*:/i;
 /** A line that IS a declaration: the label opens it, after any list or emphasis markup. */
 const DEPENDS_LINE_RE = /^[\s*_>`#-]*premise depends on\s*:/i;
 
+/** `premise` used as a label -- see findPremiseLines. Not `premise-fresh`, not "the premise of". */
+const PREMISE_LABEL_RE = /\bpremise(?![\w-])[\s,(]*(?:(?:re-?)?(?:verified|checked|measured|confirmed)\b|corrected\b|:)/i;
+/** A line that OPENS with a commit token, after any quoting or list markup: the hard-wrap continuation. */
+const LEADING_SHA_RE = /^[\s`*_>(\[-]*([0-9a-f]{7,40})\b/;
+
 function isPremiseStatementStart(line) {
-  return /\bpremise\b/i.test(line) && !DEPENDS_LINE_RE.test(line);
+  return PREMISE_LABEL_RE.test(line) && !DEPENDS_LINE_RE.test(line);
+}
+
+/** Commit tokens on one line, up to any `Premise depends on:` label (a hex-looking path segment is not a commit). */
+function shasIn(line) {
+  return [...line.split(DEPENDS_RE)[0].matchAll(SHA_RE)].map((m) => m[1]);
 }
 
 /**
@@ -274,8 +316,15 @@ function isPremiseStatementStart(line) {
  * a, b") and then on the following lines, stopping at a blank line or at the
  * next premise statement -- so one statement can never borrow another's
  * declaration, and a declaration that sits further away than that is not
- * found. Not found is `{kind: "missing"}`, which the check FAILS: absent is
- * never read as none.
+ * found. A line in between that is not a premise statement (a dispatch log
+ * line, say) is passed over: it lends the statement no commit (see
+ * findPremiseLines), so the declaration below it is judged against the
+ * statement's own commit, not a newer one a log line names. The one
+ * exception is the hard wrap: a line that OPENS with a sha, directly under a
+ * premise line naming none, is read as that premise's own wrapped commit.
+ *
+ * Not found is `{kind: "missing"}`, which the check FAILS: absent is never
+ * read as none.
  *
  * The list ends at the end of its line unless that line ends with a comma,
  * in which case it continues on the next one. Hard-wrapped text that splits
@@ -300,11 +349,31 @@ export function findDeclaration(lines, start) {
 
 const NONE_ALONE = "`none` must stand alone, as `none` or `none (<why>)` -- not combined with paths or followed by other text";
 
+/** True when `text` is one parenthesised group, nested parentheses allowed, and nothing after it but a `.` or `;`. */
+function isOneParenthesisedGroup(text) {
+  const body = text.replace(/[.;]$/, "");
+  if (!body.startsWith("(")) return false;
+  let depth = 0;
+  for (let i = 0; i < body.length; i++) {
+    if (body[i] === "(") depth++;
+    else if (body[i] === ")" && --depth === 0) return i === body.length - 1;
+    if (depth < 0) return false;
+  }
+  return false;
+}
+
 /**
  * Parse the text after `Premise depends on:`.
  *
+ * Emphasis markup the label carried (`**Premise depends on:** x`, which the
+ * line classifier `DEPENDS_LINE_RE` accepts) is stripped first: a leading
+ * `**`/`__`/`*`/`_` standing alone before the value, and a trailing `**`
+ * (not one after a `/`, which is the glob `dir/**` and fails as a glob).
+ *
  * `none` as the first word is the explicit no-paths form, alone or followed
- * by one parenthesised reason, which is kept for the report. Anything else
+ * by one parenthesised reason (nested parentheses inside it are fine),
+ * which is kept for the report; backtick quoting is ignored for this test,
+ * so `` `none (x)` `` is `none` too. Anything else
  * is a comma-separated path list. Each item has surrounding backticks or
  * quotes, a leading `./`, and trailing sentence punctuation stripped; what remains must be a repo-relative path. Items that
  * are not (an empty list, whitespace inside an item, an absolute path, a
@@ -314,14 +383,18 @@ const NONE_ALONE = "`none` must stand alone, as `none` or `none (<why>)` -- not 
  * @returns {Declaration}
  */
 export function parseDeclaration(raw) {
-  const text = String(raw || "").trim();
-  const none = /^none(?=$|\s|\()(.*)$/is.exec(text);
+  const text = String(raw || "")
+    .trim()
+    .replace(/^(?:\*\*|__|\*|_)(?=\s|$)/, "")
+    .replace(/(?<!\/)\*\*$/, "")
+    .trim();
+  const none = /^none(?=$|\s|\()(.*)$/is.exec(text.replace(/`/g, ""));
   if (none) {
     const reason = none[1].trim();
     // `none` stands alone or with ONE parenthesised reason; anything else
     // after it (`none (x), src/a.ts`) would otherwise be read as a bare none
     // and drop the paths, so it fails instead.
-    if (reason === "" || /^\([^()]*\)[.;]?$/.test(reason)) return { kind: "none", reason, raw: text };
+    if (reason === "" || isOneParenthesisedGroup(reason)) return { kind: "none", reason, raw: text };
     return { kind: "paths", paths: [], problems: [NONE_ALONE], raw: text };
   }
   const paths = [];

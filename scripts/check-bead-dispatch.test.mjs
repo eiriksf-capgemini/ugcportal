@@ -451,7 +451,7 @@ describe("K2: premise freshness against origin/main (kt3k's cases, under ul2j's 
     expect(runFixture(bead).status).toBe(0);
   });
 
-  // --- identity, not one-directional distance ---
+  // --- on main, not one-directional distance (rule 1) ---
   //
   // `<premise>..<head>` is 0 for HEAD and for every commit built on top of
   // HEAD, so a premise verified inside a branch used to PASS with
@@ -777,6 +777,81 @@ describe("ul2j: premise freshness is scoped by the paths the premise declares", 
     expect(freshLine(runNotes(olderOnly).stdout)).toContain(`premise verified at ${short(c[1])} (5 commit(s) behind origin/main ${short(c[6])}) has no`);
   });
 
+  // --- PR #289 review, M1: a premise is dated by its OWN commit, never by a
+  // neighbouring line's. Each layout below puts a newer commit (c2) on a line
+  // between the premise (c0) and its declaration; c1 touched the declared
+  // path, so only a check that dates the premise from c0 sees the touch.
+  const STALE_AT_C0 = (stdout) => {
+    const line = freshLine(stdout);
+    expect(line).toContain(`premise verified at ${short(c[0])} (6 commit(s) behind origin/main ${short(c[6])}) is stale`);
+    expect(line).toContain(`${short(c[1])} touched src/lib/a.ts`);
+    expect(line).not.toContain(`premise verified at ${short(c[2])}`);
+  };
+  const ABOUT_C0 = () => `Premise verified 2026-10-13 at origin/main ${c[0]}: src/lib/a.ts exports v0.`;
+
+  it("M1: a dispatch log line between the premise and its declaration does not lend the premise its newer commit", () => {
+    const notes = [ABOUT_C0(), `Dispatched 2026-10-15 by the orchestrator from origin/main ${c[2]}.`, "Premise depends on: src/lib/a.ts"].join("\n");
+    const res = runNotes(notes);
+    expect(res.status).toBe(1);
+    expect(failedChecks(res.stdout)).toEqual(["premise-fresh"]);
+    STALE_AT_C0(res.stdout);
+    // the same bead with the declaration directly under the premise reads the same
+    STALE_AT_C0(runNotes([ABOUT_C0(), "Premise depends on: src/lib/a.ts"].join("\n")).stdout);
+  });
+
+  it("M1: a log line that only mentions the word premise is not a premise statement, and takes neither the date nor the declaration", () => {
+    const notes = [
+      ABOUT_C0(),
+      `2026-10-15 orchestrator: the premise-fresh gate run at origin/main ${c[2]} was green`,
+      "Premise depends on: src/lib/a.ts",
+    ].join("\n");
+    const res = runNotes(notes);
+    expect(res.status).toBe(1);
+    STALE_AT_C0(res.stdout);
+  });
+
+  it("M1: a premise line naming no commit does not take one from the note under it (ugcportal-5x8 / ugcportal-rma's shape)", () => {
+    // 5x8 and rma: a premise statement with no sha, then a SCOPE EXTENDED
+    // note naming d23add1, which the old line-pair join read as the premise's
+    // commit -- the freshest one on the bead, so the one judged.
+    const notes = [
+      `${ABOUT_C0()}\nPremise depends on: src/lib/a.ts`,
+      'Premise re-verified 2026-10-12: "the review scope names none of these."',
+      `SCOPE EXTENDED 2026-10-12 (ugcportal-l9qx K1): re-derived at origin/main ${c[2]}.`,
+    ].join("\n");
+    const res = runNotes(notes);
+    expect(res.status).toBe(1);
+    STALE_AT_C0(res.stdout);
+    expect(findPremiseLines(notes).map((s) => s.shas)).toEqual([[c[0]], []]);
+  });
+
+  it("names the first five touching commits and up to five files each, then counts the rest", () => {
+    const files = ["f1", "f2", "f3", "f4", "f5", "f6", "f7"];
+    const touched = Array.from({ length: 7 }, (_, i) => ({ sha: `${i + 1}`.repeat(40), files: i === 0 ? files : [`f${i + 1}`] }));
+    const git = {
+      head: "f".repeat(40),
+      headShort: "fffffff",
+      resolveCommit: (sha) => sha.padEnd(40, "0"),
+      commitsAhead: () => 9,
+      commitsNotOnMain: () => 0,
+      commitsTouching: () => touched,
+      pathExists: () => true,
+    };
+    const result = validateBead(completeBead({ notes: premise(0, files.join(", ")) }), { git, headShort: "fffffff" });
+    const detail = result.results.find((r) => r.id === "premise-fresh").detail;
+    expect(detail).toContain("7 of those commit(s) touched a declared path");
+    expect(detail).toContain("1111111 touched f1, f2, f3, f4, f5 and 2 more file(s)");
+    for (const n of [2, 3, 4, 5]) expect(detail).toContain(`${String(n).repeat(7)} touched f${n}`);
+    for (const n of [6, 7]) expect(detail).not.toContain(`${String(n).repeat(7)} touched`);
+    expect(detail).toContain("; and 2 more commit(s).");
+  });
+
+  it("L1: the bold label form, accepted as a declaration line, also parses as one", () => {
+    const res = runNotes(`${premise(1)}\n**Premise depends on:** src/lib/a.ts`);
+    expect(res.status).toBe(0);
+    expect(freshLine(res.stdout)).toContain("none of those commits touched its declared path(s): src/lib/a.ts");
+  });
+
   // --- K5: the blind spot, demonstrated rather than claimed away
   it("K5: an understated declaration passes", () => {
     // This premise is ABOUT src/lib/a.ts, which c1 changed. Its author
@@ -859,6 +934,29 @@ describe("parseDeclaration / findDeclaration / combineDeclarations", { timeout: 
     const found = findPremiseLines("Premise verified at abc1234.\nPremise depends on: src/deadbeef0/x.ts");
     expect(found).toHaveLength(1);
     expect(found[0].shas).toEqual(["abc1234"]);
+  });
+
+  it("L1: strips the emphasis a label carried, but not a glob's `**`", () => {
+    for (const line of ["**Premise depends on:** src/a.ts", "_Premise depends on:_ src/a.ts", "**Premise depends on: src/a.ts**", "__Premise depends on:__ src/a.ts"]) {
+      expect(findDeclaration([line], 0), line).toMatchObject({ kind: "paths", paths: ["src/a.ts"], problems: [] });
+    }
+    expect(parseDeclaration("src/**").problems).toEqual(['"src/**" is a glob; declare the file or the directory instead']);
+    // an underscore that is part of a path is not emphasis
+    expect(parseDeclaration("src/__tests__").paths).toEqual(["src/__tests__"]);
+  });
+
+  it("L1: `none` quoted in backticks is still `none`", () => {
+    expect(parseDeclaration("`none (an external fact)`")).toMatchObject({ kind: "none", reason: "(an external fact)" });
+    expect(parseDeclaration("`none` (an external fact)")).toMatchObject({ kind: "none", reason: "(an external fact)" });
+    expect(parseDeclaration("`nonexistent/x.ts`")).toMatchObject({ kind: "paths", paths: ["nonexistent/x.ts"] });
+  });
+
+  it("L1: a `none` reason may contain balanced nested parentheses, and only one group", () => {
+    expect(parseDeclaration("none (GitHub API (observed 2026-10-17))")).toMatchObject({ kind: "none", reason: "(GitHub API (observed 2026-10-17))" });
+    expect(parseDeclaration("none (GitHub API (observed 2026-10-17)).")).toMatchObject({ kind: "none" });
+    for (const raw of ["none (a) (b)", "none (a))", "none ((a)", "none (a), src/a.ts"]) {
+      expect(parseDeclaration(raw).problems, raw).toEqual([expect.stringContaining("`none` must stand alone")]);
+    }
   });
 
   it("findDeclaration reports missing rather than an empty list", () => {
@@ -1027,10 +1125,39 @@ describe("findPremiseLines", { timeout: 30_000 }, () => {
     const notes = "Premise verified at abc1234.\nPremise measured at def5678.\nPREMISE CORRECTED at 9abcdef.";
     const found = findPremiseLines(notes);
     expect(found).toHaveLength(3);
-    // Each statement is its line plus the following one (bd hard-wraps), so
-    // consecutive premise lines overlap by design; what matters is that all
-    // three shas are found, since freshness takes the best across the bead.
-    expect([...new Set(found.flatMap((l) => l.shas))].sort()).toEqual(["9abcdef", "abc1234", "def5678"]);
+    // each statement carries its own line's sha, and only that one
+    expect(found.map((l) => l.shas)).toEqual([["abc1234"], ["def5678"], ["9abcdef"]]);
+  });
+
+  it("counts `premise` as a label, not as a word mentioned in passing", () => {
+    for (const line of [
+      "Premise re-verified 2026-10-06 on main at abc1234.",
+      "Premise re-checked at abc1234.",
+      "premise (verified 2026-10-08 at abc1234)",
+      "the premise, verified at abc1234, holds",
+      "Premise: found at abc1234.",
+      "Premise confirmed at abc1234.",
+    ]) {
+      expect(findPremiseLines(line).map((l) => l.shas), line).toEqual([["abc1234"]]);
+    }
+    for (const line of [
+      "the premise-fresh gate run at origin/main abc1234 was green",
+      "docs/process/premise-audit-v0.7.0-2026-10-08.md at abc1234",
+      "the premise of this bead is at abc1234",
+    ]) {
+      expect(findPremiseLines(line), line).toEqual([]);
+    }
+  });
+
+  it("takes a commit from the next line only when it is the hard-wrapped sha opening that line", () => {
+    // ugcportal-48zb's live shape: the sha opens the continuation line
+    expect(findPremiseLines("Premise verified 2026-10-10 against fix/x at\n6da3675: read the test.")[0].shas).toEqual(["6da3675"]);
+    // the premise line names its own commit, so the next line's is not read
+    expect(findPremiseLines("Premise verified at abc1234.\nDispatched from def5678.")[0].shas).toEqual(["abc1234"]);
+    // the next line names a commit, but not as its opening token: not a wrap
+    expect(findPremiseLines("Premise verified 2026-10-13 at origin/main\nDispatched from origin/main def5678.")[0].shas).toEqual([]);
+    // the next line is itself a premise statement: it keeps its own commit
+    expect(findPremiseLines("## Premise:\nPremise verified at def5678.").map((l) => l.shas)).toEqual([[], ["def5678"]]);
   });
 
   it("does not invent a premise statement where there is none", () => {

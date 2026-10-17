@@ -69,7 +69,8 @@ gate judges the bead's *freshest* premise line that is on `origin/main`, and
 fails it when:
 
 - a commit on `origin/main` since that premise touched a declared path — it
-  names each such commit and the paths it touched;
+  names the first five such commits, oldest first, each with up to five of
+  the declared files it touched, then counts the rest;
 - the line has **no** `Premise depends on:` — absent is never read as
   `none`, because a check that matched nothing must not look like one that
   passed;
