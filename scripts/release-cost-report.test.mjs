@@ -28,10 +28,14 @@
  * INCOMPLETE when a transcript is missing, the coverage checks
  * (uncoveredByAgents, coverageIncomplete across two recordings), the
  * INCOMPLETE note forms (formatAgentCost) and runAgentCost's arguments.
- * The last suite, "findings_rN keys" (ugcportal-2jvh), covers the keyed
+ * "findings_rN keys" (ugcportal-2jvh) covers the keyed
  * severity reader (parseFindingsKey, withFindingsKeys, the `clean` verdict
  * read from an approval-shaped verdict line only, keyedConflicts, roundsSplit, and the
  * orphan/unstamped key reports), with fixtures from real review comments.
+ * "tokens_qa_convention" (ugcportal-zu0a) covers how excluded tokens_qa
+ * (flagged with tokens_qa_convention) are handled in the report.
+ * "an excluded tokens_impl the notes call an estimate does not mark the total" (ugcportal-zu0a)
+ * covers when tokens_impl is excluded and notes call it an estimate.
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -1461,5 +1465,81 @@ describe("findings_rN keys (ugcportal-2jvh)", () => {
     const rs = buildRows(rel, new Map([[b.id, b]]), analyses());
     expect(rs[0].roundsFromKeys).toBe(0);
     expect(rs[0].mediums).toBe(2);
+  });
+});
+
+describe("tokens_qa_convention (ugcportal-zu0a): a flagged tokens_qa is not counted at face value", () => {
+  const plain = { id: "ugcportal-qaa1", title: "unflagged qa bead", metadata: { cc_type: "fix", tokens_impl: 100000, tokens_qa: 250000 } };
+  const lastPer = { id: "ugcportal-qaa2", title: "last-per-agent qa bead", metadata: { cc_type: "fix", tokens_impl: 100000, tokens_qa: 249220, tokens_qa_convention: "Last_Per_Agent" } };
+  const undet = { id: "ugcportal-qaa3", title: "undeterminable qa bead", metadata: { cc_type: "fix", tokens_impl: 100000, tokens_qa: 663731, tokens_qa_convention: "undeterminable" } };
+  const summedQa = { id: "ugcportal-qaa4", title: "summed qa bead", metadata: { cc_type: "fix", tokens_impl: 100000, tokens_qa: 877777, tokens_qa_convention: " Summed_Snapshots " } };
+  const iteBead = { id: "ugcportal-qaa5", title: "ITE bead keeps its ITE qa", metadata: { cc_type: "fix", cost_ite_impl: 5000000, cost_ite_qa: 3000000, tokens_qa: 999999, tokens_qa_convention: "undeterminable" } };
+  // Notes call tokens_qa an estimate, and tokens_qa is then excluded: the total is tokens_impl alone, exact.
+  const undetEst = { id: "ugcportal-qaa6", title: "excluded estimated qa", notes: "tokens_qa is a rough estimate.", metadata: { cc_type: "fix", tokens_impl: 105359, tokens_qa: 470587, tokens_qa_convention: "undeterminable" } };
+  const beads = [plain, lastPer, undet, summedQa, iteBead, undetEst];
+  const release = { version: "v9.9.9", ids: beads.map((b) => b.id), entries: new Map(beads.map((b) => [b.id, { title: b.title, type: "Fixes" }])) };
+  const rows = buildRows(release, new Map(beads.map((b) => [b.id, b])), new Map());
+  const row = (id) => rows.find((r) => r.id === id);
+  const report = renderReport({ releases: ["v9.9.9"], rowsByRelease: new Map([["v9.9.9", rows]]), membershipChecks: [], unmerged: [], generatedAt: "2026-10-17", reviewer: "x", prCount: 0 });
+  const tableLine = (short) => report.split("\n").find((l) => l.startsWith(`| \`${short}\` |`));
+
+  it("costUnitOf: absent and last-per-agent (any case) count; undeterminable, summed-snapshots and unknown values do not", () => {
+    expect(costUnitOf(plain.metadata)).toMatchObject({ unit: "context", qa: 250000, qaConventionExcluded: null });
+    expect(costUnitOf(lastPer.metadata)).toMatchObject({ qa: 249220, qaConventionExcluded: null });
+    expect(costUnitOf(undet.metadata)).toMatchObject({ unit: "context", impl: 100000, qa: null, qaConventionExcluded: "undeterminable" });
+    expect(costUnitOf(summedQa.metadata)).toMatchObject({ qa: null, qaConventionExcluded: "Summed_Snapshots" });
+    expect(costUnitOf({ tokens_qa: 5, tokens_qa_convention: "mixed" })).toMatchObject({ qa: null, qaConventionExcluded: "mixed" });
+  });
+
+  it("a blank flag is no flag: the figure counts and nothing is listed", () => {
+    for (const v of ["", "   "]) expect(costUnitOf({ tokens_qa: 5, tokens_qa_convention: v })).toMatchObject({ qa: 5, qaConventionExcluded: null });
+  });
+
+  it("a flag on a bead with no tokens_qa excludes nothing and is not listed", () => {
+    expect(costUnitOf({ tokens_impl: 7, tokens_qa_convention: "undeterminable" })).toMatchObject({ qa: null, qaConventionExcluded: null });
+  });
+
+  it("an ITE bead is read in ITE and its tokens_qa flag is irrelevant", () => {
+    expect(row("ugcportal-qaa5")).toMatchObject({ unit: "ite", iteQa: 3000000, qaConventionExcluded: null });
+  });
+
+  it("the flagged figures appear nowhere in the report, are marked excluded, and are named under Data gaps", () => {
+    expect(report).not.toContain(fmt(663731));
+    expect(report).not.toContain(fmt(877777));
+    expect(report).not.toContain(fmt(999999));
+    expect(tableLine("qaa3")).toContain("excluded (undeterminable)");
+    expect(report).toContain("`tokens_qa` not counted, flagged `tokens_qa_convention` (3): qaa3 (undeterminable); qaa4 (Summed_Snapshots); qaa6 (undeterminable)");
+    // The flagged beads are not also listed as "no QA figure".
+    expect(report).toMatch(/no QA figure in the bead's unit \(0\): —/);
+  });
+
+  it("an excluded tokens_qa the notes call an estimate does not mark the total, which is tokens_impl alone", () => {
+    expect(row("ugcportal-qaa6")).toMatchObject({ qa: null, qaEstimated: true, implEstimated: false, total: 105359 });
+    const cells = tableLine("qaa6").split("|").map((c) => c.trim());
+    expect(cells).toContain("excluded (undeterminable)");
+    expect(cells).toContain(fmt(105359));
+    expect(cells).not.toContain(`~${fmt(105359)}`);
+  });
+
+  it("the unflagged beads keep their figure and the QA total sums only them", () => {
+    expect(row("ugcportal-qaa1").qa).toBe(250000);
+    expect(row("ugcportal-qaa2").qa).toBe(249220);
+    expect(aggregate(rows).qaTotal).toBe(250000 + 249220);
+  });
+});
+
+describe("an excluded tokens_impl the notes call an estimate does not mark the total (ugcportal-zu0a)", () => {
+  // tokens_impl is flagged summed-snapshots, so it is excluded; the notes call it an estimate.
+  // tokens_qa is counted and exact: the total is tokens_qa alone and carries no tilde.
+  const bead = { id: "ugcportal-impl1", title: "excluded estimated impl", notes: "tokens_impl is a rough estimate.", metadata: { cc_type: "fix", tokens_impl: 480000, tokens_impl_convention: "summed-snapshots", tokens_qa: 120000 } };
+  const release = { version: "v9.9.9", ids: [bead.id], entries: new Map([[bead.id, { title: bead.title, type: "Fixes" }]]) };
+  const rows = buildRows(release, new Map([[bead.id, bead]]), new Map());
+  const report = renderReport({ releases: ["v9.9.9"], rowsByRelease: new Map([["v9.9.9", rows]]), membershipChecks: [], unmerged: [], generatedAt: "2026-10-17", reviewer: "x", prCount: 0 });
+
+  it("the total is tokens_qa alone and no cell of the bead's row carries a tilde on it", () => {
+    expect(rows[0]).toMatchObject({ impl: null, implEstimated: true, qa: 120000, qaEstimated: false, total: 120000 });
+    const cells = report.split("\n").find((l) => l.startsWith("| `impl1` |")).split("|").map((c) => c.trim());
+    expect(cells).toContain(fmt(120000));
+    expect(cells).not.toContain(`~${fmt(120000)}`);
   });
 });
