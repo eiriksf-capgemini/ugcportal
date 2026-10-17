@@ -336,8 +336,8 @@ describe("K2: never someone else's file, never on someone's behalf, never twice"
     // `uploaderUserId` (read straight off a request in
     // src/app/api/admin/rights/decision/route.ts), three of them also under
     // the `attestation.` prefix, and a few other plausible actor names. A
-    // list can only cover what it lists. That no body key other than the ten
-    // `parseAttestation` reads, whatever its name, reaches the write is the
+    // list can only cover what it lists. That no natural read of a body key other
+    // than the ten `parseAttestation` reads reaches the write is the
     // structural case in src/lib/attestation-write-paths.test.ts
     // (`rawBodyLeaksIn`), which holds the route's source to reading the body
     // only through that parser.
@@ -417,6 +417,13 @@ describe("K3: the Media row is never written", () => {
   it("…and before and after a 409, a 403 and a 400", async () => {
     await seedMedia();
     signedInAs(OWNER);
+    // A 400 needs a row still un-attested: once one exists the pre-check
+    // refuses with a 409 before the body is read.
+    const unattested = await mediaRow();
+    expect((await attest({})).status).toBe(400);
+    expect(await prisma.mediaAttestation.count()).toBe(0);
+    expect(await mediaRow()).toEqual(unattested);
+
     expect((await attest(attestationBody())).status).toBe(201);
     const before = await mediaRow();
 

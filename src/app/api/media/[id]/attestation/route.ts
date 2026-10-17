@@ -136,8 +136,9 @@ export async function POST(request: Request, { params }: RouteContext) {
    * in any shape (plain, destructured or a parameter), is this one, that
    * every declaration named `access` comes from `requireOwnedMedia`, and that
    * the write below names `userId`. And it checks that the body is read only
-   * through `attestationFromBody` above, so no body key other than the ten
-   * `parseAttestation` reads, whatever its name, can reach the write. The
+   * through `attestationFromBody` above, so no natural read of a body key
+   * other than the ten `parseAttestation` reads can reach the write
+   * (deliberately obfuscated reads are outside what that check sees). The
    * route test's K2 case adds a behavioural check for the actor keys it
    * lists.
    */

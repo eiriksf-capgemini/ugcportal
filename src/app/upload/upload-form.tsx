@@ -52,9 +52,9 @@ import {
  * It deliberately holds almost no logic. Which files are refused before
  * sending, what each HTTP status means, how a response becomes a success row,
  * and how the queue is worked all live in the four sibling modules, because
- * the repo's vitest runs in a node environment with no DOM: anything that can
- * only be reached through a React event handler is, in practice, untested
- * here. What is left in this file is state wiring and drag-and-drop plumbing.
+ * the repo's vitest runs in a node environment by default (jsdom is opt-in per
+ * test file): anything that can only be reached through a React event
+ * handler is, in practice, untested unless such a file covers it. What is left in this file is state wiring and drag-and-drop plumbing.
  */
 
 /**

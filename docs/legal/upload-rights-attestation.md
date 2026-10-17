@@ -152,7 +152,7 @@ person attesting has the legal **capacity** to grant anything is
 
 | Blocker | When |
 | --- | --- |
-| `attestation_missing` | no attestation at all — every upload made before this existed, every upload by a configured user who was not asked (§5), and anything a future second write path creates without one |
+| `attestation_missing` | no attestation at all — every upload made before this existed (until its uploader answers through `POST /api/media/[id]/attestation`), every upload by a configured user who was not asked (§5), and anything a future second write path creates without one |
 | `attestation_incomplete` | a row with an answer missing or of the wrong shape (not reachable through the upload form; a data fault) |
 | `attestation_not_by_uploader` | the declaration names somebody other than the file's own owner |
 | `attestation_version_retired` | a version no longer in `ACCEPTED_ATTESTATION_VERSIONS` |

@@ -216,9 +216,14 @@ function returnsNull(statement: ts.Statement): boolean {
 /**
  * ugcportal-gkax M1-r2: every place the late-attestation route's file reads
  * the request body other than through `parseAttestation`, as `line N: why:
- * text`. Empty means the body reaches nothing but its object-shape check
- * and the parser, whatever key a mutation might read and whatever binding
- * shape it reads it into. The
+ * text`. Empty means the body is read only through its object-shape check
+ * and the parser's reader. It catches the natural shapes: a destructured
+ * read, a parameter, an alias, a second alias, a module-level helper. It
+ * does NOT cover deliberately obfuscated reads: a side effect hidden in the
+ * shape-check condition (an assignment storing the raw body in module-level
+ * state), or reassignment of the reader arrow's `name` parameter before
+ * `alias[name]`. Both pass this rule today; closing them is not attempted
+ * here. The
  * rule, all of it checked over the AST of that one file:
  *
  *  A. `POST` reads its `request` parameter only as the first argument of a
@@ -237,8 +242,9 @@ function returnsNull(statement: ts.Statement): boolean {
  *     arrow's one parameter.
  *
  * So `POST` reads nothing of the raw object but `readJsonBody`'s failure
- * fields, and inside the one function that holds it, it is read at nothing
- * but the keys `parseAttestation` asks for.
+ * fields, and inside the one function that holds it, the object is read
+ * only through the shape check and the parser's reader (subject to the
+ * limits above).
  */
 export function rawBodyLeaksIn(file: string): string[] {
   const source = sourceFileOf(file);
@@ -613,7 +619,7 @@ describe("ugcportal-15r K3: only the named places write an attestation", () => {
     expect(writes[0].nested).toBe(false);
     // Inside the transaction's client, not the module-level `prisma`: a
     // Media row committed without the declaration its uploader just gave is
-    // an upload that can never be sold. The route tests assert the
+    // an upload that stays unsellable until attested late. The route tests assert the
     // behaviour; this asserts the shape that produces it.
     expect(writes[0].callee).toBe("tx.mediaAttestation.create");
   });
@@ -630,10 +636,11 @@ describe("ugcportal-15r K3: only the named places write an attestation", () => {
   it("binds that `userId` from the session, and from nothing else", () => {
     /*
      * The other half, and the half a call-site check cannot give: `userId`
-     * is only worth asserting on if it is the session's. Every binding of
-     * that name in the file is checked, not just the nearest one, so a
-     * second `const userId = body.get("userId")` added later fails here
-     * even if the write itself is untouched.
+     * is only worth asserting on if it is the session's. Every plain
+     * `const`/`let`/`var` declaration of that name in the file is checked
+     * (`bindingsNamed` sees no other declaration shape), so a second
+     * `const userId = body.get("userId")` added later fails here even if
+     * the write itself is untouched.
      */
     const bindings = userIdBindingsIn(path.join(SRC_ROOT, WRITE_PATH));
 
@@ -696,7 +703,7 @@ describe("ugcportal-gkax: the late-attestation route names the session's user to
     ]);
   });
 
-  it("reads the request body only through `parseAttestation`, so no body key of any name can reach the write", () => {
+  it("reads the request body only through `parseAttestation`, so no natural read of the body can reach the write", () => {
     /*
      * ugcportal-gkax M1-r2, the class rather than one more key. The route
      * test's K2 case sends a list of actor keys and can only ever cover that
@@ -704,8 +711,11 @@ describe("ugcportal-gkax: the late-attestation route names the session's user to
      * review. This holds the route's source to the rule `rawBodyLeaksIn`
      * states (the request read once, by `readJsonBody`; the parsed body
      * handed whole to `attestationFromBody`; inside that, the object read
-     * only at the keys `parseAttestation` asks for), so a read of ANY key,
-     * into any binding shape, is a reported leak. Proved against mutated
+     * only through the shape check and the parser's reader), so a read of any
+     * key into a natural binding shape (destructured, parameter, alias,
+     * second alias, module-level helper) is a reported leak. Deliberately
+     * obfuscated reads (see the docblock on `rawBodyLeaksIn`) are not
+     * covered. Proved against mutated
      * copies of this very file at the bottom of this one.
      */
     expect(rawBodyLeaksIn(routeFile)).toEqual([]);

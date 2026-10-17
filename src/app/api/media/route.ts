@@ -841,8 +841,9 @@ async function handleUpload(
        *
        * INSIDE THE SAME TRANSACTION as the media row, for the reason the tag
        * rows are: a Media row committed without its attestation is an upload
-       * that can never be sold and whose uploader has already answered the
-       * questions. Rolling both back leaves the uploader able to retry.
+       * that stays unsellable until its uploader attests late (POST
+       * /api/media/[id]/attestation), having already answered the questions
+       * here. Rolling both back leaves the uploader able to retry.
        */
       //
       // SKIPPED, and only skipped, for a configured uploader who sent no

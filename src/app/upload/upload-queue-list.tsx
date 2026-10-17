@@ -36,8 +36,8 @@ export type UploadQueueListProps = {
    * The moment the list is being rendered at, for the retry countdown.
    *
    * Passed in rather than read from the clock inside, so the component stays
-   * a pure function of its props: renderToStaticMarkup is the only rendering
-   * this repo can do in tests, and a Date.now() inside would make the
+   * a pure function of its props: a test can then render it with
+   * renderToStaticMarkup or mount it in a jsdom file, and a Date.now() inside would make the
    * throttled state unassertable.
    */
   now: number;
