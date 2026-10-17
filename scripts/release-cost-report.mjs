@@ -1195,7 +1195,7 @@ export function outcomeOf(bead, prAnalyses, rounds) {
 // `undeterminable` (the audit could not tie the figure to its reviewer
 // agents' transcripts), or one nobody defined -- is not counted and is listed
 // under Data gaps with its value. A bead with no tokens_qa_convention is read
-// at face value, as before.
+// at face value, as before; so does one whose value is blank.
 
 export const CONTEXT_LABEL = "context-size, not cost";
 export const SUMMED_SNAPSHOTS = "summed-snapshots";
@@ -1257,7 +1257,7 @@ export function costUnitOf(meta = {}) {
   const summed = ctxImpl !== null && conv === SUMMED_SNAPSHOTS;
   const unknown = ctxImpl !== null && conv !== null && conv !== SUMMED_SNAPSHOTS && conv !== LAST_PER_AGENT ? String(meta.tokens_impl_convention) : null;
   const qaConv = normaliseConvention(meta.tokens_qa_convention);
-  const qaExcluded = ctxQa !== null && qaConv !== null && qaConv !== LAST_PER_AGENT ? String(meta.tokens_qa_convention).trim() : null;
+  const qaExcluded = ctxQa !== null && qaConv !== null && qaConv !== "" && qaConv !== LAST_PER_AGENT ? String(meta.tokens_qa_convention).trim() : null;
   return { ...base, unit: "context", impl: summed || unknown !== null ? null : ctxImpl, qa: qaExcluded !== null ? null : ctxQa, implSummedExcluded: summed, implConventionUnknown: unknown, qaConventionExcluded: qaExcluded };
 }
 

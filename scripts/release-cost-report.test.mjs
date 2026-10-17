@@ -1485,6 +1485,10 @@ describe("tokens_qa_convention (ugcportal-zu0a): a flagged tokens_qa is not coun
     expect(costUnitOf({ tokens_qa: 5, tokens_qa_convention: "mixed" })).toMatchObject({ qa: null, qaConventionExcluded: "mixed" });
   });
 
+  it("a blank flag is no flag: the figure counts and nothing is listed", () => {
+    for (const v of ["", "   "]) expect(costUnitOf({ tokens_qa: 5, tokens_qa_convention: v })).toMatchObject({ qa: 5, qaConventionExcluded: null });
+  });
+
   it("a flag on a bead with no tokens_qa excludes nothing and is not listed", () => {
     expect(costUnitOf({ tokens_impl: 7, tokens_qa_convention: "undeterminable" })).toMatchObject({ qa: null, qaConventionExcluded: null });
   });
