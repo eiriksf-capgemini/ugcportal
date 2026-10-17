@@ -12,6 +12,10 @@
  *   - src/app/globals.css, the tokens/theme file itself. That is where every
  *     hex literal in this app's palette is meant to live (see its own
  *     "ONE THEME PER MODE" and petrol-palette comments).
+ *   - src/app/vendor/shadcn-tailwind.css (ugcportal-pc7s), a byte-for-byte
+ *     copy of an upstream stylesheet whose `#000` is a mask-image alpha stop,
+ *     not a rendered colour. A changed byte fails its sha256 pin in
+ *     shadcn-tailwind.test.ts, so editing it to satisfy this gate is caught.
  *   - src/lib/design/**, the colour-contrast engine (color.ts, contrast.ts,
  *     tokens.ts, usage.ts) and its tests. That code's whole job is parsing
  *     and reasoning about arbitrary hex/oklch strings as DATA - a hex literal
@@ -117,7 +121,10 @@ function stripSourceComments(file: string, contents: string): string {
   return file.endsWith(".css") ? stripCssComments(contents) : stripComments(contents, file);
 }
 
-const EXCLUDED_FILES = new Set([path.join(SRC_ROOT, "app", "globals.css")]);
+const EXCLUDED_FILES = new Set([
+  path.join(SRC_ROOT, "app", "globals.css"),
+  path.join(SRC_ROOT, "app", "vendor", "shadcn-tailwind.css"),
+]);
 const DESIGN_LIB_DIR = path.join(SRC_ROOT, "lib", "design") + path.sep;
 
 function isExcluded(file: string): boolean {
