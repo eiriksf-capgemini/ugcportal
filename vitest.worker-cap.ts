@@ -4,8 +4,10 @@
 // maxWorkers through this function so the cap keeps applying.
 //
 // Rule: an empty (or whitespace-only) value counts as unset, for both
-// variables. A value that is set but is not a positive integer throws, as
-// vitest 3 refused to run on one, rather than silently running uncapped.
+// variables. A value that is set but is not a positive integer throws. This
+// mapping is stricter than vitest 3, which used plain Number.parseInt and
+// accepted values like 1.5, 2abc, and 0 (measured on vitest 3.2.7, PR #295
+// round 2), rather than silently running uncapped.
 // Precedence: VITEST_MAX_FORKS, then VITEST_MAX_THREADS; the first one that is
 // set wins (both are validated), and neither set means no cap (vitest's own default).
 export function resolveWorkerCap(env: NodeJS.ProcessEnv): number | undefined {
