@@ -232,6 +232,9 @@ Three implementer agents at a time in practice, and never two on the same
 `cc_scope`. Claim the bead (`bd update <id> --claim`) and hand over the
 brief.
 
+Before any pass after the first (a fix round, section 5), run the pass-budget
+check of section 6.
+
 ## 5. Sending a fix round back: resume or fresh (ugcportal-8r06)
 
 A review round that blocks needs a fix. The agent that made the most recent
@@ -342,3 +345,58 @@ one release's median alone. That re-measurement is `ugcportal-hw97`; until it
 reports, the figures above stand. The cost unit the figures are in is
 `ugcportal-cii0`; reviewer agents are outside this rule, since their late
 passes are short and cheap in the same data.
+
+## 6. The pass budget: three passes without a clean round stop the bead (ugcportal-bc04)
+
+Section 5 decides *how* to send a fix round back. This section decides
+*whether* to. A PR that is still being redesigned in review after three
+implementation passes is a different piece of work from the one the bead
+described, and it should be a bead of its own, not an open-ended spend. This
+is rule B2 of `docs/process/release-cost-v0.4.0-vs-v0.5.0.md` section 6.2, which
+`docs/process/release-cost-v0.5.0-vs-v0.6.0.md` section 9 item 4 found had never
+been enforced.
+
+**Where the 3 comes from.** B2 states it, and the v0.6.0 data (85 beads, 61 of
+them with `tokens_impl_passes` recorded) put nine beads over it, the worst at
+seven passes. Neither document derives 3 from a cost curve; it is the figure
+the retrospectives chose and this rule adopts. Changing it needs the same kind
+of evidence section 5's "Changing the threshold" asks for.
+
+**Run the script before you dispatch the fix round**, after recording the pass
+count so far (`bd update <id> --set-metadata tokens_impl_passes=<n>`: the
+passes already made, counting the implementer's first):
+
+```bash
+node scripts/check-pass-budget.mjs <bead-id>; echo "exit $?"
+```
+
+It reads `bd show <id> --json` and its exit status is the verdict:
+
+| Exit | Verdict | Meaning | You |
+|---|---|---|---|
+| 0 | PROCEED | under 3 passes, or 3+ with a recorded clean round (`findings_r<N>` or `findings_pr<n>_r<N>` equal to `f1:0 f2:0 f3:0 f4:0 med:0 low:0`) | dispatch the round per section 5 |
+| 1 | STOP | 3+ passes and no clean round | do **not** spawn; do the stop below |
+| 2 | UNKNOWN | `tokens_impl_passes` absent, empty or not a whole number, or the bead could not be read | record the count and re-run; do **not** treat it as zero and carry on |
+
+The script prints how many metadata keys it examined. A bead whose pass count
+the orchestrator has not written comes back UNKNOWN, never PROCEED: an absent
+field read as zero would make the rule fire on nothing, and the beads it exists
+for are the ones where bookkeeping lagged.
+
+**On STOP, in this order:**
+
+1. Post a PR comment stating the stop: the script's output verbatim, the head
+   sha, what is and is not fixed, and that no further pass will be spawned.
+2. File the remainder as a new bead in the bead-template form, with the
+   findings still open as its scope, linked at creation with
+   `--deps=discovered-from:<stopped-bead-id>` (the form pr-review-merge step
+   5a uses), then read the new bead back with `bd show` to confirm the edge
+   points from the new bead to the stopped one (`review-standards` section 6).
+3. Append a note to the stopped bead naming the new bead's id and the stop.
+4. Do not spawn the fix pass. What happens to the PR (merge as it is, close, or
+   wait for the new bead) is a human decision; the round cap in CLAUDE.md still
+   governs the rounds themselves.
+
+A human who directs another pass past a STOP takes the decision over; record who
+and why in a note, and do not clear the verdict by lowering
+`tokens_impl_passes`.
