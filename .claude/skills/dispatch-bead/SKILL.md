@@ -235,11 +235,13 @@ brief.
 ## 5. Sending a fix round back: resume or fresh (ugcportal-8r06)
 
 **First, the pass budget (section 6).** Before choosing anything below, record
-the passes made so far (and, on a bead's second PR, that PR's own count) and
-run `node scripts/check-pass-budget.mjs <bead-id>; echo "exit $?"`. Only exit 0
+the passes made so far and run
+`node scripts/check-pass-budget.mjs <bead-id>; echo "exit $?"`. Only exit 0
 (PROCEED) lets this section run; exit 1 (STOP) means no fix round is sent at
 all, and exit 2 (UNKNOWN) means do what its message names (fix the
-bookkeeping, or leave a round with no pass behind it to a human) and re-run. Whether a further pass happens depends on the pass
+bookkeeping, leave a round with no pass behind it to a human, or, on a bead
+with more than one PR, decide by hand as section 6 says) and re-run where the
+message asks for it. Whether a further pass happens depends on the pass
 count; how it is sent, below, does not.
 
 A review round that blocks needs a fix. The agent that made the most recent
@@ -370,60 +372,45 @@ of evidence section 5's "Changing the threshold" asks for.
 
 **Run the script before you dispatch the fix round**, after recording the pass
 count so far (`bd update <id> --set-metadata tokens_impl_passes=<n>`: the
-passes already made, counting the implementer's first; on a bead with a second
-PR, also `tokens_impl_passes_pr<n>` for the PR in flight, below):
+passes already made, counting the implementer's first):
 
 ```bash
 node scripts/check-pass-budget.mjs <bead-id>; echo "exit $?"
 ```
 
 **What it reads, and who writes it.** Two kinds of metadata key. The review
-rounds are `findings_r<N>` (or `findings_pr<n>_r<N>` on a bead with a second
-reviewed PR), which the orchestrator writes after every review round under
-`pr-review-merge` step 4a item 5, with `N` the round marker; a run that
-reviewed but stamped no marker goes under `findings_unstamped`. The pass count
-is `tokens_impl_passes` (defined in CLAUDE.md, "Token cost metadata"). No
-other step writes it each round; the write above, before every run of this
+rounds are `findings_r<N>`, which the orchestrator writes after every review
+round under `pr-review-merge` step 4a item 5, with `N` the round marker; a run
+that reviewed but stamped no marker goes under `findings_unstamped`. The pass
+count is `tokens_impl_passes` (defined in CLAUDE.md, "Token cost metadata").
+No other step writes it each round; the write above, before every run of this
 script, is what keeps it current.
 
-**The per-PR count, on a bead's second PR.** `tokens_impl_passes` covers the
-whole bead, across all its PRs, so once a bead has a second PR it says nothing
-about how many passes the PR in flight has had. A bead whose first PR took two
-passes would otherwise stop at its second PR's first blocking round, and a
-bead-wide count left stale at 2 would pass against a second PR's two rounds.
-So when a bead gains its second PR, the orchestrator records
-`tokens_impl_passes_pr<n>` for it: the passes made on PR `<n>` alone, counting
-its first, kept current the same way, before every run. It is the same moment,
-and the same kind of bookkeeping, as the `findings_r<N>` to
-`findings_pr<first>_r<N>` rename that `pr-review-merge` step 4a item 5 already
-requires, and the two go together:
+**Single-PR beads only.** `tokens_impl_passes` counts the whole bead, across
+all its PRs, and nothing records which PR a pass was made on. On a bead with a
+second PR the count cannot be set against the PR in flight: a first PR's two
+passes would stop a second PR at its first blocking round, and a clean round
+on the first PR would exempt the second for good. So the script gives no
+verdict there. It returns UNKNOWN, exit 2, naming every signal it saw and
+`ugcportal-8zcj`, the bead that owns the multi-PR case, when any of these is on
+the bead:
 
-```bash
-bd update <id> --set-metadata tokens_impl_passes_pr<n>=<passes on PR n> --set-metadata tokens_impl_passes=<bead-wide total>
-node scripts/bd-verify-metadata.mjs <id> tokens_impl_passes_pr<n>=<passes on PR n> tokens_impl_passes=<bead-wide total>
-```
+- `prs` lists two or more PRs;
+- a `prs` entry does not parse as `gh-<n>`, `#<n>` or `<n>` (say
+  `gh-261;gh-262`): it is named in the message, not dropped, since it may hide
+  a second PR;
+- any `findings_pr<n>_` key (step 4a item 5's per-PR form, written once a bead
+  has a second reviewed PR);
+- any `tokens_impl_passes_pr<n>` key.
 
-`tokens_impl_passes` stays the bead-wide total that CLAUDE.md defines; the
-per-PR key is in addition to it, never instead.
-
-**Which rounds count, and which count is read.** A bead spans more than one PR
-when the PR numbers in its `prs` and in its `findings_pr<n>_r<N>` keys together
-name two or more; the latest PR is the highest of those numbers (a PR still in
-review may not be listed in `prs` yet, and GitHub numbers only rise).
-
-- **One PR**: the count is `tokens_impl_passes`, and the rounds are its bare
-  `findings_r<N>` keys (or that one PR's `findings_pr<n>_r<N>` keys). A bead
-  carrying both forms is a recording error (step 4a item 5 renames the bare
-  keys first), and the script names it and counts no round of it as clean.
-- **Two or more PRs**: the count is `tokens_impl_passes_pr<latest>`, and the
-  rounds are only the latest PR's `findings_pr<latest>_r<N>` keys. A clean
-  earlier round of that same PR does exempt: the PR reached a clean round. A
-  clean round on an earlier PR does not. The script refuses with UNKNOWN, and
-  never gives PROCEED or STOP off the bead-wide count, when
-  `tokens_impl_passes_pr<latest>` is absent or not a whole number (the message
-  names the PRs and the key to record), when bare `findings_r<N>` keys are
-  still on the bead (no PR can be read off them; rename them first), or when
-  the per-PR count is above the bead-wide one (one of them is wrong).
+On that UNKNOWN the orchestrator decides by hand whether another pass is
+warranted, reading the PR in flight's own rounds and passes from the PR and
+the bead's notes, and records the decision and its reasons in a note on the
+bead. The script cannot see a second PR that left none of those marks (a PR in
+review whose findings are not yet written, on a bead whose first PR is the
+only one in `prs`); the orchestrator dispatching a fix round knows which PR it
+is for, and on any bead's second PR decides by hand the same way. On a
+single-PR bead the rounds are its bare `findings_r<N>` keys.
 
 **The cross-check against a stale count.** A round that blocked is normally
 followed by a pushed fix pass before the next round reviews anything, so with
@@ -452,12 +439,12 @@ It reads `bd show <id> --json` and its exit status is the verdict:
 |---|---|---|---|
 | 0 | PROCEED | the count read is not below R, and it is under 3 or a counted round is clean (`f1:0 f2:0 f3:0 f4:0 med:0 low:0`) | dispatch the round per section 5 |
 | 1 | STOP | 3+ passes, not below R, and no counted round clean | do **not** spawn; do the stop below |
-| 2 | UNKNOWN | the count read (`tokens_impl_passes`, or `tokens_impl_passes_pr<latest>` on a multi-PR bead) absent, empty, not a whole number, or below R; on a multi-PR bead, bare `findings_r<N>` keys or a per-PR count above the bead-wide one; or the bead could not be read | do what the message names and re-run; do **not** treat it as zero and carry on |
+| 2 | UNKNOWN | any multi-PR signal (above); or `tokens_impl_passes` absent, empty, not a whole number, or below R; or the bead could not be read | do what the message names and re-run; on a multi-PR bead, decide by hand (above); do **not** treat it as zero and carry on |
 
 The script prints how many metadata keys it examined, how many were findings
 keys and how many of those it counted. A bead whose pass count the
-orchestrator has not written, whose count lags its rounds, or whose second PR
-has no per-PR count, comes back UNKNOWN, never PROCEED: an absent field read
+orchestrator has not written, or whose count lags its rounds, comes back
+UNKNOWN, never PROCEED: an absent field read
 as zero, or a stale one read as current, would make the rule fire on nothing,
 and the beads it exists for are the ones where bookkeeping lagged. What the
 script cannot see is a count that is stale but still at or above R (a pass

@@ -8,29 +8,27 @@
  * implementation passes without a clean review round stop the bead, and the
  * remainder is filed as a bead instead of buying a fourth pass.
  *
- * Which count is read (M1 of PR #296 round 2). On a bead with one PR it is
- * `metadata.tokens_impl_passes`. That field counts the whole bead, across all
- * of its PRs, so on a bead that spans two or more PRs (the PR numbers in
- * `prs` and in its `findings_pr<n>_r<N>` keys together name two or more) it
- * cannot be set against the latest PR's rounds: the per-PR count
- * `tokens_impl_passes_pr<latest>` is read instead, and without it the verdict
- * is UNKNOWN. A multi-PR bead never gets PROCEED or STOP from the bead-wide
- * count.
+ * Single-PR beads only (narrowed at PR #296 round 3). The count read is
+ * `metadata.tokens_impl_passes`, which counts the whole bead, and the rounds
+ * are its bare `findings_r<N>` keys. On a bead with more than one PR neither
+ * can be tied to the PR in flight, so any sign of a second PR returns UNKNOWN
+ * and names MULTI_PR_OWNER, the bead that owns the multi-PR case, instead of a
+ * verdict. The signs (multiPrSignals): `prs` listing two or more PRs, a `prs`
+ * entry that does not parse (named in the message, never dropped), any
+ * `findings_pr<n>_` key, any `tokens_impl_passes_pr<n>` key.
  *
  * Verdicts, and the exit status that is the gate (a sentence alone is what
  * gets skipped under load):
- *   PROCEED  exit 0  the count read is a whole number below 3, or 3 or more
- *                    and a counted round recorded a clean string; in both
- *                    cases only when the count is not below the rounds
+ *   PROCEED  exit 0  a single-PR bead whose count is a whole number below 3,
+ *                    or 3 or more and a round recorded a clean string; in
+ *                    both cases only when the count is not below the rounds
  *                    recorded (next lines)
- *   STOP     exit 1  3 or more passes and no counted round recorded clean
- *   UNKNOWN  exit 2  the count read is absent, empty or not a whole number;
- *                    or it is lower than the highest review round recorded
- *                    (a stale count, or a round with no pass behind it: the
- *                    human decides); or the bead spans more than one PR and
- *                    has no whole-number `tokens_impl_passes_pr<latest>`, or
- *                    still carries bare `findings_r<N>` keys that no PR can be
- *                    read off, or a per-PR count above the bead-wide one.
+ *   STOP     exit 1  a single-PR bead, 3 or more passes and no round recorded
+ *                    clean
+ *   UNKNOWN  exit 2  the bead shows any multi-PR signal (above); or the count
+ *                    is absent, empty or not a whole number; or it is lower
+ *                    than the highest review round recorded (a stale count,
+ *                    or a round with no pass behind it: the human decides).
  *                    Refuses. An absent field is not read as zero passes
  *                    (check-pass-budget.test.mjs, "K3" cases): an empty value
  *                    silently becoming a pass-through is this repo's
@@ -39,12 +37,10 @@
  *    with a message on stderr: a gate that cannot read its input does not
  *    pass it.)
  *
- * "Clean round" means a counted `findings_r<N>` or `findings_pr<number>_r<N>`
- * key (pr-review-merge step 4a item 5) whose value is exactly CLEAN_FINDINGS,
- * all counts zero. A value that does not parse is not clean: the failure
- * direction is the stricter one. Which keys are counted is selectRounds: on a
- * bead with more than one PR, only the latest PR's. `findings_unstamped` is
- * never clean; it adds one to the rounds recorded.
+ * "Clean round" means a `findings_r<N>` key (pr-review-merge step 4a item 5)
+ * whose value is exactly CLEAN_FINDINGS, all counts zero. A value that does
+ * not parse is not clean: the failure direction is the stricter one.
+ * `findings_unstamped` is never clean; it adds one to the rounds recorded.
  *
  * Every run prints how many metadata keys it examined and how many of them
  * were findings keys, so a zero cannot pass for a check (review-standards
@@ -64,75 +60,62 @@ import { isMainModule } from "./lib/is-main.mjs";
 
 export const PASS_LIMIT = 3;
 export const CLEAN_FINDINGS = "f1:0 f2:0 f3:0 f4:0 med:0 low:0";
+/** Any findings key, bare or per-PR; only the bare form is counted. */
 export const FINDINGS_KEY = /^findings_(?:pr(\d+)_)?r(\d+)$/;
-
-/** The PR numbers a `prs` value lists ("gh-261,#262,263" -> [261, 262, 263]); entries that are not gh-<n>, #<n> or <n> are skipped. */
-export function listedPrs(prs) {
-  if (prs === undefined || prs === null) return [];
-  return String(prs)
-    .split(",")
-    .map((s) => /^(?:gh-|#)?(\d+)$/i.exec(s.trim()))
-    .filter(Boolean)
-    .map((m) => Number(m[1]));
-}
+const BARE_FINDINGS_KEY = /^findings_r(\d+)$/;
+const PR_FINDINGS_KEY = /^findings_pr\d+_/;
+const PR_PASSES_KEY = /^tokens_impl_passes_pr\d+/;
+/** The bead that owns the multi-PR case this script refuses (PR #296 round 3). */
+export const MULTI_PR_OWNER = "ugcportal-8zcj";
 
 /**
- * Which recorded rounds the budget counts (M1 of PR #296 rounds 1 and 2).
- * `spanned` is every PR number the bead names, in `prs` or in a
- * `findings_pr<n>_r<N>` key (a PR still in review may not be in `prs` yet);
- * `multiPr` is two or more of them. On a multi-PR bead the latest PR is the
- * highest of those numbers (GitHub numbers rise) and only its
- * `findings_pr<latest>_r<N>` keys count. Bare `findings_r<N>` keys cannot be
- * tied to a PR there (pr-review-merge step 4a item 5 has them renamed first),
- * so they are reported in `unattributed` and checkPassBudget refuses. On a
- * single-PR bead the bare keys count, or that one PR's `findings_pr` keys; a
- * bead with both forms is a recording error and no round of it counts as
- * clean.
+ * A `prs` value split into the PR numbers it lists and the entries that do
+ * not parse ("gh-261,#262,263" -> [261, 262, 263]; "gh-261;gh-262" -> one
+ * unparsed entry). Entries are comma-separated gh-<n>, #<n> or <n>; empty
+ * entries (a trailing comma) are ignored.
  */
+export function parsePrs(prs) {
+  const listed = [];
+  const unparsed = [];
+  if (prs === undefined || prs === null) return { listed, unparsed };
+  for (const raw of String(prs).split(",")) {
+    const entry = raw.trim();
+    if (entry === "") continue;
+    const m = /^(?:gh-|#)?(\d+)$/i.exec(entry);
+    if (m) listed.push(Number(m[1]));
+    else unparsed.push(entry);
+  }
+  return { listed, unparsed };
+}
+
+/** Every sign that the bead has, or had, more than one PR; empty on a single-PR bead. */
+export function multiPrSignals(metadata) {
+  const signals = [];
+  const { listed, unparsed } = parsePrs(metadata.prs);
+  const distinct = [...new Set(listed)];
+  if (distinct.length > 1) signals.push(`prs lists ${distinct.length} PRs (${distinct.map((n) => `#${n}`).join(", ")})`);
+  if (unparsed.length > 0) signals.push(`prs has ${unparsed.length} entr${unparsed.length === 1 ? "y" : "ies"} that do not parse (${unparsed.map((e) => `"${e}"`).join(", ")})`);
+  const prFindings = Object.keys(metadata).filter((k) => PR_FINDINGS_KEY.test(k));
+  if (prFindings.length > 0) signals.push(`per-PR findings key(s) ${prFindings.join(", ")}`);
+  const prPasses = Object.keys(metadata).filter((k) => PR_PASSES_KEY.test(k));
+  if (prPasses.length > 0) signals.push(`per-PR pass count key(s) ${prPasses.join(", ")}`);
+  return signals;
+}
+
+/** The bare `findings_r<N>` rounds, the rounds recorded R (highest N, plus one for `findings_unstamped`) and the clean ones. */
 export function selectRounds(metadata) {
-  const all = [];
+  const rounds = [];
   for (const key of Object.keys(metadata)) {
-    const m = FINDINGS_KEY.exec(key);
-    if (!m) continue;
+    const any = FINDINGS_KEY.exec(key);
+    if (!any) continue;
     const value = String(metadata[key]).trim().replace(/\s+/g, " ");
-    all.push({ key, pr: m[1] === undefined ? null : Number(m[1]), n: Number(m[2]), value, clean: value === CLEAN_FINDINGS });
+    const bare = BARE_FINDINGS_KEY.exec(key);
+    rounds.push({ key, n: Number(any[2]), value, clean: value === CLEAN_FINDINGS, counted: Boolean(bare) });
   }
-  const prKeys = all.filter((r) => r.pr !== null);
-  const bare = all.filter((r) => r.pr === null);
-  const spanned = [...new Set([...listedPrs(metadata.prs), ...prKeys.map((r) => r.pr)])].sort((a, b) => a - b);
-  const multiPr = spanned.length > 1;
-  const notes = [];
-  let counted;
-  let cleanAllowed = true;
-  let latestPr = null;
-  if (prKeys.length > 0 || multiPr) {
-    latestPr = spanned[spanned.length - 1];
-    counted = prKeys.filter((r) => r.pr === latestPr);
-    if (counted.length === 0) notes.push(`no findings_pr${latestPr}_r<N> key for the latest PR, #${latestPr}`);
-    if (bare.length > 0 && !multiPr) {
-      cleanAllowed = false;
-      notes.push(
-        `recording error: both bare findings_r<N> (${bare.map((r) => r.key).join(", ")}) and findings_pr<n>_r<N> keys are set; no round counts as clean`,
-      );
-    }
-  } else {
-    counted = bare;
-  }
-  const counts = new Set(counted.map((r) => r.key));
-  const rounds = all.map((r) => ({ ...r, counted: counts.has(r.key) }));
+  const counted = rounds.filter((r) => r.counted);
   const unstamped = metadata.findings_unstamped !== undefined && metadata.findings_unstamped !== null && String(metadata.findings_unstamped).trim() !== "";
   const highest = counted.reduce((max, r) => Math.max(max, r.n), 0);
-  return {
-    rounds,
-    latestPr,
-    spanned,
-    multiPr,
-    unattributed: multiPr ? bare.map((r) => r.key) : [],
-    unstamped,
-    roundsRecorded: highest + (unstamped ? 1 : 0),
-    clean: cleanAllowed ? counted.filter((r) => r.clean).map((r) => r.key) : [],
-    notes,
-  };
+  return { rounds, unstamped, roundsRecorded: highest + (unstamped ? 1 : 0), clean: counted.filter((r) => r.clean).map((r) => r.key) };
 }
 
 const wholeNumber = (raw) => {
@@ -149,37 +132,32 @@ const wholeNumber = (raw) => {
 export function checkPassBudget(bead) {
   const metadata = bead && typeof bead.metadata === "object" && bead.metadata ? bead.metadata : {};
   const keys = Object.keys(metadata);
-  const sel = selectRounds(metadata);
-  const passesKey = sel.multiPr ? `tokens_impl_passes_pr${sel.latestPr}` : "tokens_impl_passes";
-  const base = { rounds: sel.rounds, roundsRecorded: sel.roundsRecorded, keysExamined: keys.length, passesKey };
+  const passesKey = "tokens_impl_passes";
   const id = bead?.id ?? "<id>";
-  const notes = sel.notes.length ? ` Note: ${sel.notes.join("; ")}.` : "";
-  const unknown = (passes, message) => ({ ...base, verdict: "UNKNOWN", exit: 2, passes, message: `${message}${notes}` });
+  const signals = multiPrSignals(metadata);
+  if (signals.length > 0) {
+    // Every findings key is reported, none counted: no verdict is read off a multi-PR bead.
+    const rounds = selectRounds(metadata).rounds.map((r) => ({ ...r, counted: false }));
+    return {
+      rounds,
+      roundsRecorded: 0,
+      keysExamined: keys.length,
+      passesKey,
+      verdict: "UNKNOWN",
+      exit: 2,
+      passes: null,
+      message:
+        `The pass budget check applies to single-PR beads only, and this bead shows signs of more than one PR: ${signals.join("; ")}. ` +
+        `Refusing: tokens_impl_passes and the findings keys cannot be tied to the PR in flight here. ` +
+        `The orchestrator decides by hand (dispatch-bead section 6); the multi-PR case is owned by ${MULTI_PR_OWNER}.`,
+    };
+  }
+  const sel = selectRounds(metadata);
+  const base = { rounds: sel.rounds, roundsRecorded: sel.roundsRecorded, keysExamined: keys.length, passesKey };
+  const unknown = (passes, message) => ({ ...base, verdict: "UNKNOWN", exit: 2, passes, message });
 
   const count = wholeNumber(metadata[passesKey]);
-  if (sel.multiPr) {
-    const prList = sel.spanned.map((n) => `#${n}`).join(", ");
-    const problems = [];
-    if (!count.ok) {
-      problems.push(
-        `tokens_impl_passes counts the whole bead and cannot be attributed to the latest PR, #${sel.latestPr}, and ${passesKey} is ${count.seen}. ` +
-          `Record the passes made on #${sel.latestPr} alone, counting its first: bd update ${id} --set-metadata ${passesKey}=<n>`,
-      );
-    }
-    if (sel.unattributed.length > 0) {
-      problems.push(
-        `bare ${sel.unattributed.join(", ")} cannot be tied to a PR on a multi-PR bead. ` +
-          `Rename them to findings_pr<their PR>_r<N> first (pr-review-merge step 4a item 5)`,
-      );
-    }
-    const total = wholeNumber(metadata.tokens_impl_passes);
-    if (count.ok && total.ok && Number(count.text) > Number(total.text)) {
-      problems.push(`${passesKey} is ${count.text}, above the bead-wide tokens_impl_passes of ${total.text}, so one of them is wrong. Correct it`);
-    }
-    if (problems.length > 0) {
-      return unknown(count.ok ? Number(count.text) : null, `The bead spans PRs ${prList}. Refusing: ${problems.join("; ")}. Then re-run.`);
-    }
-  } else if (!count.ok) {
+  if (!count.ok) {
     return unknown(
       null,
       `tokens_impl_passes is ${count.seen}, not a whole number. Refusing: an unknown count is not zero. ` +
@@ -208,7 +186,7 @@ export function checkPassBudget(bead) {
     );
   }
   if (passes < PASS_LIMIT) {
-    return { ...base, verdict: "PROCEED", exit: 0, passes, message: `${passes} pass(es) (${passesKey}), under the limit of ${PASS_LIMIT}.${notes}` };
+    return { ...base, verdict: "PROCEED", exit: 0, passes, message: `${passes} pass(es) (${passesKey}), under the limit of ${PASS_LIMIT}.` };
   }
   if (sel.clean.length > 0) {
     return {
@@ -216,7 +194,7 @@ export function checkPassBudget(bead) {
       verdict: "PROCEED",
       exit: 0,
       passes,
-      message: `${passes} passes (${passesKey}), at or over the limit of ${PASS_LIMIT}, but a clean round was recorded (${sel.clean.join(", ")}).${notes}`,
+      message: `${passes} passes (${passesKey}), at or over the limit of ${PASS_LIMIT}, but a clean round was recorded (${sel.clean.join(", ")}).`,
     };
   }
   return {
@@ -225,7 +203,7 @@ export function checkPassBudget(bead) {
     exit: 1,
     passes,
     message:
-      `${passes} implementation passes (${passesKey}) and no clean review round (limit ${PASS_LIMIT}). Rounds counted: ${seenRounds}.${notes} ` +
+      `${passes} implementation passes (${passesKey}) and no clean review round (limit ${PASS_LIMIT}). Rounds counted: ${seenRounds}. ` +
       `Do not spawn another pass: post the stop on the PR and file the remainder as a bead with discovered-from ` +
       `${id} (dispatch-bead section 6).`,
   };

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { checkPassBudget, CLEAN_FINDINGS, formatVerdict, main } from "./check-pass-budget.mjs";
+import { checkPassBudget, CLEAN_FINDINGS, formatVerdict, main, MULTI_PR_OWNER, parsePrs } from "./check-pass-budget.mjs";
 
 const DIRTY = "f1:1 f2:0 f3:0 f4:0 med:0 low:1";
 const bead = (metadata) => ({ id: "ugcportal-fix", metadata });
@@ -35,130 +35,58 @@ describe("checkPassBudget", () => {
     expect(r.message).toContain("clean round was recorded (findings_r2)");
   });
 
-  it("reads findings_pr<n>_r<N> keys: a clean round on the latest PR exempts", () => {
-    const stop = checkPassBudget(bead({ tokens_impl_passes: 4, tokens_impl_passes_pr11: 3, findings_pr10_r1: DIRTY, findings_pr11_r1: DIRTY }));
-    expect([stop.verdict, stop.passesKey]).toEqual(["STOP", "tokens_impl_passes_pr11"]);
-    expect(stop.rounds.map((x) => [x.key, x.counted])).toEqual([
-      ["findings_pr10_r1", false],
-      ["findings_pr11_r1", true],
-    ]);
-    const ok = checkPassBudget(
-      bead({ tokens_impl_passes: 4, tokens_impl_passes_pr11: 3, prs: "gh-10,gh-11", findings_pr10_r1: DIRTY, findings_pr11_r1: CLEAN_FINDINGS }),
-    );
-    expect([ok.verdict, ok.exit]).toEqual(["PROCEED", 0]);
-    expect(ok.message).toContain("(findings_pr11_r1)");
+  it("names ugcportal-8zcj as the owner of the multi-PR case", () => {
+    expect(MULTI_PR_OWNER).toBe("ugcportal-8zcj");
   });
 
-  it("M1 r1: a clean round on an earlier PR does not exempt the latest (the cii0 shape)", () => {
-    const cii0 = {
-      tokens_impl_passes: 6,
-      tokens_impl_passes_pr262: 4,
-      prs: "gh-261,gh-262",
-      findings_pr261_r1: DIRTY,
-      findings_pr261_r2: CLEAN_FINDINGS,
-      findings_pr262_r1: DIRTY,
-      findings_pr262_r2: DIRTY,
-      findings_pr262_r3: DIRTY,
-      findings_pr262_r4: DIRTY,
-    };
-    const r = checkPassBudget(bead(cii0));
-    expect([r.verdict, r.exit, r.passes]).toEqual(["STOP", 1, 4]);
-    expect(r.message).toContain("findings_pr262_r4=");
-    expect(r.message).not.toContain("findings_pr261_r2");
-    // the latest PR comes from the PR numbers, not key order or prs order alone:
-    // an in-review PR not yet in prs is still the latest
-    const inFlight = { ...cii0, prs: "gh-261" };
-    expect(checkPassBudget(bead(inFlight)).verdict).toBe("STOP");
-    // a prs entry newer than every findings key means that PR has no round yet
-    const newer = { tokens_impl_passes: 5, tokens_impl_passes_pr270: 3, prs: "gh-261,gh-270", findings_pr261_r1: DIRTY, findings_pr261_r2: CLEAN_FINDINGS };
-    const n = checkPassBudget(bead(newer));
-    expect(n.verdict).toBe("STOP");
-    expect(n.message).toContain("no findings_pr270_r<N> key");
-    expect(checkPassBudget(bead({ ...newer, tokens_impl_passes_pr270: 1 })).verdict).toBe("PROCEED");
+  // Narrowed at PR #296 round 3: every multi-PR signal is UNKNOWN naming the
+  // owner bead, whatever the bead-wide count and rounds would have said. Each
+  // fixture below gives STOP (dirty rounds) or PROCEED (a clean round) on the
+  // single-PR path, so a signal that fell through to it would change the verdict.
+  const signalCases = [
+    ["two prs entries", { prs: "gh-261,gh-262" }, "prs lists 2 PRs (#261, #262)"],
+    ["a findings_pr key", { findings_pr262_r1: DIRTY }, "per-PR findings key(s) findings_pr262_r1"],
+    ["a tokens_impl_passes_pr key", { tokens_impl_passes_pr262: 1 }, "per-PR pass count key(s) tokens_impl_passes_pr262"],
+    ["an unparseable prs entry (semicolon)", { prs: "gh-261;gh-262" }, 'entry that do not parse ("gh-261;gh-262")'],
+    ["an unparseable prs entry (space)", { prs: "gh-261 gh-262" }, 'entry that do not parse ("gh-261 gh-262")'],
+    ["one parsed and one unparseable prs entry", { prs: "gh-261, pr262" }, '"pr262"'],
+  ];
+  for (const [name, signal, needle] of signalCases) {
+    it(`multi-PR signal, ${name}: UNKNOWN naming the signal and the owner bead`, () => {
+      for (const rounds of [
+        { findings_r1: DIRTY, findings_r2: DIRTY, findings_r3: DIRTY },
+        { findings_r1: DIRTY, findings_r2: CLEAN_FINDINGS },
+      ]) {
+        const single = checkPassBudget(bead({ tokens_impl_passes: 4, ...rounds }));
+        expect(single.verdict).not.toBe("UNKNOWN");
+        const r = checkPassBudget(bead({ tokens_impl_passes: 4, ...rounds, ...signal }));
+        expect([r.verdict, r.exit, r.passes]).toEqual(["UNKNOWN", 2, null]);
+        expect(r.message).toContain("applies to single-PR beads only");
+        expect(r.message).toContain(needle);
+        expect(r.message).toContain(MULTI_PR_OWNER);
+        expect(r.rounds.every((x) => !x.counted)).toBe(true);
+      }
+    });
+  }
+
+  it("multi-PR: every signal present is named, and an absent count does not hide them", () => {
+    const r = checkPassBudget(bead({ prs: "gh-1,gh-2;x", findings_pr2_r1: DIRTY, tokens_impl_passes_pr2: 1 }));
+    expect([r.verdict, r.exit]).toEqual(["UNKNOWN", 2]);
+    expect(r.message).toContain('"gh-2;x"');
+    expect(r.message).toContain("findings_pr2_r1");
+    expect(r.message).toContain("tokens_impl_passes_pr2");
+    expect(r.message).not.toContain("prs lists");
   });
 
-  it("M1 r2: a multi-PR bead without the latest PR's own count is UNKNOWN, never PROCEED or STOP", () => {
-    const cases = [
-      // the cii0 shape with only the bead-wide count
-      { tokens_impl_passes: 6, prs: "gh-261,gh-262", findings_pr261_r2: CLEAN_FINDINGS, findings_pr262_r1: DIRTY },
-      // the latest PR is in prs only, and the keys name an earlier one
-      { tokens_impl_passes: 4, prs: "gh-261,gh-270", findings_pr261_r1: DIRTY },
-      // two PRs in prs and no findings keys at all (the dabx shape)
-      { tokens_impl_passes: 3, prs: "gh-227,gh-267" },
-      // two PRs named only by their keys
-      { tokens_impl_passes: 3, findings_pr10_r1: DIRTY, findings_pr11_r1: DIRTY },
-    ];
-    for (const metadata of cases) {
-      const r = checkPassBudget(bead(metadata));
-      expect([r.verdict, r.exit, r.passes]).toEqual(["UNKNOWN", 2, null]);
-      expect(r.message).toContain("The bead spans PRs #");
-      expect(r.message).toContain("cannot be attributed to the latest PR");
-      expect(r.message).toMatch(/--set-metadata tokens_impl_passes_pr\d+=<n>/);
-    }
-    // a per-PR count that is not a whole number is no better than none
-    expect(checkPassBudget(bead({ ...cases[0], tokens_impl_passes_pr262: "two" })).verdict).toBe("UNKNOWN");
-  });
-
-  it("M1 r2(a): the false-STOP shape is UNKNOWN without the per-PR count and PROCEED with it", () => {
-    const shape = {
-      tokens_impl_passes: "3",
-      prs: "gh-261,gh-262",
-      findings_pr261_r1: DIRTY,
-      findings_pr261_r2: CLEAN_FINDINGS,
-      findings_pr262_r1: DIRTY,
-    };
-    const without = checkPassBudget(bead(shape));
-    expect([without.verdict, without.exit]).toEqual(["UNKNOWN", 2]);
-    expect(without.message).toContain("#261, #262");
-    const withCount = checkPassBudget(bead({ ...shape, tokens_impl_passes_pr262: "1" }));
-    expect([withCount.verdict, withCount.exit, withCount.passes, withCount.passesKey]).toEqual(["PROCEED", 0, 1, "tokens_impl_passes_pr262"]);
-  });
-
-  it("M1 r2(b): the stale-count shape is UNKNOWN, never PROCEED", () => {
-    const stale = {
-      tokens_impl_passes: "2",
-      prs: "gh-1,gh-2",
-      findings_pr1_r1: DIRTY,
-      findings_pr1_r2: DIRTY,
-      findings_pr1_r3: CLEAN_FINDINGS,
-      findings_pr2_r1: DIRTY,
-      findings_pr2_r2: DIRTY,
-    };
-    expect(checkPassBudget(bead(stale)).verdict).toBe("UNKNOWN");
-    // a per-PR count above the bead-wide one says one of them is wrong
-    const above = checkPassBudget(bead({ ...stale, tokens_impl_passes_pr2: "3" }));
-    expect([above.verdict, above.exit]).toEqual(["UNKNOWN", 2]);
-    expect(above.message).toContain("above the bead-wide tokens_impl_passes of 2");
-    // a per-PR count below the latest PR's own rounds is the single-PR cross-check
-    const lag = checkPassBudget(bead({ ...stale, tokens_impl_passes: "5", tokens_impl_passes_pr2: "1" }));
-    expect([lag.verdict, lag.roundsRecorded]).toEqual(["UNKNOWN", 2]);
-    expect(lag.message).toContain("tokens_impl_passes_pr2 is 1 but 2 review round(s) are recorded");
-    // and with honest counts the latest PR's rounds decide
-    expect(checkPassBudget(bead({ ...stale, tokens_impl_passes: "5", tokens_impl_passes_pr2: "2" })).verdict).toBe("PROCEED");
-    expect(checkPassBudget(bead({ ...stale, tokens_impl_passes: "6", tokens_impl_passes_pr2: "3" })).verdict).toBe("STOP");
-  });
-
-  it("M1: a clean earlier round of the same PR still exempts", () => {
-    const r = checkPassBudget(bead({ tokens_impl_passes: 4, findings_pr5_r1: DIRTY, findings_pr5_r2: CLEAN_FINDINGS, findings_pr5_r3: DIRTY }));
-    expect(r.verdict).toBe("PROCEED");
-  });
-
-  it("M1: bare and findings_pr keys together are a recording error, and nothing counts as clean", () => {
-    const r = checkPassBudget(bead({ tokens_impl_passes: 3, findings_r1: CLEAN_FINDINGS, findings_pr7_r1: CLEAN_FINDINGS }));
-    expect([r.verdict, r.exit]).toEqual(["STOP", 1]);
-    expect(r.message).toContain("recording error");
-    expect(r.message).toContain("findings_r1");
-  });
-
-  it("M1: bare keys on a bead whose prs lists two PRs are refused, even with a per-PR count", () => {
-    const multi = { tokens_impl_passes: 3, prs: "gh-1,gh-2", findings_r1: DIRTY, findings_r2: CLEAN_FINDINGS };
-    for (const metadata of [multi, { ...multi, tokens_impl_passes_pr2: 1 }]) {
-      const r = checkPassBudget(bead(metadata));
-      expect([r.verdict, r.exit]).toEqual(["UNKNOWN", 2]);
-      expect(r.message).toContain("bare findings_r1, findings_r2 cannot be tied to a PR");
-    }
-    // the same keys on a one-PR bead do exempt
+  it("a single-PR bead with prs set, or the same PR listed twice, is not multi-PR", () => {
     expect(checkPassBudget(bead({ tokens_impl_passes: 3, prs: "gh-2", findings_r1: DIRTY, findings_r2: CLEAN_FINDINGS })).verdict).toBe("PROCEED");
+    expect(checkPassBudget(bead({ tokens_impl_passes: 3, prs: "gh-2,#2,", findings_r1: DIRTY })).verdict).toBe("STOP");
+  });
+
+  it("parsePrs lists the gh-<n>, #<n> and <n> forms and reports the rest", () => {
+    expect(parsePrs("gh-261,#262, 263,")).toEqual({ listed: [261, 262, 263], unparsed: [] });
+    expect(parsePrs("gh-261;gh-262")).toEqual({ listed: [], unparsed: ["gh-261;gh-262"] });
+    expect(parsePrs(undefined)).toEqual({ listed: [], unparsed: [] });
   });
 
   it("M2: a count below the recorded rounds is UNKNOWN, naming both figures", () => {
@@ -187,13 +115,6 @@ describe("checkPassBudget", () => {
     expect(u.message).toContain("plus 1 for findings_unstamped");
     // findings_unstamped is never a clean round
     expect(checkPassBudget(bead({ tokens_impl_passes: 3, findings_r1: DIRTY, findings_unstamped: CLEAN_FINDINGS })).verdict).toBe("STOP");
-    // on a multi-PR bead the bead-wide count is not cross-checked against one
-    // PR's rounds at all: without the latest PR's own count it is UNKNOWN
-    // (M1 of round 2; this case read PROCEED before)
-    expect(checkPassBudget(bead({ tokens_impl_passes: 2, findings_pr1_r5: DIRTY, findings_pr2_r1: DIRTY })).verdict).toBe("UNKNOWN");
-    expect(checkPassBudget(bead({ tokens_impl_passes: 6, tokens_impl_passes_pr2: 1, findings_pr1_r5: DIRTY, findings_pr2_r1: DIRTY })).verdict).toBe(
-      "PROCEED",
-    );
   });
 
   it("does not count an unparseable or near-miss findings value as clean", () => {
