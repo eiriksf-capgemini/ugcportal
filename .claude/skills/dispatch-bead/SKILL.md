@@ -53,24 +53,83 @@ The command is the decision:
 node scripts/check-bead-dispatch.mjs <bead-id> && echo DISPATCH-OK
 ```
 
-**The failure you should expect most often is freshness.** The gate requires
-the bead's `Premise verified` line to name `origin/main`'s *current* HEAD —
-that commit itself, not an older one and not one built on top of it — and
-prints how many commits stale it is otherwise, or that the commit is not on
-`origin/main` at all — usually a branch commit whose PR was since
-squash-merged (`main` has the change under a different sha), sometimes a
-branch not yet merged; either way it cannot be compared with `main`'s
-history, so re-verify against `origin/main`'s HEAD. That is deliberate and it
-is the expensive half: clearing it means re-running the bead's premise check
-against today's code and writing a new line, not copying a date forward. The
-reason is measured — the v0.7.0 premise audit
+**The failure you should expect most often is freshness.** The premise is
+stale when main has moved under the thing it rests on, and the bead says
+what that is (`ugcportal-ul2j`). Its `Premise verified <date> at origin/main
+<sha>` line is followed — on the same line or the next — by one of:
+
+```
+Premise depends on: src/lib/resale-rights.ts, src/app/api/media/[id]/
+Premise depends on: none (<the external fact the premise rests on>)
+```
+
+Paths are repo-relative, comma-separated, matched literally (`[id]` is a
+directory name, not a glob); a directory covers everything under it. The
+gate takes two candidates: the *last* premise line in the description and
+the *last* one in the notes, whichever fields carry one; older lines in
+either field are ignored. Which of the two is the author's latest cannot be
+read from where it sits — the description can be rewritten after notes were
+appended — so recency comes from the commits' ancestry: of two sound
+candidates naming different commits, the one whose commit descends from the
+other's (`git merge-base --is-ancestor`) is judged with its own declaration,
+and when both name the same commit the union of the two declarations is
+judged. The order is by ancestry, not by a count of commits behind HEAD, so
+it does not depend on `main` being linear. It fails the bead when:
+
+- either candidate names no commit, or a commit that does not resolve (a
+  typo, or a branch commit pruned after its PR was squash-merged) — the
+  other field's line is never judged in its place, because either could be
+  the author's latest and may declare more paths; re-verify and write a
+  fresh line in that field;
+- either candidate's commit is not on `origin/main` at all — usually a
+  branch commit whose PR was since squash-merged (`main` has the change
+  under a different sha), sometimes a branch not yet merged; either way it
+  cannot be compared with `main`'s history, so re-verify against
+  `origin/main`'s HEAD;
+- either candidate has **no** `Premise depends on:` — absent is never read
+  as `none`, because a check that matched nothing must not look like one
+  that passed;
+- either candidate's declaration cannot be checked — empty, whitespace
+  inside a path, an absolute path, a `..` segment, a glob, or `none`
+  combined with paths or followed by anything but one parenthesised reason;
+- the two candidates name different commits neither of which is an
+  ancestor of the other (they sit on different sides of a merge commit), so
+  the two latest statements cannot be ordered on this history — re-verify
+  against `origin/main`'s HEAD and append one statement there; a git
+  failure while asking also fails, as not measured;
+- a commit on `origin/main` since the judged premise touched a declared path
+  — it names the first five such commits, oldest first, each with up to
+  five of the declared files it touched, then counts the rest;
+- a declared path does not exist at `origin/main`'s HEAD — a typo is
+  touched only by a commit that creates it, so it would otherwise pass on
+  every merge (to rest on something being
+  *absent*, declare its nearest existing parent directory).
+
+The cost is deliberate: a bead whose description still carries an old
+typo'd or off-main premise line fails until that line is re-verified, even
+when its notes hold a sound, fresh one (`ugcportal-ydbi` is the backfill).
+
+`none` does not go stale on a merge. Clearing a failure means re-running the
+bead's premise check against today's code and writing a new premise line and
+declaration, not copying a sha forward — that is the expensive half, and the
+reason is measured: the v0.7.0 premise audit
 (`docs/process/premise-audit-v0.7.0-2026-10-08.md`, `ugcportal-j5fl`) found
 that only 68 of 136 non-closed beads carried a premise line at all and those
 were up to 80 commits stale, and `ugcportal-dabx`'s four-day-old premise was
 partly wrong when someone finally looked.
 
+**The declaration is trusted, not checked.** The gate cannot tell that a
+premise rests on a file its `Premise depends on:` line leaves out; such a
+bead passes however much that file has changed, and `none` passes on every
+merge. The gate prints the declared list on a passing run too — read it
+beside the premise, and treat a short list under a long premise as a
+substance question (section 3), not a green light.
+
 Sweep the whole backlog with `--all` when planning rather than dispatching;
-that run is advisory and will report nearly everything as stale, by design.
+that run is advisory. Until the backlog carries `Premise depends on:` lines
+(`ugcportal-ydbi`), it reports nearly every bead for the missing
+declaration — that is the gate refusing to read absent as none, not a
+verdict that their premises moved.
 
 ## 2. Write the brief, and put the gate's output in it
 
@@ -218,7 +277,8 @@ So after the gate passes, spend one minute on the three substance checks in
 `~/.claude/skills/bead-template/SKILL.md` ("Before you create"), applied to
 a bead that already exists:
 
-1. Is the premise actually **true** today — not just freshly dated?
+1. Is the premise actually **true** today — not just freshly dated? And does
+   its `Premise depends on:` list name every file the premise rests on?
 2. Can the implementer **run** every `Verified by` on the day they finish,
    with only what this bead delivers?
 3. Is anything the bead's own notes argue for **missing from the criteria**?
