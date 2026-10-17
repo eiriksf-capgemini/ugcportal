@@ -2,13 +2,16 @@
 /**
  * The dispatch gate: a bead fails a mechanical check BEFORE work starts on
  * it (ugcportal-kt3k). Exits non-zero when a bead is missing any required
- * element of the bead-template form, or when its `Premise verified` line
- * names any commit other than `origin/main`'s current HEAD -- an older
- * commit on `main`, or a commit that is not on `main` at all: not an
- * ancestor of `origin/main`, usually a branch commit whose PR was since
- * squash-merged (main has the change, under the squash commit's different
- * sha) and sometimes a branch not yet merged. Either way it is not in
- * main's history, so it cannot be compared with main's HEAD.
+ * element of the bead-template form, or when its premise is stale. Stale
+ * means one of: its `Premise verified` line names a commit that is not on
+ * `main` at all (not an ancestor of `origin/main`, usually a branch commit
+ * whose PR was since squash-merged -- main has the change, under the squash
+ * commit's different sha -- and sometimes a branch not yet merged; either
+ * way it cannot be path-compared with main's HEAD); or a commit on `main`
+ * since the premise touched a path the bead's `Premise depends on:` line
+ * declares; or the bead declares no dependency at all -- a premise with no
+ * `Premise depends on:` line fails, because absent must not read as `none`
+ * (ugcportal-ul2j).
  *
  * Why this exists: `~/.claude/skills/bead-template/SKILL.md` has defined the
  * required form -- user story, In/Out of scope, K-numbered Given/When/Then
@@ -32,27 +35,22 @@
  * Two decisions by Eirik, both of which cost something and are therefore
  * worth stating rather than inferring from the code:
  *
- *   1. The premise must be FRESH AT DISPATCH, not merely present. A
- *      `Premise verified` line naming any commit other than the current
- *      `origin/main` HEAD fails, and the failure prints how many commits
- *      stale it is. This is strict on purpose. The v0.7.0 premise audit
+ *   1. The premise must be FRESH AT DISPATCH, not merely present. This was
+ *      first written (ugcportal-kt3k) as "names origin/main's current HEAD",
+ *      strict on purpose: the v0.7.0 premise audit
  *      (docs/process/premise-audit-v0.7.0-2026-10-08.md, ugcportal-j5fl)
  *      found that only 68 of 136 non-closed beads carried a premise line at
  *      all, and those were up to 80 commits stale; ugcportal-kt3k's own
  *      notes record ugcportal-dabx's four-day-old premise being found partly
- *      wrong on 2026-10-12. Nine commits landed on `main` on the day this
- *      was written, seven of them at or before a3d55c9, the commit the
- *      measurement above was taken at:
- *        git log origin/main --oneline \
- *          --since=2026-10-12T00:00:00 --until=2026-10-13T00:00:00 | wc -l
- *      (an explicit midnight, not a bare `--since=2026-10-12`: git's
- *      approxidate reads a bare date as that date at the CURRENT time of
- *      day, so the bare form answers 9 at 06:56 and 0 at 15:30 and never
- *      reproduces a figure written down beside it.) So "stale" here is a
- *      matter of hours, not weeks. The cost is a re-verification
- *      pass per
- *      dispatch; see `PREMISE_FRESHNESS_COST` below for what that means in
- *      practice and why a looser rule was rejected.
+ *      wrong on 2026-10-12. Measured 2026-10-13 that identity rule failed
+ *      107 of 110 open beads, because every merge invalidated every premise
+ *      at once -- and a gate that fires on nearly everything is cleared by
+ *      copying the sha forward without re-running the observation, which is
+ *      the exact thing it exists to stop. So, by Eirik's decision of
+ *      2026-10-13 (ugcportal-ul2j), freshness is now SCOPED BY DEPENDENCY
+ *      PATHS: a bead declares the paths its premise rests on, and goes stale
+ *      when main's movement since the premise touched one of them. See
+ *      `PREMISE_FRESHNESS_COST` below for what that trusts and costs.
  *   2. A failing bead is a HARD BLOCK, not a warning. Hence a non-zero exit
  *      on a finding -- unlike this script's sibling
  *      `check-unreachable-beads.mjs`, which reports what it finds and
@@ -121,53 +119,71 @@ import { isMainModule } from "./lib/is-main.mjs";
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 /**
- * Why the strict "names origin/main's current HEAD" rule, and what it costs.
+ * What "fresh" means, what it trusts, and what it costs (ugcportal-ul2j).
  *
- * "Names HEAD" means IDENTITY, checked in both directions, not distance
- * counted in one. Counting only `<premise>..<head>` answers "how many main
- * commits is the premise missing", and that is 0 for HEAD itself AND for
- * every commit built on top of HEAD -- a premise verified inside an
- * implementer's own branch, or a stacked bead verified on top of another
- * PR's branch, names a commit that is not in main's history, and used to
- * pass with the report saying it was HEAD. In this
- * repo's squash-merge flow that commit STAYS off main after its PR merges:
- * main gets the change under the squash commit's sha, not the branch
- * commit's, so "not on main" usually means "merged by squash", not "code
- * main lacks". The decision is the same either way -- a commit outside
- * main's history cannot be compared with main's HEAD, so the premise is
- * re-verified against HEAD. So `premiseCommits` also
- * counts `<head>..<premise>`, the premise's commits that are NOT on main,
- * and only a commit with zero in both directions is fresh.
- * Stated here rather than in a commit message because the cost is paid by
- * every dispatch forever and the next person to find it annoying deserves
- * the reasoning.
+ * The rule, in the order the check applies it:
  *
- * Cost: a bead that sat in the backlog since yesterday fails on freshness
- * alone, and bringing it back to green means re-running its premise check
- * and writing a new `Premise verified <date> at origin/main <sha>` line.
- * That is the point -- it is the re-verification pass, not a formality.
- * Expect essentially the whole backlog to fail this check at any given
- * moment; the check is scoped to the ONE bead about to be dispatched, not
- * to the backlog as a standing cleanliness metric.
+ *   1. The premise commit must be ON main: an ancestor of `origin/main` (or
+ *      HEAD itself). `premiseCommits` counts both directions -- `behind`,
+ *      main's commits the premise lacks, and `notOnMain`, the premise's own
+ *      commits main lacks. A commit built on top of HEAD (a premise verified
+ *      inside a branch) has `behind === 0` and is still not on main; in this
+ *      repo's squash-merge flow it STAYS off main after its PR merges. Its
+ *      changes cannot be path-compared with main's history, so it fails, and
+ *      an off-main premise never rescues a stale on-main one.
+ *   2. The FRESHEST on-main premise statement is the one judged -- the one
+ *      the fewest main commits have passed. A bead re-verified today still
+ *      carries yesterday's line in its log, and the newer verification and
+ *      its declaration supersede the older ones.
+ *   3. That statement must carry a `Premise depends on:` declaration
+ *      (`PREMISE_DEPENDS_FORM`). Absent is a FAILURE, never read as "none":
+ *      a check that matched nothing must not look like one that passed.
+ *   4. `Premise depends on: none (<why>)` -- an explicit declaration that the
+ *      premise rests on no file in this repository (an external fact: an API's
+ *      behaviour, a vendor document, a legal rule) -- does not go stale on a
+ *      merge at all.
+ *   5. Otherwise, any commit in `<premise>..<origin/main>` that touched a
+ *      declared path makes it stale, and the failure names each such commit
+ *      and the declared paths it touched. A declared directory covers
+ *      everything under it; matching is literal (`[id]` is a directory name,
+ *      not a glob) and renames count as touching both names.
+ *   6. A declared path that does not exist at origin/main's HEAD fails,
+ *      even when nothing touched it. A typo is otherwise the quietest
+ *      possible understatement: a path that matches no file can never be
+ *      touched, so a misspelt declaration would pass forever. A premise that
+ *      rests on something being ABSENT declares the nearest existing parent
+ *      directory, which a commit adding the thing will touch.
  *
- * Looser rules considered and rejected:
- *   - "within N commits": any N would be invented. The only measured points
- *     are failures -- ugcportal-dabx's premise was partly wrong after four
- *     days, and two beads were re-verified at 54d88ca and dispatched against
- *     77fb833, eighteen commits later (docs/process/development-process.md,
- *     section 9.3). Nothing measured here says how many commits a premise
- *     survives, so a threshold would be a guess presented as a rule.
- *   - "within N days": same problem, plus it passes a bead whose premise
- *     was invalidated by a commit that landed an hour ago.
- *   - "touched no file the bead mentions": would need to know which files a
- *     bead depends on, which is exactly the substance judgement this script
- *     is honest about not making.
- * The first two are mechanical but need a constant nothing here measured;
- * the third needs a judgement this script does not make. The strict rule
- * needs neither, which is why it is the one implemented.
+ * WHAT THIS TRUSTS. The declaration is author-supplied, and this script
+ * does not check it against the premise. A premise that rests on a file its
+ * declaration leaves out passes here however much that file has changed --
+ * the test "K5: an understated declaration passes" shows exactly that. The
+ * old identity rule could not be fooled this way; it was loud about every
+ * merge instead. Mitigation, and it is a mitigation, not a guarantee: the
+ * declaration is printed with every run (a passing one says which paths it
+ * checked, so whoever reads the gate output sees a short list next to a
+ * long premise), a declared path that does not exist fails, and
+ * `SUBSTANCE_CHECKS_NOT_MADE` names the completeness of the list as a
+ * judgement this script does not make.
+ *
+ * Cost: a bead whose premise rests on code main has touched fails, and
+ * bringing it back to green means re-running its premise check against
+ * origin/main's HEAD and writing a new `Premise verified` line and
+ * declaration. That is the point -- it is the re-verification pass, not a
+ * formality. A bead whose declared paths main has not touched does NOT need
+ * re-verifying, however many commits have landed: that is the change from
+ * the identity rule, which fired on every bead on every merge.
+ *
+ * Alternatives rejected on 2026-10-13 (ugcportal-ul2j): "within N commits"
+ * and "within N days" both need a constant nothing here measured, and the
+ * second passes a premise invalidated an hour ago; the status quo fires on
+ * nearly every bead and so trains the copy-forward; warn-only gives up the
+ * hard block.
  */
-export const PREMISE_FRESHNESS_COST =
-  "A premise verified against any commit other than origin/main's current HEAD fails -- an older main commit, and equally a commit that is not on origin/main at all (usually a branch commit whose PR was since squash-merged, so main has the change under a different sha; sometimes a branch not yet merged). Re-run the premise check and write a new `Premise verified <date> at origin/main <sha>` line; do not copy the date forward.";
+export const PREMISE_DEPENDS_FORM =
+  "`Premise depends on: <path>, <path>` (repo-relative files or directories, comma-separated, on the premise line or the line right after it), or `Premise depends on: none (<the external fact the premise rests on>)` when no file in this repository can make it false";
+
+export const PREMISE_FRESHNESS_COST = `Re-run the premise check against origin/main's current HEAD and write a new \`Premise verified <date> at origin/main <sha>\` line followed by ${PREMISE_DEPENDS_FORM}; do not copy the sha forward without re-running the observation.`;
 
 /**
  * The substance checks this script does NOT make, printed on EVERY run --
@@ -176,7 +192,8 @@ export const PREMISE_FRESHNESS_COST =
  * "this did not check whether the premise is true" is not.
  */
 export const SUBSTANCE_CHECKS_NOT_MADE = [
-  "Whether the premise is TRUE. This checked that a premise line exists and names the current origin/main. It did not read the premise, and it did not re-run whatever command the premise claims was run. A premise re-verified against today's HEAD and still wrong passes here.",
+  "Whether the premise is TRUE. This checked that a premise line names a commit on origin/main and that no commit since touched a path the bead's `Premise depends on:` line declares. It did not read the premise, and it did not re-run whatever command the premise claims was run. A premise that is fresh by this rule -- or re-verified against today's HEAD -- and still wrong passes here.",
+  "Whether the DEPENDENCY PATHS are complete. `Premise depends on:` is written by the bead's author and trusted: a premise resting on a file the declaration leaves out passes here however much that file has changed, and `none` passes on every merge. A declared path that does not exist fails; a real path that is missing from the list cannot be seen.",
   "Whether each criterion is SATISFIABLE by whoever finishes this bead, on the day they finish it. A `Verified by` that restates the criterion, or that points at another bead's output, passes this script and cannot be honestly closed (bead-template, substance check 2).",
   "Whether the GUARDRAIL guards anything. A `Following should never happen:` line that is the positive criterion inverted satisfies the grep and can never fail.",
   "Whether the MODEL TIER fits the work. `model` and `model_effort` are checked for presence and for being legal values; nothing here judges whether `sonnet` was the right call for this bead.",
@@ -207,22 +224,125 @@ const SHA_RE = /\b([0-9a-f]{7,40})\b/g;
  *     hard-wraps stored text, so "Premise verified 2026-10-08 at" and its
  *     sha routinely land on different lines.
  *
+ * A `Premise depends on:` line is a declaration, not a premise statement:
+ * it never starts a statement of its own, and any text from it onwards is
+ * cut before commit tokens are looked for, so a hex-looking path segment is
+ * never read as a commit. Each statement carries the declaration that
+ * belongs to it -- see `findDeclaration`.
+ *
  * @param {string} notes
  * @param {string} description
- * @returns {Array<{line: string, shas: string[]}>}
+ * @returns {Array<{line: string, shas: string[], depends: Declaration}>}
  */
 export function findPremiseLines(notes, description = "") {
   const out = [];
   for (const field of [String(notes || ""), String(description || "")]) {
     const lines = field.split("\n");
     for (let i = 0; i < lines.length; i++) {
-      if (!/\bpremise\b/i.test(lines[i])) continue;
+      if (!isPremiseStatementStart(lines[i])) continue;
       const statement = [lines[i], lines[i + 1] || ""].join(" ").trim();
-      const shas = [...statement.matchAll(SHA_RE)].map((m) => m[1]);
-      out.push({ line: statement, shas });
+      const shaText = statement.split(DEPENDS_RE)[0];
+      const shas = [...shaText.matchAll(SHA_RE)].map((m) => m[1]);
+      out.push({ line: statement, shas, depends: findDeclaration(lines, i) });
     }
   }
   return out;
+}
+
+/** The declaration label, anywhere on a line. */
+const DEPENDS_RE = /\bpremise depends on\s*:/i;
+/** A line that IS a declaration: the label opens it, after any list or emphasis markup. */
+const DEPENDS_LINE_RE = /^[\s*_>`#-]*premise depends on\s*:/i;
+
+function isPremiseStatementStart(line) {
+  return /\bpremise\b/i.test(line) && !DEPENDS_LINE_RE.test(line);
+}
+
+/**
+ * @typedef {{kind: "missing"} |
+ *           {kind: "none", reason: string, raw: string} |
+ *           {kind: "paths", paths: string[], problems: string[], raw: string}} Declaration
+ */
+
+/**
+ * The `Premise depends on:` declaration that belongs to the premise
+ * statement starting at `lines[start]`.
+ *
+ * It is searched for on the statement's own line (after the word "premise",
+ * the shape of a one-line note: "Premise verified ... Premise depends on:
+ * a, b") and then on the following lines, stopping at a blank line or at the
+ * next premise statement -- so one statement can never borrow another's
+ * declaration, and a declaration that sits further away than that is not
+ * found. Not found is `{kind: "missing"}`, which the check FAILS: absent is
+ * never read as none.
+ *
+ * The list ends at the end of its line unless that line ends with a comma,
+ * in which case it continues on the next one. Hard-wrapped text that splits
+ * a path mid-word yields a path that does not exist, which fails loudly
+ * rather than matching nothing quietly.
+ *
+ * @returns {Declaration}
+ */
+export function findDeclaration(lines, start) {
+  for (let j = start; j < lines.length; j++) {
+    if (j > start && (lines[j].trim() === "" || isPremiseStatementStart(lines[j]))) break;
+    const m = DEPENDS_RE.exec(lines[j]);
+    if (!m) continue;
+    let raw = lines[j].slice(m.index + m[0].length).trim();
+    for (let k = j + 1; raw.endsWith(",") && k < lines.length && lines[k].trim() !== ""; k++) {
+      raw = `${raw} ${lines[k].trim()}`;
+    }
+    return parseDeclaration(raw);
+  }
+  return { kind: "missing" };
+}
+
+const NONE_ALONE = "`none` must stand alone, as `none` or `none (<why>)` -- not combined with paths or followed by other text";
+
+/**
+ * Parse the text after `Premise depends on:`.
+ *
+ * `none` as the first word is the explicit no-paths form, alone or followed
+ * by one parenthesised reason, which is kept for the report. Anything else
+ * is a comma-separated path list. Each item has surrounding backticks or
+ * quotes, a leading `./`, and trailing sentence punctuation stripped; what remains must be a repo-relative path. Items that
+ * are not (an empty list, whitespace inside an item, an absolute path, a
+ * `..` segment, a glob character, `none` mixed with paths) are collected as
+ * `problems`, and the check fails on any of them rather than guessing.
+ *
+ * @returns {Declaration}
+ */
+export function parseDeclaration(raw) {
+  const text = String(raw || "").trim();
+  const none = /^none(?=$|\s|\()(.*)$/is.exec(text);
+  if (none) {
+    const reason = none[1].trim();
+    // `none` stands alone or with ONE parenthesised reason; anything else
+    // after it (`none (x), src/a.ts`) would otherwise be read as a bare none
+    // and drop the paths, so it fails instead.
+    if (reason === "" || /^\([^()]*\)[.;]?$/.test(reason)) return { kind: "none", reason, raw: text };
+    return { kind: "paths", paths: [], problems: [NONE_ALONE], raw: text };
+  }
+  const paths = [];
+  const problems = [];
+  for (const item of text.split(",")) {
+    const p = item
+      .trim()
+      .replace(/[.;:]+$/, "")
+      .replace(/^[`'"\u2018\u201C]+|[`'"\u2019\u201D]+$/g, "")
+      .replace(/[.;:]+$/, "")
+      .replace(/^\.\//, "")
+      .replace(/\/+$/, "");
+    if (!p) continue;
+    if (/^none$/i.test(p)) problems.push(NONE_ALONE);
+    else if (/\s/.test(p)) problems.push(`${JSON.stringify(p)} is not a path (it contains whitespace; separate paths with commas)`);
+    else if (p.startsWith("/") || /^[A-Za-z]:/.test(p)) problems.push(`${JSON.stringify(p)} is absolute; write it relative to the repository root`);
+    else if (p.split("/").includes("..")) problems.push(`${JSON.stringify(p)} has a \`..\` segment; write it relative to the repository root`);
+    else if (/[*?]/.test(p)) problems.push(`${JSON.stringify(p)} is a glob; declare the file or the directory instead`);
+    else paths.push(p);
+  }
+  if (paths.length === 0 && problems.length === 0) problems.push("the declaration lists nothing");
+  return { kind: "paths", paths: [...new Set(paths)], problems, raw: text };
 }
 
 // --- acceptance-criteria parsing ---------------------------------------------
@@ -560,47 +680,82 @@ export const CHECKS = [
     return { ok: true };
   }),
 
-  check("premise-fresh", "that premise commit is origin/main's current HEAD", ["notes", "description"], (b, ctx) => {
+  check("premise-fresh", "no main commit since the premise touched a path it depends on", ["notes", "description"], (b, ctx) => {
     const resolved = premiseCommits(findPremiseLines(notes(b), desc(b)), ctx);
     if (resolved.length === 0) {
       // premise-present already reported the real problem; do not report it
       // twice under a different name.
       return { ok: false, detail: "no resolvable premise commit to check freshness against" };
     }
-    // Fresh means the premise commit IS origin/main's HEAD: no main commit
-    // it lacks (`behind`) and no commit of its own that main lacks
-    // (`notOnMain`). Checking `behind` alone passed every descendant of
-    // HEAD -- see PREMISE_FRESHNESS_COST.
-    if (resolved.some((r) => r.behind === 0 && r.notOnMain === 0)) return { ok: true };
-    // Otherwise report the most useful failure. A premise commit that IS on
-    // main is stale by a countable distance; prefer the freshest of those (a
-    // bead re-verified recently still carries older lines in its log).
     // An unanswerable count (`git rev-list` failed) is Infinity: the
-    // comparison was not made, so say so rather than print a count.
+    // comparison was not made, so say so rather than print a count -- and
+    // fail, since a comparison that was not made cannot have found the
+    // premise fresh.
     const unmeasured = resolved.find((r) => !Number.isFinite(r.behind) || !Number.isFinite(r.notOnMain));
-    // The `some(...)` return above means no resolved commit is fresh here, so
-    // an unmeasured one is enough to report.
     if (unmeasured) {
       return {
         ok: false,
         detail: `premise commit ${unmeasured.short} could not be compared with head ref ${ctx.git.head}: \`git rev-list\` failed, so no commit count was measured. ${PREMISE_FRESHNESS_COST}`,
       };
     }
+    // Only a premise commit ON main can be path-compared with main's
+    // history; an off-main one never rescues a stale on-main one. See
+    // PREMISE_FRESHNESS_COST's comment, rule 1.
     const onMain = resolved.filter((r) => r.notOnMain === 0);
-    if (onMain.length > 0) {
-      const freshest = onMain.reduce((best, r) => (r.behind < best.behind ? r : best));
+    if (onMain.length === 0) {
+      const off = resolved[0];
       return {
         ok: false,
-        detail: `premise is ${freshest.behind} commit(s) stale: verified at ${freshest.short}, origin/main is now ${ctx.headShort}. ${PREMISE_FRESHNESS_COST}`,
+        detail: `premise commit ${off.short} is not on origin/main: ${off.notOnMain} commit(s) of its history are not in origin/main ${ctx.headShort}. It is usually a branch commit whose PR was since squash-merged (main then has the change under a different sha), sometimes one not yet merged; either way it is not in main's history, so it cannot be compared with main's HEAD -- re-verify against origin/main's HEAD. ${PREMISE_FRESHNESS_COST}`,
       };
     }
-    // Every named commit is off main. Its distance from HEAD is not a
-    // staleness count -- it may even be zero commits behind -- so say what
-    // is actually wrong with it.
-    const off = resolved[0];
+    // Judge the freshest on-main premise (rule 2). Several statements can
+    // tie -- the same commit named twice -- and their declarations combine.
+    const behind = Math.min(...onMain.map((r) => r.behind));
+    const freshest = onMain.filter((r) => r.behind === behind);
+    const at = freshest[0];
+    const where = `premise verified at ${at.full.slice(0, 7)} (${behind === 0 ? "origin/main's current HEAD" : `${behind} commit(s) behind origin/main ${ctx.headShort}`})`;
+    const decl = combineDeclarations(freshest.map((r) => r.depends));
+    if (decl.kind === "missing") {
+      return {
+        ok: false,
+        detail: `${where} has no \`Premise depends on:\` line, so there is nothing to scope its freshness by; absent is not read as \`none\`. Add ${PREMISE_DEPENDS_FORM}, on the premise line or the line right after it -- after re-running the premise if it is not at origin/main's HEAD.`,
+      };
+    }
+    if (decl.kind === "none") {
+      return { ok: true, detail: `${where} declares \`Premise depends on: none\`${decl.reason ? ` ${decl.reason}` : ""}; no merge makes it stale` };
+    }
+    if (decl.problems.length > 0) {
+      return { ok: false, detail: `${where}: its \`Premise depends on:\` line cannot be checked: ${decl.problems.join("; ")}. Write ${PREMISE_DEPENDS_FORM}.` };
+    }
+    const touching = behind === 0 ? [] : ctx.git.commitsTouching(at.full, decl.paths);
+    if (touching === null) {
+      return {
+        ok: false,
+        detail: `${where}: \`git log\` over ${at.short}..${ctx.headShort} failed, so whether it touched ${decl.paths.join(", ")} was not measured. ${PREMISE_FRESHNESS_COST}`,
+      };
+    }
+    if (touching.length > 0) {
+      const SHOWN = 5;
+      const listed = touching
+        .slice(0, SHOWN)
+        .map((c) => `${c.sha.slice(0, 7)} touched ${c.files.slice(0, SHOWN).join(", ")}${c.files.length > SHOWN ? ` and ${c.files.length - SHOWN} more file(s)` : ""}`)
+        .join("; ");
+      return {
+        ok: false,
+        detail: `${where} is stale: ${touching.length} of those commit(s) touched a declared path -- ${listed}${touching.length > SHOWN ? `; and ${touching.length - SHOWN} more commit(s)` : ""}. ${PREMISE_FRESHNESS_COST}`,
+      };
+    }
+    const absent = decl.paths.filter((p) => !ctx.git.pathExists(p));
+    if (absent.length > 0) {
+      return {
+        ok: false,
+        detail: `${where} declares ${absent.map((p) => JSON.stringify(p)).join(", ")}, which does not exist at origin/main ${ctx.headShort}. A path that matches no file can never be touched, so a misspelt declaration would pass forever; to depend on something being absent, declare the nearest existing parent directory.`,
+      };
+    }
     return {
-      ok: false,
-      detail: `premise commit ${off.short} is not on origin/main: ${off.notOnMain} commit(s) of its history are not in origin/main ${ctx.headShort}. It is usually a branch commit whose PR was since squash-merged (main then has the change under a different sha), sometimes one not yet merged; either way it is not in main's history, so it cannot be compared with main's HEAD -- re-verify against origin/main's HEAD. ${PREMISE_FRESHNESS_COST}`,
+      ok: true,
+      detail: `${where}; ${behind === 0 ? "no commits since, and its declared path(s) all exist" : "none of those commits touched its declared path(s)"}: ${decl.paths.join(", ")}`,
     };
   }),
 
@@ -635,20 +790,49 @@ export const EXAMINED_FIELDS = [...new Set(CHECKS.flatMap((c) => c.fields))];
 /**
  * Resolve the commit-ish tokens on premise lines against the repo, keeping
  * only the ones git recognises as commits, each with how many commits
- * `origin/main` is ahead of it (`behind`) and how many of its own commits
- * are not on `origin/main` (`notOnMain`). Both are needed: HEAD and every
- * descendant of HEAD have `behind === 0`.
+ * `origin/main` is ahead of it (`behind`), how many of its own commits are
+ * not on `origin/main` (`notOnMain`), and the declaration of the statement
+ * it came from. Both counts are needed: HEAD and every descendant of HEAD
+ * have `behind === 0`.
  */
 function premiseCommits(lines, ctx) {
   const out = [];
-  for (const { shas } of lines) {
+  for (const { shas, depends } of lines) {
     for (const sha of shas) {
       const full = ctx.git.resolveCommit(sha);
       if (!full) continue;
-      out.push({ short: sha, full, behind: ctx.git.commitsAhead(full), notOnMain: ctx.git.commitsNotOnMain(full) });
+      out.push({
+        short: sha,
+        full,
+        behind: ctx.git.commitsAhead(full),
+        notOnMain: ctx.git.commitsNotOnMain(full),
+        depends: depends || { kind: "missing" },
+      });
     }
   }
   return out;
+}
+
+/**
+ * Combine the declarations of premise statements that tie for freshest.
+ * Fails closed: any unparseable declaration wins; otherwise path lists are
+ * UNIONED (stricter than either); `none` only when no tied statement lists
+ * paths; `missing` only when none of them declares anything.
+ *
+ * @param {Declaration[]} decls
+ * @returns {Declaration}
+ */
+export function combineDeclarations(decls) {
+  const lists = decls.filter((d) => d.kind === "paths");
+  if (lists.length > 0) {
+    return {
+      kind: "paths",
+      paths: [...new Set(lists.flatMap((d) => d.paths))],
+      problems: [...new Set(lists.flatMap((d) => d.problems))],
+      raw: lists.map((d) => d.raw).join(" | "),
+    };
+  }
+  return decls.find((d) => d.kind === "none") || { kind: "missing" };
 }
 
 // --- running the checks ------------------------------------------------------
@@ -710,7 +894,10 @@ export function formatReport(result) {
   for (const bead of result.beads) {
     lines.push(`${bead.id} [${bead.status}] "${bead.title}" -- ${bead.passed ? "PASS" : "FAIL"}`);
     for (const r of bead.results) {
-      lines.push(`  ${r.ok ? "ok  " : "FAIL"} ${r.id.padEnd(16)} ${r.ok ? r.label : r.detail}`);
+      // A passing check may still carry a detail -- premise-fresh says which
+      // declared paths it compared, so a short list beside a long premise is
+      // visible to whoever reads the gate output (see PREMISE_FRESHNESS_COST).
+      lines.push(`  ${r.ok ? "ok  " : "FAIL"} ${r.id.padEnd(16)} ${r.ok ? (r.detail ? `${r.label} -- ${r.detail}` : r.label) : r.detail}`);
     }
     lines.push("");
   }
@@ -788,6 +975,42 @@ export function makeGitContext(headOverride, repoDir = REPO_ROOT) {
         return Number(git(["rev-list", "--count", `${head}..${full}`], repoDir));
       } catch {
         return Infinity;
+      }
+    },
+    /**
+     * The commits in `full..HEAD` that touched any of `paths`, oldest first,
+     * each with the files under those paths it touched; null when git
+     * failed, so an error fails closed instead of reading as "touched
+     * nothing". `--literal-pathspecs`, because declared paths in this repo
+     * carry glob characters (`src/app/api/media/[id]/`) that would otherwise
+     * match a different path or none. `--no-renames`, so a rename counts as
+     * touching both its old and its new name. A directory pathspec covers
+     * everything under it; a file pathspec does not match a longer name
+     * (`a.ts` does not cover `a.tsx`).
+     */
+    commitsTouching(full, paths) {
+      if (paths.length === 0) return [];
+      try {
+        const out = git(
+          ["--literal-pathspecs", "log", "--reverse", "--full-history", "--no-renames", "--format=%x00%H", "--name-only", `${full}..${head}`, "--", ...paths],
+          repoDir,
+        );
+        return out
+          .split("\0")
+          .map((chunk) => chunk.split("\n").map((l) => l.trim()).filter(Boolean))
+          .filter((rows) => rows.length > 0)
+          .map(([sha, ...files]) => ({ sha, files }));
+      } catch {
+        return null;
+      }
+    },
+    /** whether `p` names a file or directory in HEAD's tree */
+    pathExists(p) {
+      try {
+        git(["cat-file", "-e", `${head}:${p}`], repoDir);
+        return true;
+      } catch {
+        return false;
       }
     },
   };

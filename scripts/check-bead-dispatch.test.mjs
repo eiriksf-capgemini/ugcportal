@@ -30,17 +30,21 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   BD_LIST_ARGS,
   CHECKS,
+  PREMISE_DEPENDS_FORM,
   CC_TYPES,
   EXAMINED_FIELDS,
   MODEL_EFFORTS,
   MODEL_TIERS,
   SUBSTANCE_CHECKS_NOT_MADE,
   USER_STORY_WINDOW,
+  combineDeclarations,
+  findDeclaration,
   findPremiseLines,
   formatReport,
   invokedDirectly,
   makeGitContext,
   parseArgs,
+  parseDeclaration,
   splitCriteria,
   validateBead,
   validateBeads,
@@ -126,7 +130,7 @@ Verified by: a test running the CLI against this fixture and asserting exit 0.
 
 K2: Following should never happen: a malformed bead is dispatched silently.
 Verified by: a test asserting a non-zero exit for every single-element fixture.`,
-    notes: `Premise verified 2026-10-12 at origin/main ${HEAD()} by running the fixture through the CLI.`,
+    notes: `Premise verified 2026-10-12 at origin/main ${HEAD()} by running the fixture through the CLI.\nPremise depends on: f3.txt`,
     metadata: {
       cc_type: "feat",
       cc_scope: "process",
@@ -375,40 +379,46 @@ describe("K1: a bead missing one required element fails and the element is named
 
 // --- K2: premise freshness ---------------------------------------------------
 
-describe("K2: premise freshness against origin/main's current HEAD", { timeout: 30_000 }, () => {
-  it("fails and prints how many commits stale when the premise names an older commit", () => {
+describe("K2: premise freshness against origin/main (kt3k's cases, under ul2j's path-scoped rule)", { timeout: 30_000 }, () => {
+  it("fails when a commit since an older premise touched a declared path, and names how far behind it is", () => {
+    // f3.txt is added by the third commit, HEAD; the premise is at the first.
     const bead = completeBead({
-      notes: `Premise verified 2026-10-12 at origin/main ${OLDEST()} by reading the fixture.`,
+      notes: `Premise verified 2026-10-12 at origin/main ${OLDEST()} by reading the fixture.\nPremise depends on: f3.txt`,
     });
     const res = runFixture(bead);
     expect(res.status).toBe(1);
-    expect(res.stdout).toContain("premise is 2 commit(s) stale");
-    expect(res.stdout).toContain(OLDEST().slice(0, 7));
-    expect(res.stdout).toContain(HEAD().slice(0, 7));
+    expect(failedChecks(res.stdout)).toEqual(["premise-fresh"]);
+    expect(res.stdout).toContain(`premise verified at ${OLDEST().slice(0, 7)} (2 commit(s) behind origin/main ${HEAD().slice(0, 7)}) is stale`);
+    expect(res.stdout).toContain(`1 of those commit(s) touched a declared path -- ${HEAD().slice(0, 7)} touched f3.txt`);
   });
 
   it("passes when the premise names the current HEAD", () => {
     const res = runFixture(completeBead());
     expect(res.status).toBe(0);
-    expect(res.stdout).toContain("that premise commit is origin/main's current HEAD");
+    expect(res.stdout).toContain("no main commit since the premise touched a path it depends on");
+    expect(res.stdout).toContain("(origin/main's current HEAD); no commits since, and its declared path(s) all exist: f3.txt");
   });
 
   it("accepts an abbreviated sha for the current HEAD", () => {
     const bead = completeBead({
-      notes: `Premise verified 2026-10-12 at origin/main ${HEAD().slice(0, 8)}.`,
+      notes: `Premise verified 2026-10-12 at origin/main ${HEAD().slice(0, 8)}.\nPremise depends on: f3.txt`,
     });
     expect(runFixture(bead).status).toBe(0);
   });
 
-  it("the staleness count is the real distance, not a constant", () => {
-    // Mutation guard: a hard-coded "1 commit(s) stale" would pass the first
-    // test above only by luck, so assert a second, different distance.
-    const bead = completeBead({
-      notes: `Premise verified 2026-10-12 at origin/main ${shas[1]}.`,
-    });
-    const res = runFixture(bead);
-    expect(res.status).toBe(1);
-    expect(res.stdout).toContain("premise is 1 commit(s) stale");
+  it("the touching-commit count and distance are real, not constants", () => {
+    // Mutation guard: a hard-coded "1 of those" or "2 commit(s) behind" would
+    // pass the first test above only by luck, so assert different figures.
+    const two = runFixture(
+      completeBead({ notes: `Premise verified 2026-10-12 at origin/main ${OLDEST()}.\nPremise depends on: f2.txt, f3.txt` }),
+    );
+    expect(two.status).toBe(1);
+    expect(two.stdout).toContain(
+      `2 of those commit(s) touched a declared path -- ${shas[1].slice(0, 7)} touched f2.txt; ${HEAD().slice(0, 7)} touched f3.txt`,
+    );
+    const one = runFixture(completeBead({ notes: `Premise verified 2026-10-12 at origin/main ${shas[1]}.\nPremise depends on: f3.txt` }));
+    expect(one.status).toBe(1);
+    expect(one.stdout).toContain(`(1 commit(s) behind origin/main ${HEAD().slice(0, 7)}) is stale`);
   });
 
   it("the freshest premise on a bead wins when several are recorded", () => {
@@ -416,7 +426,9 @@ describe("K2: premise freshness against origin/main's current HEAD", { timeout: 
     const bead = completeBead({
       notes: [
         `Premise verified 2026-10-10 at origin/main ${OLDEST()}.`,
+        "Premise depends on: f3.txt",
         `PREMISE CORRECTED 2026-10-12 at origin/main ${HEAD()}, before dispatch.`,
+        "Premise depends on: f3.txt",
       ].join("\n"),
     });
     expect(runFixture(bead).status).toBe(0);
@@ -424,7 +436,7 @@ describe("K2: premise freshness against origin/main's current HEAD", { timeout: 
 
   it("reads a premise statement whose sha wrapped onto the next line", () => {
     const bead = completeBead({
-      notes: `Premise verified 2026-10-12 at origin/main\n${HEAD()} by reading the fixture.`,
+      notes: `Premise verified 2026-10-12 at origin/main\n${HEAD()} by reading the fixture.\nPremise depends on: f3.txt`,
     });
     expect(runFixture(bead).status).toBe(0);
   });
@@ -434,7 +446,7 @@ describe("K2: premise freshness against origin/main's current HEAD", { timeout: 
     const bead = {
       ...base,
       notes: "",
-      description: `${base.description}\n\nPremise verified 2026-10-12 at origin/main ${HEAD()}.`,
+      description: `${base.description}\n\nPremise verified 2026-10-12 at origin/main ${HEAD()}.\nPremise depends on: f3.txt`,
     };
     expect(runFixture(bead).status).toBe(0);
   });
@@ -453,7 +465,7 @@ describe("K2: premise freshness against origin/main's current HEAD", { timeout: 
   ];
   for (const c of OFF_MAIN) {
     it(`fails a premise naming ${c.what}, and says it is not on origin/main`, () => {
-      const notes = (sha) => `Premise verified 2026-10-14 at feature-branch commit ${sha} (not on main).`;
+      const notes = (sha) => `Premise verified 2026-10-14 at feature-branch commit ${sha} (not on main).\nPremise depends on: f3.txt`;
       const off = runFixture(completeBead({ notes: notes(c.sha()) }));
       expect(off.status).toBe(1);
       expect(failedChecks(off.stdout)).toEqual(["premise-fresh"]);
@@ -463,12 +475,12 @@ describe("K2: premise freshness against origin/main's current HEAD", { timeout: 
       // not claim otherwise.
       expect(off.stdout).toContain("usually a branch commit whose PR was since squash-merged");
       expect(off.stdout).not.toContain("main does not have");
-      expect(off.stdout).not.toContain("that premise commit is origin/main's current HEAD");
+      expect(off.stdout).not.toContain("no main commit since the premise touched a path it depends on");
 
       // the same text naming a commit that IS main's HEAD passes
       const on = runFixture(completeBead({ notes: notes(HEAD()) }));
       expect(on.status).toBe(0);
-      expect(on.stdout).toContain("that premise commit is origin/main's current HEAD");
+      expect(on.stdout).toContain("no main commit since the premise touched a path it depends on");
     });
   }
 
@@ -478,13 +490,15 @@ describe("K2: premise freshness against origin/main's current HEAD", { timeout: 
     const bead = completeBead({
       notes: [
         `Premise verified 2026-10-10 at origin/main ${OLDEST()}.`,
+        "Premise depends on: f3.txt",
         `Premise re-verified 2026-10-14 on the feature branch at ${descendant}.`,
+        "Premise depends on: f3.txt",
       ].join("\n"),
     });
     const res = runFixture(bead);
     expect(res.status).toBe(1);
     expect(failedChecks(res.stdout)).toEqual(["premise-fresh"]);
-    expect(res.stdout).toContain("premise is 2 commit(s) stale");
+    expect(res.stdout).toContain(`premise verified at ${OLDEST().slice(0, 7)} (2 commit(s) behind origin/main ${HEAD().slice(0, 7)}) is stale`);
   });
 
   it("says the comparison could not be made, not an Infinity count, when git rev-list fails", () => {
@@ -534,6 +548,331 @@ describe("K2: premise freshness against origin/main's current HEAD", { timeout: 
     expect(fresh.detail).toContain("could not be compared");
     expect(fresh.detail).toContain("no commit count was measured");
     expect(fresh.detail).not.toContain("Infinity");
+  });
+});
+
+// --- ul2j: freshness scoped by declared dependency paths ----------------------
+
+/**
+ * A second throwaway repo, built for the path-scoped rule (ugcportal-ul2j):
+ * one commit per kind of touch, so each case below can put its premise just
+ * before the commit it is about and assert exactly which later commits are
+ * named. Kept apart from `makeTempRepo` so kt3k's exact distances above do
+ * not move.
+ *
+ *   c0  base: src/lib/a.ts, src/lib/a.tsx, src/lib/b.ts, docs/x.md,
+ *       src/app/[id]/route.ts, src/app/d, README.md
+ *   c1  modifies src/lib/a.ts
+ *   c2  modifies docs/x.md
+ *   c3  modifies src/app/d      -- a file the GLOB `src/app/[id]` matches
+ *   c4  modifies src/app/[id]/route.ts
+ *   c5  modifies src/lib/a.tsx  -- a longer name than a.ts, not under it
+ *   c6  renames src/lib/b.ts -> src/lib/c.ts          (HEAD)
+ */
+function makePathRepo() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ul2j-repo-"));
+  const run = (args) => execFileSync("git", args, { cwd: dir, encoding: "utf8" }).trim();
+  const write = (rel, text) => {
+    fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+    fs.writeFileSync(path.join(dir, rel), text);
+  };
+  run(["init", "-q", "-b", "main"]);
+  run(["config", "user.email", "test@example.com"]);
+  run(["config", "user.name", "Test"]);
+  const commit = (msg) => {
+    run(["add", "-A"]);
+    run(["commit", "-q", "-m", msg]);
+    return run(["rev-parse", "HEAD"]);
+  };
+  for (const f of ["src/lib/a.ts", "src/lib/a.tsx", "src/lib/b.ts", "docs/x.md", "src/app/[id]/route.ts", "src/app/d", "README.md"]) {
+    write(f, `${f} v0\n`);
+  }
+  const c = [commit("c0 base")];
+  write("src/lib/a.ts", "a v1\n");
+  c.push(commit("c1 a.ts"));
+  write("docs/x.md", "x v1\n");
+  c.push(commit("c2 docs"));
+  write("src/app/d", "d v1\n");
+  c.push(commit("c3 app/d"));
+  write("src/app/[id]/route.ts", "route v1\n");
+  c.push(commit("c4 [id] route"));
+  write("src/lib/a.tsx", "a.tsx v1\n");
+  c.push(commit("c5 a.tsx"));
+  run(["mv", "src/lib/b.ts", "src/lib/c.ts"]);
+  c.push(commit("c6 rename b -> c"));
+  return { dir, c };
+}
+
+describe("ul2j: premise freshness is scoped by the paths the premise declares", { timeout: 60_000 }, () => {
+  let pr;
+  let c;
+  beforeAll(() => {
+    const made = makePathRepo();
+    pr = made.dir;
+    c = made.c;
+  }, 30_000);
+  afterAll(() => {
+    if (pr) fs.rmSync(pr, { recursive: true, force: true });
+  });
+  const short = (sha) => sha.slice(0, 7);
+  /** Run the CLI over one bead whose notes are `notes`, in the path repo at HEAD c6. */
+  const runNotes = (notes) => {
+    const file = path.join(pr, `beads-${Math.random().toString(36).slice(2)}.json`);
+    fs.writeFileSync(file, JSON.stringify([completeBead({ notes })]));
+    return runCliAllowFail(["--beads", file, "--repo", pr, "--head", c[6]]);
+  };
+  const premise = (i, decl) =>
+    `Premise verified 2026-10-17 at origin/main ${c[i]} by reading the code.${decl === undefined ? "" : `\nPremise depends on: ${decl}`}`;
+  /** The premise-fresh report line, whatever it says. */
+  const freshLine = (stdout) => stdout.split("\n").find((l) => /^\s+(ok|FAIL)\s+premise-fresh\b/.test(l)) || "";
+
+  // --- K1 and K2: the pair the bead asks for -- the same declaration, one
+  // premise before a commit that touched it and one after it.
+  it("K1: passes when main moved but no commit since the premise touched a declared path", () => {
+    // c2..c6 touch docs, app/d, app/[id], a.tsx and b.ts/c.ts -- never a.ts.
+    const res = runNotes(premise(1, "src/lib/a.ts"));
+    expect(res.status).toBe(0);
+    expect(failedChecks(res.stdout)).toEqual([]);
+    expect(freshLine(res.stdout)).toContain(
+      `premise verified at ${short(c[1])} (5 commit(s) behind origin/main ${short(c[6])}); none of those commits touched its declared path(s): src/lib/a.ts`,
+    );
+  });
+
+  it("K2: fails when a commit since the premise touched a declared path, and names that commit and that path", () => {
+    const res = runNotes(premise(0, "src/lib/a.ts"));
+    expect(res.status).toBe(1);
+    expect(failedChecks(res.stdout)).toEqual(["premise-fresh"]);
+    const line = freshLine(res.stdout);
+    expect(line).toContain(`premise verified at ${short(c[0])} (6 commit(s) behind origin/main ${short(c[6])}) is stale`);
+    expect(line).toContain(`1 of those commit(s) touched a declared path -- ${short(c[1])} touched src/lib/a.ts.`);
+    // and ONLY that commit: the five that touched other paths are not named
+    for (const i of [2, 3, 4, 5, 6]) expect(line).not.toContain(`${short(c[i])} touched`);
+  });
+
+  it("K2: names every touching commit with its own path, oldest first", () => {
+    const line = freshLine(runNotes(premise(0, "src/lib/a.ts, docs/x.md")).stdout);
+    expect(line).toContain(`2 of those commit(s) touched a declared path -- ${short(c[1])} touched src/lib/a.ts; ${short(c[2])} touched docs/x.md.`);
+  });
+
+  it("a declared directory covers everything under it, with or without a trailing slash", () => {
+    for (const decl of ["src/lib/", "src/lib"]) {
+      const res = runNotes(premise(0, decl));
+      expect(res.status).toBe(1);
+      expect(freshLine(res.stdout)).toContain(
+        `3 of those commit(s) touched a declared path -- ${short(c[1])} touched src/lib/a.ts; ${short(c[5])} touched src/lib/a.tsx; ${short(c[6])} touched src/lib/b.ts, src/lib/c.ts.`,
+      );
+    }
+  });
+
+  it("matches a declared path literally: `[id]` is a directory name, not a glob", () => {
+    // As a glob, `src/app/[id]` matches `src/app/d` (c3) and not the real
+    // `[id]` directory (c4) -- the stale commit would be the wrong one.
+    const res = runNotes(premise(2, "src/app/[id]/"));
+    expect(res.status).toBe(1);
+    const line = freshLine(res.stdout);
+    expect(line).toContain(`1 of those commit(s) touched a declared path -- ${short(c[4])} touched src/app/[id]/route.ts.`);
+    expect(line).not.toContain(`${short(c[3])} touched`);
+  });
+
+  it("a file path does not cover a longer name that starts with it (a.ts is not a.tsx)", () => {
+    const res = runNotes(premise(4, "src/lib/a.ts"));
+    expect(res.status).toBe(0);
+    expect(freshLine(res.stdout)).toContain("none of those commits touched its declared path(s): src/lib/a.ts");
+  });
+
+  it("a rename touches the old name, so a premise about the old file goes stale", () => {
+    const res = runNotes(premise(5, "src/lib/b.ts"));
+    expect(res.status).toBe(1);
+    expect(freshLine(res.stdout)).toContain(`${short(c[6])} touched src/lib/b.ts.`);
+  });
+
+  it("a declared path that does not exist at HEAD fails, even when nothing touched it", () => {
+    // `src/lib/a.t` is a typo: it matches no file, so it could never be
+    // touched, and without this it would pass on every future merge.
+    for (const [i, decl] of [
+      [1, "src/lib/a.t"], // behind HEAD, and no commit since touched it
+      [6, "src/lib/typo.ts"], // at HEAD itself
+    ]) {
+      const res = runNotes(premise(i, `README.md, ${decl}`));
+      expect(res.status, decl).toBe(1);
+      expect(failedChecks(res.stdout)).toEqual(["premise-fresh"]);
+      expect(freshLine(res.stdout)).toContain(`declares "${decl}", which does not exist at origin/main ${short(c[6])}`);
+      expect(freshLine(res.stdout)).toContain("declare the nearest existing parent directory");
+      // and the real path beside it is not what was reported
+      expect(freshLine(res.stdout)).not.toContain('"README.md"');
+    }
+  });
+
+  // --- K3: none, and absent
+  it("K3: an explicit `none` declaration does not go stale on merge movement", () => {
+    const res = runNotes(premise(0, "none (GitHub's API returns 422 for this; an external fact)"));
+    expect(res.status).toBe(0);
+    expect(freshLine(res.stdout)).toContain(
+      `premise verified at ${short(c[0])} (6 commit(s) behind origin/main ${short(c[6])}) declares \`Premise depends on: none\` (GitHub's API returns 422 for this; an external fact); no merge makes it stale`,
+    );
+  });
+
+  it("K3: a premise with NO `Premise depends on:` line fails -- absent is not read as none", () => {
+    const res = runNotes(premise(0));
+    expect(res.status).toBe(1);
+    expect(failedChecks(res.stdout)).toEqual(["premise-fresh"]);
+    const line = freshLine(res.stdout);
+    expect(line).toContain("has no `Premise depends on:` line");
+    expect(line).toContain("absent is not read as `none`");
+    // and it tells the author what to write
+    expect(line).toContain(PREMISE_DEPENDS_FORM);
+  });
+
+  it("K3: absent fails even for a premise verified at origin/main's current HEAD", () => {
+    const res = runNotes(premise(6));
+    expect(res.status).toBe(1);
+    expect(freshLine(res.stdout)).toContain(`premise verified at ${short(c[6])} (origin/main's current HEAD) has no \`Premise depends on:\` line`);
+    // the same premise with a declaration passes, so the failure is the declaration's absence and nothing else
+    expect(runNotes(premise(6, "src/lib/a.ts")).status).toBe(0);
+  });
+
+  it("K3: the freshest premise is the one judged, so an older declaration does not cover a newer premise", () => {
+    const res = runNotes([premise(0, "none (an external fact)"), premise(3)].join("\n"));
+    expect(res.status).toBe(1);
+    expect(freshLine(res.stdout)).toContain(`premise verified at ${short(c[3])} (3 commit(s) behind`);
+    expect(freshLine(res.stdout)).toContain("has no `Premise depends on:` line");
+  });
+
+  it("a declaration that cannot be checked fails and says why", () => {
+    for (const [decl, expected] of [
+      ["", "the declaration lists nothing"],
+      ["none, src/lib/a.ts", "`none` must stand alone"],
+      ["none (an external fact), src/lib/a.ts", "`none` must stand alone"],
+      ["none because GitHub says so", "`none` must stand alone"],
+      ["src/lib/a.ts and docs/x.md", "is not a path (it contains whitespace"],
+      ["src/lib/*.ts", "is a glob"],
+      ["/abs/path.ts", "is absolute"],
+      ["../outside.ts", "has a `..` segment"],
+    ]) {
+      const res = runNotes(premise(6, decl));
+      expect(res.status, decl).toBe(1);
+      expect(freshLine(res.stdout), decl).toContain("its `Premise depends on:` line cannot be checked");
+      expect(freshLine(res.stdout), decl).toContain(expected);
+    }
+  });
+
+  it("finds the declaration on the premise's own line, on the next line, and across a trailing-comma wrap", () => {
+    const sameLine = `Premise verified 2026-10-17 at origin/main ${c[0]} by grep. Premise depends on: src/lib/a.ts`;
+    const wrapped = `Premise verified 2026-10-17 at origin/main ${c[0]}.\nPremise depends on: docs/x.md,\nsrc/lib/a.ts`;
+    for (const notes of [sameLine, premise(0, "src/lib/a.ts"), wrapped]) {
+      const line = freshLine(runNotes(notes).stdout);
+      expect(line).toContain(`${short(c[1])} touched src/lib/a.ts`);
+    }
+  });
+
+  it("does not borrow a declaration across a blank line or from another premise statement", () => {
+    const acrossBlank = `${premise(0)}\n\nPremise depends on: none (an external fact)`;
+    const fromAnother = `${premise(0)}\n${premise(1, "none (an external fact)")}`;
+    expect(freshLine(runNotes(acrossBlank).stdout)).toContain("has no `Premise depends on:` line");
+    // in the second, c1 is the freshest and carries its own none -- so the
+    // OLDER c0 statement is not what is judged; assert the c1 one was.
+    expect(freshLine(runNotes(fromAnother).stdout)).toContain(`premise verified at ${short(c[1])}`);
+    const olderOnly = `${premise(1)}\nPremise measured 2026-10-01 at ${c[0]}.\nPremise depends on: none (an external fact)`;
+    // c1 is freshest; the declaration two lines down belongs to the c0 statement, not to it
+    expect(freshLine(runNotes(olderOnly).stdout)).toContain(`premise verified at ${short(c[1])} (5 commit(s) behind origin/main ${short(c[6])}) has no`);
+  });
+
+  // --- K5: the blind spot, demonstrated rather than claimed away
+  it("K5: an understated declaration passes", () => {
+    // This premise is ABOUT src/lib/a.ts, which c1 changed. Its author
+    // declared only README.md. The check cannot know the declaration is
+    // short: it trusts it, and the bead passes. This is the mechanism's
+    // stated blind spot (PREMISE_FRESHNESS_COST, "WHAT THIS TRUSTS"; and
+    // SUBSTANCE_CHECKS_NOT_MADE), not a defect this test is waiting on.
+    const about = `Premise verified 2026-10-17 at origin/main ${c[0]}: src/lib/a.ts still exports v0.`;
+    const understated = runNotes(`${about}\nPremise depends on: README.md`);
+    expect(understated.status).toBe(0);
+    // The same premise with the file it rests on declared fails -- so the
+    // pass above is the declaration's doing and nothing else.
+    const honest = runNotes(`${about}\nPremise depends on: README.md, src/lib/a.ts`);
+    expect(honest.status).toBe(1);
+    expect(freshLine(honest.stdout)).toContain(`${short(c[1])} touched src/lib/a.ts`);
+    // And the run says, every time, that the list's completeness was not checked.
+    expect(understated.stdout).toContain("Whether the DEPENDENCY PATHS are complete");
+  });
+
+  it("fails closed, saying nothing was measured, when the path comparison itself fails", () => {
+    const git = {
+      head: "f".repeat(40),
+      headShort: "fffffff",
+      resolveCommit: (sha) => sha.padEnd(40, "0"),
+      commitsAhead: () => 3,
+      commitsNotOnMain: () => 0,
+      commitsTouching: () => null,
+      pathExists: () => true,
+    };
+    const result = validateBead(completeBead({ notes: premise(0, "src/lib/a.ts") }), { git, headShort: "fffffff" });
+    const fresh = result.results.find((r) => r.id === "premise-fresh");
+    expect(fresh.ok).toBe(false);
+    expect(fresh.detail).toContain("`git log` over");
+    expect(fresh.detail).toContain("was not measured");
+  });
+
+  it("makeGitContext.commitsTouching returns null, not an empty list, when git fails", () => {
+    const ctx = makeGitContext(c[6], pr);
+    expect(ctx.commitsTouching("deadbeef".repeat(5), ["src/lib/a.ts"])).toBeNull();
+    expect(ctx.commitsTouching(c[0], ["src/lib/a.ts"])).toEqual([{ sha: c[1], files: ["src/lib/a.ts"] }]);
+    expect(ctx.pathExists("src/app/[id]")).toBe(true);
+    expect(ctx.pathExists("src/lib/b.ts")).toBe(false);
+  });
+});
+
+describe("parseDeclaration / findDeclaration / combineDeclarations", { timeout: 30_000 }, () => {
+  it("parses a path list, stripping quoting, ./ and trailing punctuation", () => {
+    expect(parseDeclaration("`src/a.ts`, ./docs/b.md, 'c/'.")).toEqual({
+      kind: "paths",
+      paths: ["src/a.ts", "docs/b.md", "c"],
+      problems: [],
+      raw: "`src/a.ts`, ./docs/b.md, 'c/'.",
+    });
+  });
+
+  it("reads `none` only as the first word, and keeps its reason", () => {
+    expect(parseDeclaration("none (external fact)")).toMatchObject({ kind: "none", reason: "(external fact)" });
+    expect(parseDeclaration("none")).toMatchObject({ kind: "none", reason: "" });
+    // a path that merely starts with the letters is a path
+    expect(parseDeclaration("nonexistent/x.ts")).toMatchObject({ kind: "paths", paths: ["nonexistent/x.ts"] });
+  });
+
+  it("reads the live shapes on origin/main's tracker (ugcportal-ul2j's description and notes)", () => {
+    const description = [
+      "Out of scope: the other eleven checks.",
+      "",
+      "Premise verified 2026-10-13 at origin/main 4c8584e58430f1c42d9a50966821ec0eb7047c7f",
+      "Premise depends on: scripts/check-bead-dispatch.mjs",
+    ].join("\n");
+    const notes =
+      "Premise verified 2026-10-17 at origin/main 3aa650846057e2d4ea2dc02c7e26da33d6dfc312 by the orchestrator: sed -n 563,583p scripts/check-bead-dispatch.mjs -- HOLDS. Premise depends on: scripts/check-bead-dispatch.mjs, scripts/check-bead-dispatch.test.mjs, .claude/skills/dispatch-bead/SKILL.md\nDispatched 2026-10-17 by the orchestrator.";
+    const found = findPremiseLines(notes, description);
+    expect(found.map((f) => [f.shas, f.depends.kind === "paths" ? f.depends.paths : f.depends.kind])).toEqual([
+      [["3aa650846057e2d4ea2dc02c7e26da33d6dfc312"], ["scripts/check-bead-dispatch.mjs", "scripts/check-bead-dispatch.test.mjs", ".claude/skills/dispatch-bead/SKILL.md"]],
+      [["4c8584e58430f1c42d9a50966821ec0eb7047c7f"], ["scripts/check-bead-dispatch.mjs"]],
+    ]);
+  });
+
+  it("a declaration line never starts a premise statement, and a hex-looking path segment is not a commit", () => {
+    const found = findPremiseLines("Premise verified at abc1234.\nPremise depends on: src/deadbeef0/x.ts");
+    expect(found).toHaveLength(1);
+    expect(found[0].shas).toEqual(["abc1234"]);
+  });
+
+  it("findDeclaration reports missing rather than an empty list", () => {
+    expect(findDeclaration(["Premise verified at abc1234."], 0)).toEqual({ kind: "missing" });
+  });
+
+  it("combineDeclarations fails closed on a tie: paths are unioned, none only without paths, missing only without either", () => {
+    const a = parseDeclaration("a.ts");
+    const b = parseDeclaration("b.ts");
+    const none = parseDeclaration("none (x)");
+    expect(combineDeclarations([a, none, b]).paths).toEqual(["a.ts", "b.ts"]);
+    expect(combineDeclarations([{ kind: "missing" }, none]).kind).toBe("none");
+    expect(combineDeclarations([{ kind: "missing" }])).toEqual({ kind: "missing" });
+    expect(combineDeclarations([a, parseDeclaration("")]).problems).toEqual(["the declaration lists nothing"]);
   });
 });
 
@@ -719,6 +1058,8 @@ describe("validateBead / validateBeads with a stubbed git context", { timeout: 3
     resolveCommit: (sha) => (/^[0-9a-f]{7,40}$/.test(sha) ? sha.padEnd(40, "0") : null),
     commitsAhead: () => 7,
     commitsNotOnMain: () => 0,
+    commitsTouching: () => [{ sha: "a".repeat(40), files: ["f3.txt"] }],
+    pathExists: () => true,
   };
   const ctx = { git: stubGit, headShort: "fffffff" };
 
@@ -726,8 +1067,9 @@ describe("validateBead / validateBeads with a stubbed git context", { timeout: 3
     const result = validateBead(completeBead(), ctx);
     expect(result.checksRun).toBe(CHECKS.length);
     expect(result.fieldsExamined).toBe(EXAMINED_FIELDS.length);
-    // the stub reports every premise as 7 commits behind, so this bead fails
-    // on freshness alone -- which is itself the assertion
+    // the stub reports every premise as 7 commits behind with one of them
+    // touching the declared f3.txt, so this bead fails on freshness alone --
+    // which is itself the assertion
     expect(result.failures).toEqual(["premise-fresh"]);
   });
 

@@ -195,9 +195,14 @@ thing you are about to ship, or say explicitly that you did not.
 when a bead is missing any element of the `bead-template` form — user story,
 both scope lines, K-numbered criteria, a `Verified by` on each, a guardrail,
 a premise, `model`/`model_effort`, `cc_type`/`cc_scope` — or when its
-`Premise verified` line names any commit other than `origin/main`'s current
-HEAD. For an older commit on `main` it prints how many commits stale that
-premise is; for a commit that is not on `main` at all it says so. That is
+premise is stale. Stale is scoped by the paths the premise declares
+(`ugcportal-ul2j`): the freshest `Premise verified` line on `main` must carry
+a `Premise depends on: <path>, <path>` line (or `Premise depends on: none
+(<the external fact>)`), and fails when a commit since it touched a declared
+path — naming the commit and the path — when that line is absent, or when a
+declared path does not exist at `origin/main`'s HEAD. The declaration is the
+author's and is trusted: a premise resting on a file it leaves out passes. A
+premise commit that is not on `main` at all still fails as before. That is
 usually a branch commit whose PR was since squash-merged — `main` has the
 change, but under the squash commit's different sha — and sometimes a branch
 not yet merged; either way the commit is not in `main`'s history, so it
