@@ -1194,8 +1194,8 @@ export function outcomeOf(bead, prAnalyses, rounds) {
 // absent or `last-per-agent` counts it; ANY other value -- `summed-snapshots`,
 // `undeterminable` (the audit could not tie the figure to its reviewer
 // agents' transcripts), or one nobody defined -- is not counted and is listed
-// under Data gaps with its value. Only an exact flag excludes: a bead with no
-// flag is read at face value, as before.
+// under Data gaps with its value. A bead with no tokens_qa_convention is read
+// at face value, as before.
 
 export const CONTEXT_LABEL = "context-size, not cost";
 export const SUMMED_SNAPSHOTS = "summed-snapshots";
