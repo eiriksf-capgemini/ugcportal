@@ -229,9 +229,13 @@ every check — the gate's own wiring failing open.
 Measured the day it was written, at `origin/main a3d55c9` over the 95 open
 beads: **12** fail at least one of the eight presence-only elements the
 2026-10-12 audit counted, **21** fail at least one of the gate's stricter
-checks, and **95 of 95** fail premise freshness — which is the point of the
-freshness rule rather than an argument against it. The 12 are
-`ugcportal-ydbi`'s scope.
+checks, and **95 of 95** fail premise freshness under the identity rule the
+gate then had (premise sha equal to `origin/main`'s HEAD). That rule was
+replaced (`ugcportal-ul2j`) because of results like this one: a gate that
+fails nearly every bead on every merge is cleared by copying the sha forward
+without re-running the observation, so freshness is now scoped by the paths a
+premise declares, and a backlog-wide failure rate is a cost to explain, not
+the point. The 12 are `ugcportal-ydbi`'s scope.
 
 What the gate does **not** do is the reason a green run is not a verdict.
 Every run, passing or failing, prints the substance checks it did not make:

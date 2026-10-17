@@ -137,10 +137,14 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
  *      an off-main premise never rescues a stale on-main one.
  *   2. The FRESHEST on-main premise statement is the one judged -- the one
  *      the fewest main commits have passed. Each statement is dated by the
- *      first commit after its label (the one it was verified at), not by
- *      the newest commit its line happens to name. A bead re-verified today still
- *      carries yesterday's line in its log, and the newer verification and
- *      its declaration supersede the older ones.
+ *      first commit-shaped token after its label (7-40 hex characters, an
+ *      all-digit one included), and by nothing else on its line: if that
+ *      token does not resolve -- a typo, or a branch commit pruned after its
+ *      PR was squash-merged -- the statement names no commit and dates
+ *      nothing; a later commit on the same line never stands in for it. A
+ *      bead re-verified today still carries yesterday's line in its log,
+ *      and the newer verification and its declaration supersede the older
+ *      ones.
  *   3. That statement must carry a `Premise depends on:` declaration
  *      (`PREMISE_DEPENDS_FORM`). Absent is a FAILURE, never read as "none":
  *      a check that matched nothing must not look like one that passed. A
@@ -262,9 +266,10 @@ const SHA_RE = /\b([0-9a-f]{7,40})\b/g;
  * that sha and take the declaration under it (PR #289 review, M1's sibling
  * shapes in rounds 1 and 2).
  *
- * A statement's `shas` are the commit tokens after its label, in order;
- * `premiseCommits` dates the statement by the first of them that resolves --
- * the commit it was verified at -- not by the freshest one the line names.
+ * A statement's `shas` are the commit-shaped tokens after its label, in
+ * order; `premiseCommits` dates the statement by the FIRST of them and only
+ * that one, whether or not it resolves -- see `premiseCommits` for why a
+ * later token never stands in for an unresolvable first one.
  *
  * A line that OPENS with `Premise depends on:` is a declaration, not a
  * premise statement, and starts none of its own; and on any statement, the
@@ -765,22 +770,21 @@ export const CHECKS = [
     const lines = findPremiseLines(notes(b), desc(b));
     if (lines.length === 0)
       return { ok: false, detail: "no `Premise verified` line in the notes or the description" };
-    const resolved = premiseCommits(lines, ctx);
+    const { resolved, unresolved } = premiseCommits(lines, ctx);
     if (resolved.length === 0) {
-      const withTokens = lines.filter((l) => l.shas.length > 0);
       return {
         ok: false,
         detail:
-          withTokens.length === 0
+          unresolved.length === 0
             ? "the premise line names no commit -- the form wants `Premise verified <date> at origin/main <sha>`, so that freshness is checkable"
-            : `the premise line names ${withTokens.flatMap((l) => l.shas).join(", ")}, which git cannot resolve to a commit in this repo`,
+            : `${unresolvedPhrase(unresolved)} -- re-verify against origin/main. Only the first commit after a premise label dates it; a later one on the same line is never used in its place`,
       };
     }
     return { ok: true };
   }),
 
   check("premise-fresh", "no main commit since the premise touched a path it depends on", ["notes", "description"], (b, ctx) => {
-    const resolved = premiseCommits(findPremiseLines(notes(b), desc(b)), ctx);
+    const { resolved, unresolved } = premiseCommits(findPremiseLines(notes(b), desc(b)), ctx);
     if (resolved.length === 0) {
       // premise-present already reported the real problem; do not report it
       // twice under a different name.
@@ -813,7 +817,10 @@ export const CHECKS = [
     const behind = Math.min(...onMain.map((r) => r.behind));
     const freshest = onMain.filter((r) => r.behind === behind);
     const at = freshest[0];
-    const where = `premise verified at ${at.full.slice(0, 7)} (${behind === 0 ? "origin/main's current HEAD" : `${behind} commit(s) behind origin/main ${ctx.headShort}`})`;
+    // A statement skipped because its first token does not resolve is named
+    // up front, so a run that judged an older statement says why.
+    const skipped = unresolved.length === 0 ? "" : `[${unresolved.length} other premise statement(s) skipped, dating nothing: ${unresolvedPhrase(unresolved)}] `;
+    const where = `${skipped}premise verified at ${at.full.slice(0, 7)} (${behind === 0 ? "origin/main's current HEAD" : `${behind} commit(s) behind origin/main ${ctx.headShort}`})`;
     const decl = combineDeclarations(freshest.map((r) => r.depends));
     if (decl.kind === "missing") {
       return {
@@ -887,42 +894,64 @@ export const CHECKS = [
 export const EXAMINED_FIELDS = [...new Set(CHECKS.flatMap((c) => c.fields))];
 
 /**
- * Resolve each premise statement to ONE commit -- the first token after its
- * label that git recognises as a commit; a statement with none is skipped --
- * each with how many commits
- * `origin/main` is ahead of it (`behind`), how many of its own commits are
- * not on `origin/main` (`notOnMain`), and the declaration of the statement
- * it came from. Both counts are needed: HEAD and every descendant of HEAD
- * have `behind === 0`.
+ * Resolve each premise statement to at most ONE commit -- its first
+ * commit-shaped token -- each with how many commits `origin/main` is ahead
+ * of it (`behind`), how many of its own commits are not on `origin/main`
+ * (`notOnMain`), and the declaration of the statement it came from. Both
+ * counts are needed: HEAD and every descendant of HEAD have `behind === 0`.
+ *
+ * `unresolved` lists the first token of every statement that does not
+ * resolve; such a statement contributes no commit. Leaving it out can only
+ * make the judged commit OLDER or leave none (`premise-present` then fails,
+ * naming the token), never fresher -- unlike dating it by a later token.
+ *
+ * @returns {{resolved: Array<{short: string, full: string, behind: number, notOnMain: number, depends: Declaration}>, unresolved: string[]}}
  */
 function premiseCommits(lines, ctx) {
-  const out = [];
+  const resolved = [];
+  const unresolved = [];
   for (const { shas, depends } of lines) {
-    // A statement is dated by the FIRST commit after its label that git
-    // resolves -- the one it was verified at -- not by whichever commit on
-    // its line is freshest: a bd note is one line, and a later commit mentioned in
-    // the same note ("... merged at a532388 during this audit") would
+    // A statement is dated by its FIRST commit-shaped token and by nothing
+    // else on its line. A bd note is one line, and a later commit mentioned
+    // in the same note ("... merged at a532388 during this audit") would
     // otherwise date the premise from there and hide every touch in between
-    // (PR #289 review round 2, M1; ugcportal-vl32's live shape). A token that
-    // does not resolve (a hex-looking word) is passed over. If the first
-    // resolving commit is off main, the statement is off main: a later
-    // on-main commit on the same line does not rescue it (ugcportal-y6ol:
-    // verified at branch commit 2cd6d60, its line later cites PR #97's
-    // 35800c9 as history).
-    for (const sha of shas) {
-      const full = ctx.git.resolveCommit(sha);
-      if (!full) continue;
-      out.push({
-        short: sha,
-        full,
-        behind: ctx.git.commitsAhead(full),
-        notOnMain: ctx.git.commitsNotOnMain(full),
-        depends: depends || { kind: "missing" },
-      });
-      break;
+    // (PR #289 review round 2, M1; ugcportal-vl32's live shape). That holds
+    // when the first token does NOT resolve too: a typo'd verified-at sha,
+    // or a branch commit pruned after its PR was squash-merged and its
+    // branch deleted (this repo deletes merged branches), would otherwise
+    // hand the date to the next token on the line, often a newer commit
+    // (PR #289 review round 3, M1). So no token after the
+    // first is ever tried. An all-digit token (a CI run id) is a candidate
+    // like any other: an abbreviated sha is all digits about one time in
+    // 27 at seven characters, and skipping those would reopen the same
+    // fall-through for them. A run id written before the sha therefore
+    // fails, naming it, which is the fail-closed direction. If the first
+    // commit is off main, the statement is off main and a later on-main
+    // commit on the line does not rescue it (ugcportal-y6ol: verified at
+    // branch commit 2cd6d60, its line later cites PR #97's 35800c9).
+    const [sha] = shas;
+    if (sha === undefined) continue;
+    const full = ctx.git.resolveCommit(sha);
+    if (!full) {
+      unresolved.push(sha);
+      continue;
     }
+    resolved.push({
+      short: sha,
+      full,
+      behind: ctx.git.commitsAhead(full),
+      notOnMain: ctx.git.commitsNotOnMain(full),
+      depends: depends || { kind: "missing" },
+    });
   }
-  return out;
+  return { resolved, unresolved };
+}
+
+/** "the commit this premise names, X, does not resolve in this repo", for one or several. */
+function unresolvedPhrase(tokens) {
+  return tokens.length === 1
+    ? `the commit this premise names, ${tokens[0]}, does not resolve in this repo`
+    : `the commits these premises name, ${tokens.join(", ")}, do not resolve in this repo`;
 }
 
 /**

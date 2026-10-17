@@ -305,7 +305,7 @@ const SINGLE_ELEMENT_FIXTURES = [
     check: "premise-present",
     label: "premise line naming a commit git does not know",
     mutate: () => ({ notes: "Premise verified 2026-10-12 at origin/main deadbeefcafe1234." }),
-    expectNamed: "which git cannot resolve to a commit in this repo",
+    expectNamed: "the commit this premise names, deadbeefcafe1234, does not resolve in this repo -- re-verify against origin/main",
   },
   {
     check: "metadata-model",
@@ -501,8 +501,8 @@ describe("K2: premise freshness against origin/main (kt3k's cases, under ul2j's 
     expect(res.stdout).toContain(`premise verified at ${OLDEST().slice(0, 7)} (2 commit(s) behind origin/main ${HEAD().slice(0, 7)}) is stale`);
   });
 
-  it("M1 round 2: a statement verified at an off-main commit is not rescued by an on-main commit later on its line", () => {
-    // Dated by the first commit after the label: the branch commit. The HEAD
+  it("M1 round 2: a statement whose first commit token is off main is not rescued by an on-main commit later on its line", () => {
+    // Dated by the first commit token after the label: the branch commit. The HEAD
     // sha named afterwards is a different note on the same bd line.
     const notes = `Premise verified 2026-10-14 at feature-branch commit ${descendant}. Dispatched from origin/main ${HEAD()}.\nPremise depends on: f3.txt`;
     const res = runFixture(completeBead({ notes }));
@@ -882,6 +882,50 @@ describe("ul2j: premise freshness is scoped by the paths the premise declares", 
     );
   });
 
+  // --- PR #289 review round 3, M1: the first commit token after the label
+  // dates the statement even when it does NOT resolve. Passing over it to
+  // the next token on the line let a typo'd or pruned verified-at commit be
+  // dated by a newer commit the line merely mentions.
+  it("M1 round 3: a typo'd verified-at sha is not replaced by a newer commit later on the line", () => {
+    const typo = `${c[0].slice(0, 39)}${c[0].endsWith("0") ? "1" : "0"}`;
+    const notes = `Premise verified 2026-10-13 at origin/main ${typo}: a.ts v0. Dispatched 2026-10-15 from origin/main ${c[2]}. Premise depends on: src/lib/a.ts`;
+    const res = runNotes(notes);
+    expect(res.status).toBe(1);
+    expect(failedChecks(res.stdout)).toEqual(["premise-present", "premise-fresh"]);
+    expect(res.stdout).toContain(`the commit this premise names, ${typo}, does not resolve in this repo -- re-verify against origin/main`);
+    expect(res.stdout).not.toContain(`premise verified at ${short(c[2])}`);
+  });
+
+  it("M1 round 3: a statement whose first token does not resolve is skipped, so an older statement is judged and the skip is named", () => {
+    // Leaving the unresolvable statement out makes the judged commit older
+    // (c0, stale), never fresher (c2, which the line merely mentions).
+    const notes = [
+      ABOUT_C0(),
+      "Premise depends on: src/lib/a.ts",
+      `Premise re-verified 2026-10-15 at origin/main deadbee0deadbee0: still v0. Dispatched from origin/main ${c[2]}. Premise depends on: src/lib/a.ts`,
+    ].join("\n");
+    const res = runNotes(notes);
+    expect(res.status).toBe(1);
+    expect(failedChecks(res.stdout)).toEqual(["premise-fresh"]);
+    STALE_AT_C0(res.stdout);
+    expect(freshLine(res.stdout)).toContain(
+      "[1 other premise statement(s) skipped, dating nothing: the commit this premise names, deadbee0deadbee0, does not resolve in this repo]",
+    );
+  });
+
+  it("M1 round 3: an all-digit token (a CI run id) ahead of the sha is the statement's commit, so it fails naming the run id", () => {
+    // All-digit tokens are candidates, not skipped: see the next test for why.
+    const notes = `Premise verified 2026-10-17 after CI run 18234567890 at origin/main ${c[1]}. Premise depends on: src/lib/a.ts`;
+    const res = runNotes(notes);
+    expect(res.status).toBe(1);
+    expect(failedChecks(res.stdout)).toEqual(["premise-present", "premise-fresh"]);
+    expect(res.stdout).toContain("the commit this premise names, 18234567890, does not resolve in this repo");
+    // the same line with the run id after the sha passes, dated by c1
+    const after = runNotes(`Premise verified 2026-10-17 at origin/main ${c[1]} after CI run 18234567890. Premise depends on: src/lib/a.ts`);
+    expect(after.status).toBe(0);
+    expect(freshLine(after.stdout)).toContain(`premise verified at ${short(c[1])} (5 commit(s) behind`);
+  });
+
   it("names the first five touching commits and up to five files each, then counts the rest", () => {
     const files = ["f1", "f2", "f3", "f4", "f5", "f6", "f7"];
     const touched = Array.from({ length: 7 }, (_, i) => ({ sha: `${i + 1}`.repeat(40), files: i === 0 ? files : [`f${i + 1}`] }));
@@ -951,6 +995,127 @@ describe("ul2j: premise freshness is scoped by the paths the premise declares", 
     expect(ctx.commitsTouching(c[0], ["src/lib/a.ts"])).toEqual([{ sha: c[1], files: ["src/lib/a.ts"] }]);
     expect(ctx.pathExists("src/app/[id]")).toBe(true);
     expect(ctx.pathExists("src/lib/b.ts")).toBe(false);
+  });
+});
+
+describe("M1 round 3: a branch commit pruned after its PR was squash-merged", { timeout: 60_000 }, () => {
+  // The reviewer's layout: c0 has src/lib/a.ts v0, c1 changes it, c2 and c3
+  // touch only README.md; b1 is a side-branch commit forked from c0. The
+  // statement names b1 (verified at) and then c2 (the squash commit). While
+  // b1 resolves it fails as off main; once the branch is deleted and pruned
+  // it must still fail -- not be dated by c2, which c1's touch precedes.
+  let dir;
+  let c;
+  let b1;
+  const run = (args) => execFileSync("git", args, { cwd: dir, encoding: "utf8" }).trim();
+  beforeAll(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "ul2j-pruned-"));
+    run(["init", "-q", "-b", "main"]);
+    run(["config", "user.email", "test@example.com"]);
+    run(["config", "user.name", "Test"]);
+    const write = (rel, text) => {
+      fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      fs.writeFileSync(path.join(dir, rel), text);
+    };
+    const commit = (msg) => {
+      run(["add", "-A"]);
+      run(["commit", "-q", "-m", msg]);
+      return run(["rev-parse", "HEAD"]);
+    };
+    write("src/lib/a.ts", "a v0\n");
+    write("README.md", "r0\n");
+    c = [commit("c0")];
+    run(["checkout", "-q", "-b", "side"]);
+    write("side.txt", "side\n");
+    b1 = commit("b1");
+    run(["checkout", "-q", "main"]);
+    write("src/lib/a.ts", "a v1\n");
+    c.push(commit("c1 a.ts"));
+    write("README.md", "r2\n");
+    c.push(commit("c2 squash of side"));
+    write("README.md", "r3\n");
+    c.push(commit("c3"));
+  }, 30_000);
+  afterAll(() => {
+    if (dir) fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const runIt = () => {
+    const file = path.join(dir, `beads-${Math.random().toString(36).slice(2)}.json`);
+    const notes = `Premise verified 2026-10-14 at branch commit ${b1.slice(0, 7)} (PR since squash-merged as ${c[2].slice(0, 7)}). Premise depends on: src/lib/a.ts`;
+    fs.writeFileSync(file, JSON.stringify([completeBead({ notes })]));
+    return runCliAllowFail(["--beads", file, "--repo", dir, "--head", c[3]]);
+  };
+
+  it("fails as off main while the branch commit resolves, and still fails, naming it, once it is pruned", () => {
+    const before = runIt();
+    expect(before.status).toBe(1);
+    expect(failedChecks(before.stdout)).toEqual(["premise-fresh"]);
+    expect(before.stdout).toContain(`premise commit ${b1.slice(0, 7)} is not on origin/main`);
+
+    run(["branch", "-D", "side"]);
+    run(["reflog", "expire", "--expire=now", "--all"]);
+    run(["gc", "-q", "--prune=now"]);
+    // the precondition the shape needs: b1 is really gone
+    expect(() => run(["cat-file", "-e", `${b1}^{commit}`])).toThrow();
+
+    const after = runIt();
+    expect(after.status).toBe(1);
+    expect(failedChecks(after.stdout)).toEqual(["premise-present", "premise-fresh"]);
+    expect(after.stdout).toContain(`the commit this premise names, ${b1.slice(0, 7)}, does not resolve in this repo -- re-verify against origin/main`);
+    expect(after.stdout).not.toContain(`premise verified at ${c[2].slice(0, 7)}`);
+  });
+});
+
+describe("M1 round 3: only the first commit token is ever tried (stubbed git)", { timeout: 30_000 }, () => {
+  // A stub that resolves exactly the tokens it is given, and records every
+  // token it was asked about, so "no later token is tried" is observable
+  // directly rather than only through which commit ended up judged. Both
+  // premise checks resolve, so each token is asked about twice; the
+  // assertions compare the distinct tokens.
+  const stub = (known) => {
+    const asked = [];
+    const git = {
+      head: "f".repeat(40),
+      headShort: "fffffff",
+      resolveCommit: (sha) => {
+        asked.push(sha);
+        return known.includes(sha) ? sha.padEnd(40, "0") : null;
+      },
+      commitsAhead: () => 3,
+      commitsNotOnMain: () => 0,
+      commitsTouching: () => [],
+      pathExists: () => true,
+    };
+    return { ctx: { git, headShort: "fffffff" }, asked };
+  };
+  const bead = (line) => completeBead({ notes: `${line}\nPremise depends on: f3.txt` });
+  const detail = (result, id) => result.results.find((r) => r.id === id).detail;
+
+  it("an unresolvable first token is never followed by a try of the next one (the skip-over mutation fails here)", () => {
+    const { ctx, asked } = stub(["abc1234"]);
+    const result = validateBead(bead("Premise verified 2026-10-17 at origin/main deadbee1: x. Dispatched from abc1234."), ctx);
+    expect([...new Set(asked)]).toEqual(["deadbee1"]);
+    expect(result.failures).toEqual(["premise-present", "premise-fresh"]);
+    expect(detail(result, "premise-present")).toContain("the commit this premise names, deadbee1, does not resolve in this repo");
+  });
+
+  it("an all-digit token that does resolve is the statement's commit (all-digit tokens are not skipped)", () => {
+    // An abbreviated sha is all digits about one time in 27 at seven
+    // characters; skipping all-digit tokens would date such a statement by
+    // the next token on its line.
+    const { ctx, asked } = stub(["1234567", "abc1234"]);
+    const result = validateBead(bead("Premise verified 2026-10-17 at origin/main 1234567: x. Dispatched from abc1234."), ctx);
+    expect([...new Set(asked)]).toEqual(["1234567"]);
+    expect(result.failures).toEqual([]);
+    expect(detail(result, "premise-fresh")).toContain("premise verified at 1234567 (3 commit(s) behind");
+  });
+
+  it("an all-digit run id that does not resolve fails the statement rather than being passed over", () => {
+    const { ctx, asked } = stub(["abc1234"]);
+    const result = validateBead(bead("Premise verified 2026-10-17 by CI run 18234567890 at origin/main abc1234."), ctx);
+    expect([...new Set(asked)]).toEqual(["18234567890"]);
+    expect(result.failures).toEqual(["premise-present", "premise-fresh"]);
+    expect(detail(result, "premise-present")).toContain("18234567890");
   });
 });
 
@@ -1189,7 +1354,7 @@ describe("findPremiseLines", { timeout: 30_000 }, () => {
   it("reads a statement's commits from its label on, in order, so the first one is the verified-at commit", () => {
     // a commit named before the label belongs to another note on the same line
     expect(findPremiseLines("2026-10-15 merged def5678. Premise verified at abc1234.")[0].shas).toEqual(["abc1234"]);
-    // order is kept: premiseCommits dates the statement by the first resolving one
+    // order is kept: premiseCommits dates the statement by the first one, resolving or not
     expect(findPremiseLines("Premise verified at abc1234. Dispatched from origin/main def5678.")[0].shas).toEqual(["abc1234", "def5678"]);
   });
 
