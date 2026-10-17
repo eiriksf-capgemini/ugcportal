@@ -6,14 +6,14 @@ import { glob } from "tinyglobby";
 import { defaultInclude } from "vitest/config";
 import { afterEach, describe, expect, it } from "vitest";
 
-import vitestConfig from "./vitest.config";
+import vitestConfig, { vitest3DroppedExcludes } from "./vitest.config";
 
 /**
  * Named vitest-exclude.test.ts rather than vitest.config.test.ts
- * deliberately: defaultExclude's `**\/{...,vitest,...}.config.*` entry (see
- * the array this file imports below) would match and silently drop a file
- * actually named vitest.config.test.ts — exactly the kind of invisible
- * exclusion this bead is about.
+ * deliberately: the `**\/{...,vitest,...}.config.*` entry in this repo's
+ * exclude (vitest.config.ts re-adds it from vitest 3's defaultExclude) would
+ * match and silently drop a file actually named vitest.config.test.ts —
+ * exactly the kind of invisible exclusion this bead is about.
  *
  * ugcportal-l99p: a prior `npm run build` makes Turbopack trace the whole
  * project (schema-mismatch.ts's readdirSync over the migrations dir defeats
@@ -79,6 +79,26 @@ describe("vitest.config.ts: test.exclude (ugcportal-l99p)", () => {
       "src/real.test.ts",
       ".claude/worktrees/wt/src/real.test.ts",
       "e2e/smoke.spec.ts",
+    ]);
+    expect(found).toEqual(["src/real.test.ts"]);
+  });
+});
+
+describe("vitest.config.ts: entries vitest 4 dropped from defaultExclude (ugcportal-gdi0)", () => {
+  it("resolved exclude contains each entry vitest 3 had", () => {
+    expect(vitest3DroppedExcludes).toHaveLength(4);
+    for (const entry of vitest3DroppedExcludes) {
+      expect(exclude).toContain(entry);
+    }
+  });
+
+  it("excludes dist, cypress, dot-cache and *.config.* test files", async () => {
+    const found = await globFixture([
+      "src/real.test.ts",
+      "dist/x.test.ts",
+      "cypress/x.test.ts",
+      ".cache/x.test.ts",
+      "vitest.config.zz.test.ts",
     ]);
     expect(found).toEqual(["src/real.test.ts"]);
   });
