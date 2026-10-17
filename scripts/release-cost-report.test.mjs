@@ -1470,7 +1470,9 @@ describe("tokens_qa_convention (ugcportal-zu0a): a flagged tokens_qa is not coun
   const undet = { id: "ugcportal-qaa3", title: "undeterminable qa bead", metadata: { cc_type: "fix", tokens_impl: 100000, tokens_qa: 663731, tokens_qa_convention: "undeterminable" } };
   const summedQa = { id: "ugcportal-qaa4", title: "summed qa bead", metadata: { cc_type: "fix", tokens_impl: 100000, tokens_qa: 877777, tokens_qa_convention: " Summed_Snapshots " } };
   const iteBead = { id: "ugcportal-qaa5", title: "ITE bead keeps its ITE qa", metadata: { cc_type: "fix", cost_ite_impl: 5000000, cost_ite_qa: 3000000, tokens_qa: 999999, tokens_qa_convention: "undeterminable" } };
-  const beads = [plain, lastPer, undet, summedQa, iteBead];
+  // Notes call tokens_qa an estimate, and tokens_qa is then excluded: the total is tokens_impl alone, exact.
+  const undetEst = { id: "ugcportal-qaa6", title: "excluded estimated qa", notes: "tokens_qa is a rough estimate.", metadata: { cc_type: "fix", tokens_impl: 105359, tokens_qa: 470587, tokens_qa_convention: "undeterminable" } };
+  const beads = [plain, lastPer, undet, summedQa, iteBead, undetEst];
   const release = { version: "v9.9.9", ids: beads.map((b) => b.id), entries: new Map(beads.map((b) => [b.id, { title: b.title, type: "Fixes" }])) };
   const rows = buildRows(release, new Map(beads.map((b) => [b.id, b])), new Map());
   const row = (id) => rows.find((r) => r.id === id);
@@ -1502,9 +1504,17 @@ describe("tokens_qa_convention (ugcportal-zu0a): a flagged tokens_qa is not coun
     expect(report).not.toContain(fmt(877777));
     expect(report).not.toContain(fmt(999999));
     expect(tableLine("qaa3")).toContain("excluded (undeterminable)");
-    expect(report).toContain("`tokens_qa` not counted, flagged `tokens_qa_convention` (2): qaa3 (undeterminable); qaa4 (Summed_Snapshots)");
+    expect(report).toContain("`tokens_qa` not counted, flagged `tokens_qa_convention` (3): qaa3 (undeterminable); qaa4 (Summed_Snapshots); qaa6 (undeterminable)");
     // The flagged beads are not also listed as "no QA figure".
     expect(report).toMatch(/no QA figure in the bead's unit \(0\): —/);
+  });
+
+  it("an excluded tokens_qa the notes call an estimate does not mark the total, which is tokens_impl alone", () => {
+    expect(row("ugcportal-qaa6")).toMatchObject({ qa: null, qaEstimated: true, implEstimated: false, total: 105359 });
+    const cells = tableLine("qaa6").split("|").map((c) => c.trim());
+    expect(cells).toContain("excluded (undeterminable)");
+    expect(cells).toContain(fmt(105359));
+    expect(cells).not.toContain(`~${fmt(105359)}`);
   });
 
   it("the unflagged beads keep their figure and the QA total sums only them", () => {

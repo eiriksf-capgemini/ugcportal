@@ -1659,7 +1659,8 @@ function renderReleaseTable(rows) {
       r.tier ? `${r.tier}/${r.effort ?? "?"}` : "—",
       r.unit === "ite" ? fmt(r.iteImpl) : r.implSummedExcluded ? "excluded (summed snapshots)" : fmtTokens(r.impl, r.implEstimated),
       r.unit === "ite" ? fmt(r.iteQa) : r.qaConventionExcluded ? `excluded (${r.qaConventionExcluded})` : fmtTokens(r.qa, r.qaEstimated),
-      r.unit === "ite" ? fmt(r.iteTotal) : fmtTokens(r.total, r.implEstimated || r.qaEstimated),
+      // The total is marked as an estimate only by a side that contributes to it (not excluded, not absent).
+      r.unit === "ite" ? fmt(r.iteTotal) : fmtTokens(r.total, (r.impl !== null && r.implEstimated) || (r.qa !== null && r.qaEstimated)),
       unitLabel(r.unit),
       r.prs.length ? r.prs.map((n) => `#${n}`).join(", ") : "—",
       r.rounds === null ? "—" : `${r.rounds}${r.roundsSource === "close reason" ? " (cr)" : r.roundsSource.startsWith("markers (") ? " (!)" : ""}`,
