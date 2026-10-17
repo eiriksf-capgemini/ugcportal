@@ -127,6 +127,7 @@ describe("the queue reducer", () => {
       originalName: "a",
       publishedAt: null,
       publishRefusal: null,
+      attested: null,
     };
     let state = uploadQueueReducer([queued()], {
       type: "succeeded",
@@ -162,6 +163,7 @@ describe("the queue reducer", () => {
         originalName: "a",
         publishedAt: null,
         publishRefusal: null,
+        attested: null,
       },
     });
 
@@ -191,6 +193,7 @@ describe("the queue reducer", () => {
         originalName: "a",
         publishedAt: null,
         publishRefusal: null,
+        attested: null,
       },
     });
     expect(succeeded[0].status).toBe("succeeded");
@@ -487,7 +490,19 @@ describe("toQueueMedia keeps the original out of the page (K3)", () => {
       // ordinary uploader's 201 carries no refusal, so both are null.
       publishedAt: null,
       publishRefusal: null,
+      // ugcportal-gkax: an ordinary uploader's 201 does not say, so null.
+      attested: null,
     });
+  });
+
+  it("keeps whether the upload was stored with an attestation, and only a real boolean (ugcportal-gkax)", () => {
+    expect(toQueueMedia({ ...FULL_ROW, attested: false })?.attested).toBe(false);
+    expect(toQueueMedia({ ...FULL_ROW, attested: true })?.attested).toBe(true);
+    // Anything else is "not said", never "not attested": the page offers
+    // the questions only on an explicit `false`.
+    expect(toQueueMedia({ ...FULL_ROW, attested: "false" })?.attested).toBe(null);
+    expect(toQueueMedia({ ...FULL_ROW, attested: 0 })?.attested).toBe(null);
+    expect(toQueueMedia({ ...FULL_ROW, attested: null })?.attested).toBe(null);
   });
 
   it("keeps a configured uploader's publish outcome, and only the refusal's sentence (ugcportal-ho7j)", () => {
@@ -519,6 +534,7 @@ describe("toQueueMedia keeps the original out of the page (K3)", () => {
   it("carries neither the original's key nor the preview's storage path", () => {
     const media = toQueueMedia(FULL_ROW);
     expect(Object.keys(media ?? {}).sort()).toEqual([
+      "attested",
       "id",
       "kind",
       "originalName",
@@ -541,6 +557,7 @@ describe("toQueueMedia keeps the original out of the page (K3)", () => {
         originalName: "photo.png",
         publishedAt: null,
         publishRefusal: null,
+        attested: null,
       },
     );
     expect(toQueueMedia({ ...FULL_ROW, previewId: "" })?.previewId).toBe(null);

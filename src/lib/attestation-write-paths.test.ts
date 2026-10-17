@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,7 +19,9 @@ import {
 
 /**
  * ugcportal-15r K3, as a claim about the WHOLE TREE: an attestation row is
- * written in exactly one file, and always with `session.user.id`.
+ * written only in the files named below (one at first; the late-attestation
+ * route since ugcportal-gkax; and a test-support fixture), and always with
+ * `session.user.id`.
  *
  * WHY A TREE-WIDE SCAN AND NOT JUST THE ROUTE'S OWN TESTS. The route tests
  * next door prove the one write path there is names the session's user. They
@@ -108,6 +110,312 @@ export function scanAttestationWritePaths(root: string): string[] {
  */
 export function userIdBindingsIn(file: string): string[] {
   return bindingsNamed(file, "userId");
+}
+
+/**
+ * ugcportal-gkax M1-r2: every DECLARATION of `name` in a file, in every shape
+ * a binding can take: a plain `const/let/var name = …`, a destructured
+ * `const { name } = …` or `const { other: name } = …`, a parameter, a
+ * function. `bindingsNamed` (shared with POST /api/media's guard, and left
+ * alone here) sees only the first. A plain variable is reported as its
+ * initialiser's text, the way `bindingsNamed` reports it; every other shape
+ * as its kind and the text of the node that declares it, so it does not
+ * read as the one plain declaration a caller expects.
+ */
+export function declarationsNamed(file: string, name: string): string[] {
+  const source = sourceFileOf(file);
+  const found: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (
+      (ts.isVariableDeclaration(node) ||
+        ts.isBindingElement(node) ||
+        ts.isParameter(node) ||
+        ts.isFunctionDeclaration(node)) &&
+      node.name !== undefined &&
+      ts.isIdentifier(node.name) &&
+      node.name.text === name
+    ) {
+      found.push(
+        ts.isVariableDeclaration(node) && node.initializer
+          ? node.initializer.getText(source)
+          : `${ts.SyntaxKind[node.kind]}: ${node.parent.getText(source)}`,
+      );
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return found;
+}
+
+/** The function the late-attestation route reads its parsed body through. */
+export const ATTESTATION_BODY_READER = "attestationFromBody";
+
+/** The `readJsonBody` result keys `POST` may read itself: the failure branch. */
+const BODY_FAILURE_KEYS: ReadonlySet<string> = new Set(["ok", "status", "error"]);
+
+/** An identifier used as a value, not a declared name or a property name. */
+function referencesTo(root: ts.Node, name: string): ts.Identifier[] {
+  const found: ts.Identifier[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isIdentifier(node) && node.text === name) {
+      const parent = node.parent;
+      const isDeclaredName =
+        (ts.isVariableDeclaration(parent) ||
+          ts.isParameter(parent) ||
+          ts.isBindingElement(parent) ||
+          ts.isFunctionDeclaration(parent)) &&
+        parent.name === node;
+      const isPropertyName =
+        ((ts.isPropertyAccessExpression(parent) ||
+          ts.isPropertyAssignment(parent)) &&
+          parent.name === node) ||
+        (ts.isBindingElement(parent) && parent.propertyName === node);
+      if (!isDeclaredName && !isPropertyName) found.push(node);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(root);
+  return found;
+}
+
+function isCallTo(node: ts.Node | undefined, callee: string): node is ts.CallExpression {
+  return (
+    node !== undefined &&
+    ts.isCallExpression(node) &&
+    ts.isIdentifier(node.expression) &&
+    node.expression.text === callee
+  );
+}
+
+/** `await x`, `(x)`, `x as T` -> `x`. */
+function unwrap(node: ts.Expression): ts.Expression {
+  let at = node;
+  while (
+    ts.isAwaitExpression(at) ||
+    ts.isParenthesizedExpression(at) ||
+    ts.isAsExpression(at)
+  ) {
+    at = at.expression;
+  }
+  return at;
+}
+
+/** `return null;`, bare or as the only statement of a block. */
+function returnsNull(statement: ts.Statement): boolean {
+  const only =
+    ts.isBlock(statement) && statement.statements.length === 1
+      ? statement.statements[0]
+      : statement;
+  return (
+    ts.isReturnStatement(only) &&
+    only.expression !== undefined &&
+    only.expression.kind === ts.SyntaxKind.NullKeyword
+  );
+}
+
+/**
+ * ugcportal-gkax M1-r2: every place the late-attestation route's file reads
+ * the request body other than through `parseAttestation`, as `line N: why:
+ * text`. Empty means the body is read only through its object-shape check
+ * and the parser's reader. It catches the natural shapes: a destructured
+ * read, a parameter, an alias, a second alias, a module-level helper. It
+ * does NOT cover deliberately obfuscated reads: a side effect hidden in the
+ * shape-check condition (an assignment storing the raw body in module-level
+ * state), or reassignment of the reader arrow's `name` parameter before
+ * `alias[name]`. Both pass this rule today; closing them is not attempted
+ * here. The
+ * rule, all of it checked over the AST of that one file:
+ *
+ *  A. `POST` reads its `request` parameter only as the first argument of a
+ *     `readJsonBody(…)` call, calls `readJsonBody` exactly once, and never
+ *     names `arguments`.
+ *  B. The name bound from that call is read only as `.ok`, `.status` or
+ *     `.error`, or as `.value` passed as the sole argument of
+ *     `attestationFromBody(…)`, which happens exactly once. Nothing else: not
+ *     a bare reference, not another property.
+ *  C. In `attestationFromBody`, the parameter is read only in the condition
+ *     of an `if` whose branch is `return null`, or as the whole initialiser
+ *     of a declaration, through parentheses or `as` at most (an alias such
+ *     as `fields`). Each alias is read only inside the reader arrow passed
+ *     to a returned `parseAttestation(…)` call, and there only as
+ *     `Object.hasOwn(alias, name)` or `alias[name]`, where `name` is that
+ *     arrow's one parameter.
+ *
+ * So `POST` reads nothing of the raw object but `readJsonBody`'s failure
+ * fields, and inside the one function that holds it, the object is read
+ * only through the shape check and the parser's reader (subject to the
+ * limits above).
+ */
+export function rawBodyLeaksIn(file: string): string[] {
+  const source = sourceFileOf(file);
+  const leaks: string[] = [];
+  const leak = (node: ts.Node, why: string): void => {
+    const { line } = source.getLineAndCharacterOfPosition(node.getStart(source));
+    leaks.push(`line ${line + 1}: ${why}: ${node.parent.getText(source)}`);
+  };
+  const functionNamed = (name: string): ts.FunctionDeclaration | undefined =>
+    source.statements.find(
+      (statement): statement is ts.FunctionDeclaration =>
+        ts.isFunctionDeclaration(statement) && statement.name?.text === name,
+    );
+
+  const post = functionNamed("POST");
+  const reader = functionNamed(ATTESTATION_BODY_READER);
+  if (!post?.body) return ["no `POST` function declaration"];
+  if (!reader?.body) return [`no \`${ATTESTATION_BODY_READER}\` function declaration`];
+
+  // A. The request.
+  const requestParam = post.parameters[0]?.name;
+  if (requestParam === undefined || !ts.isIdentifier(requestParam)) {
+    return ["`POST`'s first parameter is not a plain identifier"];
+  }
+  for (const ref of referencesTo(post.body, requestParam.text)) {
+    const call = ref.parent;
+    if (!(isCallTo(call, "readJsonBody") && call.arguments[0] === ref)) {
+      leak(ref, "request read other than by readJsonBody");
+    }
+  }
+  for (const ref of referencesTo(post.body, "arguments")) {
+    leak(ref, "`arguments` read in POST");
+  }
+  const bodyDeclarations: ts.VariableDeclaration[] = [];
+  let readJsonBodyCalls = 0;
+  const visitPost = (node: ts.Node): void => {
+    if (isCallTo(node, "readJsonBody")) readJsonBodyCalls += 1;
+    if (
+      ts.isVariableDeclaration(node) &&
+      node.initializer !== undefined &&
+      isCallTo(unwrap(node.initializer), "readJsonBody")
+    ) {
+      bodyDeclarations.push(node);
+    }
+    ts.forEachChild(node, visitPost);
+  };
+  visitPost(post.body);
+  if (readJsonBodyCalls !== 1) {
+    leaks.push(`readJsonBody called ${readJsonBodyCalls} times in POST, not once`);
+  }
+  if (bodyDeclarations.length !== 1 || !ts.isIdentifier(bodyDeclarations[0].name)) {
+    leaks.push(
+      `${bodyDeclarations.length} plain declarations bound from readJsonBody in POST, not one`,
+    );
+    return leaks;
+  }
+
+  // B. The parsed body, in POST.
+  let valueReads = 0;
+  for (const ref of referencesTo(post.body, bodyDeclarations[0].name.text)) {
+    const access = ref.parent;
+    if (!ts.isPropertyAccessExpression(access) || access.expression !== ref) {
+      leak(ref, "body referenced other than through a property");
+      continue;
+    }
+    const key = access.name.text;
+    if (BODY_FAILURE_KEYS.has(key)) continue;
+    const call = access.parent;
+    if (
+      key === "value" &&
+      isCallTo(call, ATTESTATION_BODY_READER) &&
+      call.arguments.length === 1 &&
+      call.arguments[0] === access
+    ) {
+      valueReads += 1;
+      continue;
+    }
+    leak(ref, `body.${key} read outside ${ATTESTATION_BODY_READER}`);
+  }
+  if (valueReads !== 1) {
+    leaks.push(
+      `body.value passed to ${ATTESTATION_BODY_READER} ${valueReads} times in POST, not once`,
+    );
+  }
+
+  // C. The raw object, inside the reader.
+  const valueParam = reader.parameters[0]?.name;
+  if (
+    reader.parameters.length !== 1 ||
+    valueParam === undefined ||
+    !ts.isIdentifier(valueParam)
+  ) {
+    leaks.push(`${ATTESTATION_BODY_READER} does not take exactly one plain parameter`);
+    return leaks;
+  }
+  const aliases: string[] = [];
+  for (const ref of referencesTo(reader.body, valueParam.text)) {
+    let at: ts.Node = ref;
+    while (
+      ts.isParenthesizedExpression(at.parent) ||
+      (ts.isAsExpression(at.parent) && at.parent.expression === at)
+    ) {
+      at = at.parent;
+    }
+    const declaration = at.parent;
+    if (
+      ts.isVariableDeclaration(declaration) &&
+      declaration.initializer === at &&
+      ts.isIdentifier(declaration.name)
+    ) {
+      aliases.push(declaration.name.text);
+      continue;
+    }
+    let guarded = false;
+    for (let up: ts.Node = ref; up !== reader.body; up = up.parent) {
+      if (
+        ts.isIfStatement(up.parent) &&
+        up.parent.expression === up &&
+        returnsNull(up.parent.thenStatement) &&
+        up.parent.elseStatement === undefined
+      ) {
+        guarded = true;
+        break;
+      }
+    }
+    if (!guarded) leak(ref, "raw body read outside the shape check");
+  }
+  for (const alias of aliases) {
+    for (const ref of referencesTo(reader.body, alias)) {
+      const arrow = (() => {
+        for (let up: ts.Node = ref; up !== reader.body; up = up.parent) {
+          if (
+            ts.isArrowFunction(up) &&
+            isCallTo(up.parent, "parseAttestation") &&
+            (up.parent as ts.CallExpression).arguments[0] === up &&
+            ts.isReturnStatement(up.parent.parent)
+          ) {
+            return up;
+          }
+        }
+        return undefined;
+      })();
+      const keyParam = arrow?.parameters[0]?.name;
+      if (
+        arrow === undefined ||
+        arrow.parameters.length !== 1 ||
+        keyParam === undefined ||
+        !ts.isIdentifier(keyParam)
+      ) {
+        leak(ref, `${alias} read outside the reader passed to parseAttestation`);
+        continue;
+      }
+      const isKey = (node: ts.Node | undefined): boolean =>
+        node !== undefined && ts.isIdentifier(node) && node.text === keyParam.text;
+      const parent = ref.parent;
+      const indexed =
+        ts.isElementAccessExpression(parent) &&
+        parent.expression === ref &&
+        isKey(parent.argumentExpression);
+      const hasOwn =
+        ts.isCallExpression(parent) &&
+        parent.expression.getText(source) === "Object.hasOwn" &&
+        parent.arguments.length === 2 &&
+        parent.arguments[0] === ref &&
+        isKey(parent.arguments[1]);
+      if (!indexed && !hasOwn) {
+        leak(ref, `${alias} read other than at the key parseAttestation asks for`);
+      }
+    }
+  }
+  return leaks;
 }
 
 /**
@@ -202,8 +510,29 @@ const WRITE_PATH = "app/api/media/route.ts";
  */
 const TEST_SUPPORT_WRITE_PATH = "lib/test-support/media-fixtures.ts";
 
-/** Both, sorted the way `scanAttestationWritePaths` returns them. */
-const ALLOWED_WRITE_PATHS = [WRITE_PATH, TEST_SUPPORT_WRITE_PATH].sort();
+/**
+ * The SECOND product file allowed to write one (ugcportal-gkax): the owner
+ * answering the questions for a file they already uploaded without answering
+ * them — a configured uploader's, since ugcportal-ho7j.
+ *
+ * Admitted by name, and held below to everything the upload route is held
+ * to: one explicit `tx.mediaAttestation.create`, naming `userId`, and that
+ * `userId` traced back to the session through the ownership gate rather
+ * than taken on the route's word. §3.1's whole point is that the row names
+ * the person who uploaded the file; a second writer is only acceptable if
+ * it provably cannot name anybody else.
+ */
+const LATE_ATTESTATION_WRITE_PATH = "app/api/media/[id]/attestation/route.ts";
+
+/** The ownership gate that route takes its actor from. */
+const MEDIA_ACCESS_PATH = "lib/media-access.ts";
+
+/** All three, sorted the way `scanAttestationWritePaths` returns them. */
+const ALLOWED_WRITE_PATHS = [
+  WRITE_PATH,
+  LATE_ATTESTATION_WRITE_PATH,
+  TEST_SUPPORT_WRITE_PATH,
+].sort();
 
 /**
  * ONE WALK OF `src/`, AND ONE PARSE OF THE WRITE PATH, shared by every case
@@ -230,7 +559,7 @@ function testSupportImporters(): string[] {
   return (cachedTestSupportImporters ??= scanTestSupportImporters(SRC_ROOT));
 }
 
-describe("ugcportal-15r K3: exactly one place writes an attestation", () => {
+describe("ugcportal-15r K3: only the named places write an attestation", () => {
   const found = writePaths();
 
   it("finds the write path at all", () => {
@@ -240,10 +569,11 @@ describe("ugcportal-15r K3: exactly one place writes an attestation", () => {
     expect(found.length).toBeGreaterThan(0);
   });
 
-  it("finds it in exactly two files: POST /api/media, and the test-support fixture", () => {
+  it("finds it in exactly three files: POST /api/media, POST /api/media/[id]/attestation, and the test-support fixture", () => {
     /*
-     * Two, not one, since ugcportal-3ae — and the second is pinned by name
-     * rather than by a pattern, so a THIRD writer fails here by existing
+     * Two, not one, since ugcportal-3ae, and three since ugcportal-gkax —
+     * and each is pinned by name rather than by a pattern, so a FOURTH
+     * writer fails here by existing
      * IN EVERY SHAPE THE SCANNER SEES: a `*.mediaAttestation.<write>(…)`
      * call, and a nested `attestation: { <write>: … }` whose value is an
      * object literal. That covers an importer, an admin screen or a bulk
@@ -289,7 +619,7 @@ describe("ugcportal-15r K3: exactly one place writes an attestation", () => {
     expect(writes[0].nested).toBe(false);
     // Inside the transaction's client, not the module-level `prisma`: a
     // Media row committed without the declaration its uploader just gave is
-    // an upload that can never be sold. The route tests assert the
+    // an upload that stays unsellable until attested late. The route tests assert the
     // behaviour; this asserts the shape that produces it.
     expect(writes[0].callee).toBe("tx.mediaAttestation.create");
   });
@@ -306,10 +636,11 @@ describe("ugcportal-15r K3: exactly one place writes an attestation", () => {
   it("binds that `userId` from the session, and from nothing else", () => {
     /*
      * The other half, and the half a call-site check cannot give: `userId`
-     * is only worth asserting on if it is the session's. Every binding of
-     * that name in the file is checked, not just the nearest one, so a
-     * second `const userId = body.get("userId")` added later fails here
-     * even if the write itself is untouched.
+     * is only worth asserting on if it is the session's. Every plain
+     * `const`/`let`/`var` declaration of that name in the file is checked
+     * (`bindingsNamed` sees no other declaration shape), so a second
+     * `const userId = body.get("userId")` added later fails here even if
+     * the write itself is untouched.
      */
     const bindings = userIdBindingsIn(path.join(SRC_ROOT, WRITE_PATH));
 
@@ -317,6 +648,99 @@ describe("ugcportal-15r K3: exactly one place writes an attestation", () => {
     for (const binding of bindings) {
       expect(binding, binding).toMatch(/session\??\.user\??\.id/);
     }
+  });
+});
+
+/**
+ * ugcportal-gkax: the second product writer, held to what the first is held
+ * to — and, because it takes its actor from the shared ownership gate rather
+ * than from its own `auth()` call, with the chain back to the session
+ * checked link by link rather than taken on trust.
+ */
+describe("ugcportal-gkax: the late-attestation route names the session's user too", () => {
+  const routeFile = path.join(SRC_ROOT, LATE_ATTESTATION_WRITE_PATH);
+  const accessFile = path.join(SRC_ROOT, MEDIA_ACCESS_PATH);
+
+  it("writes exactly one attestation, through an explicit transactional create", () => {
+    const writes = attestationWritesIn(routeFile);
+
+    expect(writes).toHaveLength(1);
+    expect(writes[0].method).toBe("create");
+    expect(writes[0].nested).toBe(false);
+    expect(writes[0].callee).toBe("tx.mediaAttestation.create");
+  });
+
+  it("names `userId` as the actor", () => {
+    const [write] = attestationWritesIn(routeFile);
+
+    expect(write.argument).toMatch(/attestedByUserId:\s*userId\b/);
+  });
+
+  it("binds `userId` from the ownership gate's result, and `access` from the gate, and from nothing else", () => {
+    const userIds = bindingsNamed(routeFile, "userId");
+    expect(userIds.length).toBeGreaterThan(0);
+    for (const binding of userIds) {
+      expect(binding, binding).toBe("access.userId");
+    }
+
+    const accesses = bindingsNamed(routeFile, "access");
+    expect(accesses.length).toBeGreaterThan(0);
+    for (const binding of accesses) {
+      expect(binding, binding).toMatch(/^await requireOwnedMedia\(/);
+    }
+  });
+
+  it("declares `userId` and `access` exactly once each, in any binding shape", () => {
+    /*
+     * ugcportal-gkax M1-r2. The case above reads plain declarations only, so
+     * a destructured `const { userId } = …` or a parameter named `userId`
+     * shadowing this one was invisible to it. This reads every shape, so a
+     * second binding of either name fails here whatever it is bound from.
+     */
+    expect(declarationsNamed(routeFile, "userId")).toEqual(["access.userId"]);
+    expect(declarationsNamed(routeFile, "access")).toEqual([
+      "await requireOwnedMedia(id)",
+    ]);
+  });
+
+  it("reads the request body only through `parseAttestation`, so no natural read of the body can reach the write", () => {
+    /*
+     * ugcportal-gkax M1-r2, the class rather than one more key. The route
+     * test's K2 case sends a list of actor keys and can only ever cover that
+     * list; a binding that reads a key nobody listed passed both suites in
+     * review. This holds the route's source to the rule `rawBodyLeaksIn`
+     * states (the request read once, by `readJsonBody`; the parsed body
+     * handed whole to `attestationFromBody`; inside that, the object read
+     * only through the shape check and the parser's reader), so a read of any
+     * key into a natural binding shape (destructured, parameter, alias,
+     * second alias, module-level helper) is a reported leak. Deliberately
+     * obfuscated reads (see the docblock on `rawBodyLeaksIn`) are not
+     * covered. Proved against mutated
+     * copies of this very file at the bottom of this one.
+     */
+    expect(rawBodyLeaksIn(routeFile)).toEqual([]);
+  });
+
+  it("and the gate takes that `userId` from the session", () => {
+    /*
+     * The link the route cannot vouch for itself: `access.userId` is only
+     * the session's user if `requireOwnedMedia` makes it so. Every plain
+     * `const/let/var <name> = …` declaration of each name in that file is
+     * checked, so a second such `userId` declaration read from anywhere
+     * else there fails here. `bindingsNamed` does not see destructured or
+     * parameter bindings.
+     */
+    const userIds = bindingsNamed(accessFile, "userId");
+    expect(userIds.length).toBeGreaterThan(0);
+    for (const binding of userIds) expect(binding, binding).toBe("user.id");
+
+    const users = bindingsNamed(accessFile, "user");
+    expect(users.length).toBeGreaterThan(0);
+    for (const binding of users) expect(binding, binding).toMatch(/^session\??\.user$/);
+
+    const sessions = bindingsNamed(accessFile, "session");
+    expect(sessions.length).toBeGreaterThan(0);
+    for (const binding of sessions) expect(binding, binding).toBe("await auth()");
   });
 });
 
@@ -497,6 +921,93 @@ describe("the scanner itself, against a fixture tree", () => {
     });
 
     expect(scanTestSupportImporters(root)).toEqual([]);
+  });
+
+  /*
+   * ugcportal-gkax M1-r2: the structural rule run against mutated copies of
+   * the real route, so each mutation is the shape review actually tried, on
+   * the file as it is now, rather than a toy. Each `mutate` asserts its
+   * anchor was found, so a reworded route fails here loudly instead of
+   * quietly checking an unmutated copy.
+   */
+  function mutatedRoute(...edits: Array<[string, string]>): string {
+    let text = readFileSync(
+      path.join(SRC_ROOT, LATE_ATTESTATION_WRITE_PATH),
+      "utf8",
+    );
+    for (const [anchor, replacement] of edits) {
+      expect(text, anchor).toContain(anchor);
+      text = text.replace(anchor, replacement);
+    }
+    return path.join(tree({ "route.ts": text }), "route.ts");
+  }
+
+  const TRY = "  try {\n";
+  const BODY_ALIAS_IN_POST =
+    "  const fields = body.value as Record<string, unknown>;\n  try {\n";
+  const CREATE = "const created = await tx.mediaAttestation.create({";
+
+  it.each(["userId", "uploaderUserId", "anyKeyNobodyListed"])(
+    "FAILS on round 1's destructured shadow reading `%s` from the body",
+    (key) => {
+      const file = mutatedRoute(
+        [TRY, BODY_ALIAS_IN_POST],
+        [
+          CREATE,
+          `const { userId } = { userId: (fields.${key} as string | undefined) ?? access.userId };\n      ${CREATE}`,
+        ],
+      );
+
+      expect(rawBodyLeaksIn(file).join("\n")).toMatch(
+        /body\.value read outside attestationFromBody/,
+      );
+      expect(declarationsNamed(file, "userId")).toHaveLength(2);
+    },
+  );
+
+  it("FAILS on a parameter named `userId` shadowing the session's, fed from the body", () => {
+    const file = mutatedRoute(
+      [TRY, BODY_ALIAS_IN_POST],
+      [CREATE, "const write = (userId: string) => tx.mediaAttestation.create({"],
+      [
+        '      });\n      return { kind: "created" as const, created };',
+        '      });\n      const created = await write((fields.uploaderId as string | undefined) ?? userId);\n      return { kind: "created" as const, created };',
+      ],
+    );
+
+    expect(rawBodyLeaksIn(file).join("\n")).toMatch(
+      /body\.value read outside attestationFromBody/,
+    );
+    expect(declarationsNamed(file, "userId")).toEqual([
+      "access.userId",
+      expect.stringMatching(/^Parameter: /),
+    ]);
+  });
+
+  it("FAILS on the body read again from the request, or the raw object let out of the reader", () => {
+    const reread = mutatedRoute([
+      TRY,
+      "  const again = (await request.clone().json()) as Record<string, unknown>;\n  try {\n",
+    ]);
+    expect(rawBodyLeaksIn(reread).join("\n")).toMatch(
+      /request read other than by readJsonBody/,
+    );
+
+    const escaped = mutatedRoute([
+      "  return parseAttestation((name) =>",
+      "  (globalThis as Record<string, unknown>).actor = fields.uploaderUserId;\n  return parseAttestation((name) =>",
+    ]);
+    expect(rawBodyLeaksIn(escaped).join("\n")).toMatch(
+      /fields read outside the reader passed to parseAttestation/,
+    );
+
+    const keyed = mutatedRoute([
+      "? fields[name] : undefined",
+      "? fields[name] : fields.uploaderUserId",
+    ]);
+    expect(rawBodyLeaksIn(keyed).join("\n")).toMatch(
+      /fields read other than at the key parseAttestation asks for/,
+    );
   });
 
   it("reports every userId binding, so a second one cannot hide", () => {

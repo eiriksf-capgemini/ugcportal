@@ -195,14 +195,26 @@ const UPLOAD_FIELD_NAME = "file";
  * (`{ error, field }` or `{ error, blocker }` — the same body POST
  * /api/media/[id]/publish would answer). The upload page renders that
  * `error` beside the file, so "stored but not public" is never silent.
+ *
+ * And `attested` (ugcportal-gkax): whether this upload was stored WITH a
+ * rights attestation. Only a configured uploader's upload can be stored
+ * without one, so only their 201 needs to say; the upload page offers the
+ * questions afterwards (POST /api/media/[id]/attestation) on a row whose
+ * 201 said `attested: false`, and on no other row.
  */
 function uploadResponseBody<Row extends object>(
   row: Row,
   uploaderConfigured: boolean,
   publishRefusal: PublishGateRefusal | null,
-): Row | (Row & { publishRefusal: PublishGateRefusal["body"] | null }) {
+  attested: boolean,
+):
+  | Row
+  | (Row & {
+      publishRefusal: PublishGateRefusal["body"] | null;
+      attested: boolean;
+    }) {
   if (!uploaderConfigured) return row;
-  return { ...row, publishRefusal: publishRefusal?.body ?? null };
+  return { ...row, publishRefusal: publishRefusal?.body ?? null, attested };
 }
 
 /**
@@ -801,10 +813,12 @@ async function handleUpload(
       });
 
       /*
-       * THE ONE PLACE AN ATTESTATION IS EVER WRITTEN (ugcportal-15r K3), and
-       * `src/lib/attestation-write-paths.test.ts` is what keeps it the one
-       * place: that test parses every file under src/ and fails if a second
-       * call site exists, or if this one stops naming `userId`.
+       * ONE OF THE TWO PLACES AN ATTESTATION IS EVER WRITTEN (ugcportal-15r
+       * K3; the other is POST /api/media/[id]/attestation, ugcportal-gkax,
+       * for an upload stored without one), and
+       * `src/lib/attestation-write-paths.test.ts` is what keeps it to those
+       * two: that test parses every file under src/ and fails if a third
+       * call site exists, or if either stops naming `userId`.
        *
        * `attestedByUserId: userId` — `session.user.id`, read at the top of
        * this handler and nowhere else. NOT a value from the request body,
@@ -827,8 +841,9 @@ async function handleUpload(
        *
        * INSIDE THE SAME TRANSACTION as the media row, for the reason the tag
        * rows are: a Media row committed without its attestation is an upload
-       * that can never be sold and whose uploader has already answered the
-       * questions. Rolling both back leaves the uploader able to retry.
+       * that stays unsellable until its uploader attests late (POST
+       * /api/media/[id]/attestation), having already answered the questions
+       * here. Rolling both back leaves the uploader able to retry.
        */
       //
       // SKIPPED, and only skipped, for a configured uploader who sent no
@@ -907,7 +922,12 @@ async function handleUpload(
     });
 
     return NextResponse.json(
-      uploadResponseBody(media.created, uploaderConfigured, media.publishRefusal),
+      uploadResponseBody(
+        media.created,
+        uploaderConfigured,
+        media.publishRefusal,
+        attestation !== null,
+      ),
       { status: 201 },
     );
   } catch (error) {
