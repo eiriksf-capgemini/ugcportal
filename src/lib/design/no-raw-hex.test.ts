@@ -12,11 +12,12 @@
  *   - src/app/globals.css, the tokens/theme file itself. That is where every
  *     hex literal in this app's palette is meant to live (see its own
  *     "ONE THEME PER MODE" and petrol-palette comments).
- *   - src/app/vendor/shadcn-tailwind.css (ugcportal-pc7s), a byte-for-byte
- *     copy of an upstream stylesheet whose `#000` is a mask-image alpha stop,
- *     not a rendered colour. shadcn-tailwind.test.ts checks that the
- *     file is exactly one header comment followed by bytes matching a pinned
- *     sha256 and size, so a changed byte in either part fails there (run
+ *   - src/app/vendor/shadcn-tailwind.css (ugcportal-pc7s), a single header
+ *     comment followed by a byte-for-byte copy of an upstream stylesheet
+ *     whose `#000` is a mask-image alpha stop, not a rendered colour.
+ *     shadcn-tailwind.test.ts checks that the file is exactly one header
+ *     comment followed by bytes matching a pinned sha256 and size, so no CSS
+ *     can hide in the header and a changed byte after it fails there (run
  *     there on edited copies), and editing this file to satisfy this gate is
  *     caught.
  *   - src/lib/design/**, the colour-contrast engine (color.ts, contrast.ts,
