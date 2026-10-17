@@ -151,8 +151,10 @@ export async function recordClearance(formData: FormData) {
   // through as given — a missing field becomes `null`, i.e. "no basis" — and
   // judged in the write, which is the one place that decides which basis a
   // layer may carry. Checking here as well would be the second copy of that
-  // rule. Only the MUSIC form renders these fields; any other layer that
-  // arrives carrying one is refused by the write, not ignored here.
+  // rule. Only the MUSIC form renders these fields (clearance-form.test.tsx,
+  // "renders no basis or evidence field on any other layer"); any other
+  // layer that arrives carrying one is refused by the write, not ignored
+  // here.
   const basis = formData.get("basis");
   const basisEvidence = formData.get("basisEvidence");
   const outcome = await recordLayerClearance({

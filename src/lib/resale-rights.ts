@@ -245,8 +245,10 @@ export const BASIS_LAYER: RightsLayer = RightsLayer.MUSIC;
  * Why a MUSIC clearance's basis does not settle the layer, or null when it
  * does. ONE rule, read by both the writer (which refuses the write with a
  * code per problem) and the gate (`layerIsCleared`, which treats any problem
- * as "not cleared"), so the two cannot drift: a row the writer would refuse
- * is a row the gate does not count, however it got into the table.
+ * as "not cleared"), so the two cannot drift for MUSIC: a MUSIC row the
+ * writer would refuse on its basis is one the gate does not count, however
+ * it got into the table. (The writer's other basis rule — none on any other
+ * layer — is the writer's alone; see `layerIsCleared` for why.)
  *
  *   - `missing`: no basis at all. A free-text reason is not a stated ground,
  *     and every MUSIC row written before ugcportal-hx2 is in this state.
@@ -256,13 +258,14 @@ export const BASIS_LAYER: RightsLayer = RightsLayer.MUSIC;
  *     CLEARANCE while the sold file is the raw original: Media.key is
  *     stored untouched at upload and nothing in this product transcodes it,
  *     so the buyer would receive the audio whatever the clearance promised.
- *     Refused for good until a muted deliverable actually exists (that is a
- *     different bead, and it would change this branch, not remove it).
+ *     Refused while the deliverable is the raw original; producing a muted
+ *     deliverable is outside ugcportal-hx2.
  *   - `evidence_blank`: LICENCE with no pointer to the licence. A licence
  *     nobody can produce is not one this instance can stand behind.
  *   - `evidence_unexpected`: evidence on a basis that does not take any.
- *     Refused rather than stored, so `basisEvidence` only ever means "the
- *     licence for this track" and never a note left beside another basis.
+ *     Refused rather than stored, so on a row the writer stored,
+ *     `basisEvidence` is the pointer to a LICENCE and not a note left beside
+ *     another basis.
  *
  * Takes `unknown` on purpose: the writer calls it on a form field, and the
  * gate on a column whose type a hand-written statement need not respect.
@@ -519,7 +522,9 @@ function isTriaged(value: unknown): value is boolean {
 }
 
 /**
- * True when *this specific layer* carries a justification an admin signed.
+ * True when *this specific layer* carries a justification an admin signed —
+ * and, for MUSIC, an accepted basis (ugcportal-hx2; see
+ * `musicClearanceBasisProblem`).
  *
  * Per layer, not per upload. An earlier revision took any item-level
  * clearance as settling all three, so an upload cleared with "music licence
@@ -565,8 +570,8 @@ export function layerIsCleared(
   // MUTED_DELIVERY in particular never clears: the sold file is the raw
   // original, so "deliver it muted" is a promise nothing keeps.
   //
-  // Only MUSIC. Every other layer's row is required to carry basis NULL,
-  // and the writer refuses one that does not; the gate does not re-check
+  // Only MUSIC. The writer refuses a basis or evidence on every other
+  // layer (`clearance_basis_not_applicable`); the gate does not re-check
   // that, because the publish scope's SQL mirror of this predicate
   // (PEOPLE_LAYER_CLEARED in src/lib/publishability.ts) would then disagree
   // with it on a state nothing writes.
