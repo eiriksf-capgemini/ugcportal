@@ -14,8 +14,8 @@
  *                    or 3 or more and some round recorded a clean string
  *   STOP     exit 1  3 or more passes and no round recorded clean
  *   UNKNOWN  exit 2  `tokens_impl_passes` is absent, empty or not a whole
- *                    number. Refuses. An absent field must never read as zero
- *                    passes: an empty value silently becoming a pass-through
+ *                    number. Refuses. An absent field is not read as zero
+ *                    passes (check-pass-budget.test.mjs, "K3" cases): an empty value silently becoming a pass-through
  *                    is this repo's recurring carrier bug (bead K3).
  *   (usage error, an unreadable bead file or an unresolvable id also exit 2,
  *    with a message on stderr: a gate that cannot read its input does not
@@ -35,7 +35,7 @@
  *     --beads <file>  read a bead (or array of beads) from a JSON file
  *                     instead of running `bd show <id> --json`; for tests
  *
- * Read only: it never writes a bead.
+ * Read only: the one command it runs is `bd show`; nothing here writes a bead.
  */
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
