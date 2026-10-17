@@ -24,9 +24,9 @@ import {
  *
  * This file deliberately does NOT mock src/config/users.ts the way
  * src/lib/sign-in-policy.test.ts does: three of its describes drive the real
- * array, because "the four identities Eirik actually configured are the four
- * identities that can sign in" is the claim nobody else makes. The rest
- * inject fixtures, so each rule is stated against data the test controls.
+ * array, because "the identities Eirik actually configured are the identities
+ * that can sign in" is the claim nobody else makes. The rest inject fixtures,
+ * so each rule is stated against data the test controls.
  */
 
 const EIRIK_GOOGLE = "eiriksanderfjeld@gmail.com";
