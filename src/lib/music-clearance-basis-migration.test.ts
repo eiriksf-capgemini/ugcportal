@@ -56,8 +56,8 @@ beforeAll(async () => {
   /*
    * The world before this bead: a cleared uploader, one upload whose only
    * triage `true` is containsMusic, and a MUSIC clearance with a reason and
-   * an admin's signature — exactly what the gate counted as cleared until
-   * now. Raw SQL, because the generated client knows only the current
+   * an admin's signature — the shape the gate counted as cleared before
+   * ugcportal-hx2. Raw SQL, because the generated client knows only the current
    * schema and would select the columns this fixture must not yet have.
    */
   const triageColumns = TRIAGE_FACTS.map((fact) => `"${fact.field}"`).join(",");
