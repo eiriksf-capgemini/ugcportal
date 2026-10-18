@@ -54,6 +54,57 @@ describe("playwright.config.ts: reuseExistingServer gate (ugcportal-6uxr K3)", (
   });
 });
 
+describe("playwright.config.ts: the dev-server port (ugcportal-wds4)", () => {
+  const ENV_VAR_PORT = "UGCPORTAL_E2E_PORT";
+  const originalPortValue = process.env[ENV_VAR_PORT];
+
+  afterEach(() => {
+    if (originalPortValue === undefined) delete process.env[ENV_VAR_PORT];
+    else process.env[ENV_VAR_PORT] = originalPortValue;
+  });
+
+  async function loadPortConfig(): Promise<{
+    baseURL: string;
+    serverUrl: string;
+    serverPort: string;
+  }> {
+    vi.resetModules();
+    const mod = (await import("./playwright.config")) as {
+      default: { use?: { baseURL?: string }; webServer?: { url?: string; env?: Record<string, string> } };
+    };
+    const { use, webServer } = mod.default;
+    return {
+      baseURL: use?.baseURL ?? "",
+      serverUrl: webServer?.url ?? "",
+      serverPort: webServer?.env?.PORT ?? "",
+    };
+  }
+
+  it("defaults to 3000 when UGCPORTAL_E2E_PORT is unset", async () => {
+    delete process.env[ENV_VAR_PORT];
+    const config = await loadPortConfig();
+    expect(config.baseURL).toBe("http://localhost:3000");
+    expect(config.serverUrl).toBe("http://localhost:3000");
+    expect(config.serverPort).toBe("3000");
+  });
+
+  it("MUTATION CHECK: uses the override for all three values when UGCPORTAL_E2E_PORT=3101", async () => {
+    process.env[ENV_VAR_PORT] = "3101";
+    const config = await loadPortConfig();
+    expect(config.baseURL).toBe("http://localhost:3101");
+    expect(config.serverUrl).toBe("http://localhost:3101");
+    expect(config.serverPort).toBe("3101");
+  });
+
+  it("uses the override for all three values when UGCPORTAL_E2E_PORT=4200", async () => {
+    process.env[ENV_VAR_PORT] = "4200";
+    const config = await loadPortConfig();
+    expect(config.baseURL).toBe("http://localhost:4200");
+    expect(config.serverUrl).toBe("http://localhost:4200");
+    expect(config.serverPort).toBe("4200");
+  });
+});
+
 describe("playwright.config.ts: the seeded identity's allowlist (ugcportal-0wh6)", () => {
   async function webServerEnv(specifier: string): Promise<Record<string, string> | undefined> {
     vi.resetModules();
