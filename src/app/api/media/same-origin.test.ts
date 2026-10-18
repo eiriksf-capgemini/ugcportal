@@ -8,8 +8,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * "403 and no write" is asserted by the 403 arriving at all: a handler that
  * reached its write would throw and answer 500 instead. The ownership gate
  * (`requireOwnedMedia`) is stubbed to say "yours" so the origin check, which
- * sits after it, is the only thing under test; the anonymous case uses the
- * real gate's 401 answer.
+ * sits after it, is the only thing under test. The anonymous case therefore
+ * checks only that the 401 is answered before any origin reasoning: for nine
+ * of the ten handlers that 401 comes from the stubbed gate, not the real one.
  */
 
 const sessionMock = vi.fn();
@@ -84,11 +85,13 @@ describe("owner-facing mutating handlers, same-origin second lock", () => {
   it.each(cases)("%s refuses Sec-Fetch-Site cross-site with 403", async (_n, method, path, handler) => {
     const res = await handler(req(method, path, { "sec-fetch-site": "cross-site" }), ctx);
     expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "Forbidden" });
   });
 
   it.each(cases)("%s refuses Sec-Fetch-Site same-site with 403", async (_n, method, path, handler) => {
     const res = await handler(req(method, path, { "sec-fetch-site": "same-site" }), ctx);
     expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "Forbidden" });
   });
 
   it.each(cases)("%s treats a request with no Origin like one with the matching Origin", async (_n, method, path, handler) => {

@@ -16,11 +16,22 @@ import { describe, expect, it } from "vitest";
  * or a new method on an old one is held to the rule without anyone adding it
  * to a list. The rule is per HANDLER, not per file: a file that locks its
  * POST and forgets its DELETE is named for the DELETE. A mutating export in a
- * shape this scan cannot follow (`export const POST = ...`, a re-export) is
- * reported too, since "cannot analyse" must not read as "passes".
+ * shape this scan cannot follow (`export const POST = ...`, a re-export, a
+ * destructured `export const { GET, POST } = ...`, `export * from "..."`) is
+ * reported too, since "cannot analyse" must not read as "passes". A route that
+ * is exempt is named in UNANALYSABLE_EXEMPT with its reason, in this file.
  */
 
 const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+/**
+ * Routes whose unanalysable mutating export is accepted, keyed by repo-relative
+ * path. The reason is part of the entry so an exemption cannot be silent.
+ */
+const UNANALYSABLE_EXEMPT: Record<string, string> = {
+  "src/app/api/auth/[...nextauth]/route.ts":
+    "Auth.js handlers (`export const { GET, POST } = handlers`) carry their own CSRF token",
+};
+
 const API_ROOT = resolve(__dirname, "..", "app", "api");
 
 function routeFiles(dir: string): string[] {
@@ -72,8 +83,18 @@ export function mutatingHandlers(
         if (ts.isIdentifier(d.name) && MUTATING.has(d.name.text)) {
           // Not a function declaration: not followed, so reported.
           out.push({ handler: `${d.name.text} (unanalysable form)`, locked: false });
+        } else if (ts.isObjectBindingPattern(d.name) || ts.isArrayBindingPattern(d.name)) {
+          // `export const { GET, POST } = handlers`: names bound from elsewhere.
+          for (const el of d.name.elements) {
+            if (ts.isBindingElement(el) && ts.isIdentifier(el.name) && MUTATING.has(el.name.text)) {
+              out.push({ handler: `${el.name.text} (unanalysable form)`, locked: false });
+            }
+          }
         }
       }
+    } else if (ts.isExportDeclaration(stmt) && !stmt.exportClause) {
+      // `export * from "..."`: which names it brings in is not followed.
+      out.push({ handler: "export * (unanalysable form)", locked: false });
     } else if (ts.isExportDeclaration(stmt) && stmt.exportClause) {
       if (ts.isNamedExports(stmt.exportClause)) {
         for (const e of stmt.exportClause.elements) {
@@ -87,10 +108,13 @@ export function mutatingHandlers(
   return out;
 }
 
-function unlocked(files: { name: string; source: string }[]): string[] {
+function unlocked(
+  files: { name: string; source: string }[],
+  exempt: Record<string, string> = {},
+): string[] {
   return files.flatMap(({ name, source }) =>
     mutatingHandlers(name, source)
-      .filter((h) => !h.locked)
+      .filter((h) => !h.locked && !(h.handler.endsWith("(unanalysable form)") && name in exempt))
       .map((h) => `${h.handler} in ${name}`),
   );
 }
@@ -110,7 +134,15 @@ describe("every mutating route handler applies the same-origin second lock (ugcp
   });
 
   it("names no handler that lacks isSameOriginRequest", () => {
-    expect(unlocked(files)).toEqual([]);
+    expect(unlocked(files, UNANALYSABLE_EXEMPT)).toEqual([]);
+  });
+
+  it("keeps every exemption pointing at a route that still has an unanalysable export", () => {
+    for (const name of Object.keys(UNANALYSABLE_EXEMPT)) {
+      const f = files.find((x) => x.name === name);
+      expect(f, name).toBeDefined();
+      expect(unlocked([f!]), name).not.toEqual([]);
+    }
   });
 
   describe("fixtures: the scan fails the way it should", () => {
@@ -148,6 +180,26 @@ describe("every mutating route handler applies the same-origin second lock (ugcp
       expect(unlocked([{ name: "fixture/route.ts", source }])).toEqual([
         "PATCH (unanalysable form) in fixture/route.ts",
         "POST (unanalysable form) in fixture/route.ts",
+      ]);
+    });
+
+    it("reports a destructured export and a star export", () => {
+      const source = `
+        export const { GET, POST } = handlers;
+        export * from "./other";
+      `;
+      expect(unlocked([{ name: "fixture/route.ts", source }])).toEqual([
+        "POST (unanalysable form) in fixture/route.ts",
+        "export * (unanalysable form) in fixture/route.ts",
+      ]);
+    });
+
+    it("lets a named exemption pass an unanalysable export, and only that file", () => {
+      const source = `export const { GET, POST } = handlers;`;
+      const exempt = { "fixture/route.ts": "carries its own CSRF token" };
+      expect(unlocked([{ name: "fixture/route.ts", source }], exempt)).toEqual([]);
+      expect(unlocked([{ name: "fixture/other.ts", source }], exempt)).toEqual([
+        "POST (unanalysable form) in fixture/other.ts",
       ]);
     });
   });
