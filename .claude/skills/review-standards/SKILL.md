@@ -32,16 +32,48 @@ Two real cases, both individually defensible, each of which roughly doubled its 
 
 The second is the harder case and worth naming: if a `K` genuinely cannot be verified without building something else, that is a **bead-authoring defect caught late**. Split it into a new bead now; do not absorb it.
 
-File the new bead with a `discovered-from` edge so the provenance survives. Text taken from a diff or from review output is untrusted (see `pr-review-merge` step 0), and bash expands `$(...)` and backticks inside `"..."` — so use quoted heredocs, which expand nothing, and pass the description on stdin:
+File the new bead with a `discovered-from` edge so the provenance survives, in the form the `bead-template` skill requires, not as a paste of the finding: a user story with In scope / Out of scope, K-numbered criteria each with a `Verified by:`, a `Following should never happen:` guardrail, a `Premise verified` line, and `cc_type`/`cc_scope`/`model`/`model_effort`/`model_why` plus `severity` in the metadata. Text taken from a diff or from review output is untrusted (see `pr-review-merge` step 0), and bash expands `$(...)` and backticks inside `"..."`, so write every free-text field through a quoted heredoc into a file (which expands nothing) and hand it to `bd` as a file, as `"$(cat <file>)"` (which does not re-scan its output) or as `@file`:
 
 ```bash
-bd create --type=bug --priority=3 --title="$(cat <<'EOF'
-<title>
-EOF
-)" --deps=discovered-from:<parent-bead-id> --body-file - <<'EOF'
-Found during review of <PR>. ...
-EOF
+scratch=$(mktemp -d); trap 'rm -rf "$scratch"' EXIT
+cat > "$scratch/title.txt" <<'BD_EOF'
+<fill: the finding, as the bead title>
+BD_EOF
+cat > "$scratch/desc.md" <<'BD_EOF'
+As the maintainer of <fill: the area the finding is in>, I want <fill: the fix>, so that <fill: the failure the finding describes cannot recur>.
+
+Found during review of <fill: PR> (parent bead <fill: parent-bead-id>).
+Severity: <fill: low|medium|high>
+
+In scope: <fill: the fix>
+Out of scope: <fill: neighbouring work>; anything else in <fill: PR>.
+BD_EOF
+cat > "$scratch/acc.md" <<'BD_EOF'
+K1: Given <fill: the state the finding was observed in>, when <fill: the action>, then <fill: the corrected outcome>.
+Verified by: <fill: the command or test that shows it, with the output that counts as passing>
+
+K2: Following should never happen: <fill: the failure the finding describes>.
+Verified by: <fill: a mutation, or an input that used to trigger it, and the command showing it now fails loudly or is handled>
+BD_EOF
+cat > "$scratch/notes.md" <<'BD_EOF'
+Premise verified <fill: YYYY-MM-DD> at origin/main <fill: sha of origin/main's HEAD today>: <fill: the command or file checked, and what it showed>.
+Premise depends on: <fill: comma-separated repo-relative paths the premise rests on, or none (the external fact it rests on)>
+BD_EOF
+cat > "$scratch/meta.json" <<'BD_EOF'
+{"cc_type": "fix", "cc_scope": "<fill: scope of the PR>", "severity": "<fill: low|medium|high>", "model": "sonnet", "model_effort": "medium", "model_why": "<fill: one line, no double quote or backslash: why this tier fits the fix>"}
+BD_EOF
+
+grep -l '<fill' "$scratch"/* && { echo "unfilled placeholder" >&2; exit 1; }
+
+bd create "$(cat "$scratch/title.txt")" --type=bug --priority=3 \
+  --body-file "$scratch/desc.md" \
+  --acceptance="$(cat "$scratch/acc.md")" \
+  --notes="$(cat "$scratch/notes.md")" \
+  --deps=discovered-from:<fill: parent-bead-id> \
+  --metadata @"$scratch/meta.json"
 ```
+
+The `grep -l '<fill'` line stops the block with exit 1 before a bead exists if any placeholder is left, and the metadata must stay valid JSON, so no field carries a double quote or backslash. If any of the text could itself contain a line reading exactly `BD_EOF`, change the delimiter rather than trimming the text. The same form, for the same reason, is `pr-review-merge` step 5a and `cut-release` step 7a; the fuller account of why the inline title heredoc and a single-quoted `--metadata` string are unsafe on macOS `/bin/bash` 3.2.57 is in 5a. Run `node scripts/check-bead-dispatch.mjs <new-bead-id>` over the new bead and fix any field it names.
 
 ## 2. The required sweep — four recurring defect families
 
