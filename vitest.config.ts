@@ -2,7 +2,7 @@ import path from "node:path";
 
 import { defaultExclude, defineConfig } from "vitest/config";
 
-import { resolveWorkerCap } from "./vitest.worker-cap";
+import { resolveWorkerCap, vitest3DroppedExcludes } from "./vitest.worker-cap";
 
 // Worker cap (ugcportal-gdi0): VITEST_MAX_FORKS / VITEST_MAX_THREADS are
 // mapped to maxWorkers by vitest.worker-cap.ts, because vitest 4 no longer
@@ -11,15 +11,6 @@ import { resolveWorkerCap } from "./vitest.worker-cap";
 // design, since CI has a runner to itself. VITEST_MAX_WORKERS still wins,
 // because vitest applies it after this config is resolved.
 const workerCap = resolveWorkerCap(process.env);
-
-// Entries vitest 3.2.7's defaultExclude had and vitest 4.1.12's dropped; copied
-// verbatim from vitest 3.2.7 dist/chunks/defaults.B7q_naMc.js:6-12.
-export const vitest3DroppedExcludes = [
-  "**/dist/**",
-  "**/cypress/**",
-  "**/.{idea,git,cache,output,temp}/**",
-  "**/{karma,rollup,webpack,vite,vitest,jest,ava,babel,nyc,cypress,tsup,build,eslint,prettier}.config.*",
-];
 
 export default defineConfig({
   resolve: {
