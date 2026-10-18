@@ -6,7 +6,8 @@ import { glob } from "tinyglobby";
 import { defaultInclude } from "vitest/config";
 import { afterEach, describe, expect, it } from "vitest";
 
-import vitestConfig, { vitest3DroppedExcludes } from "./vitest.config";
+import vitestConfig from "./vitest.config";
+import { vitest3DroppedExcludes } from "./vitest.worker-cap";
 
 /**
  * Named vitest-exclude.test.ts rather than vitest.config.test.ts
@@ -27,7 +28,8 @@ import vitestConfig, { vitest3DroppedExcludes } from "./vitest.config";
  * (".next" with no "/**", or ".nextt/**") would still satisfy an
  * array-membership check. Instead this drives the exact function vitest
  * itself uses to turn `include`/`exclude` into a file list - tinyglobby's
- * `glob()`, called the same way ViteNodeRunner.globFiles does (`dot: true`,
+ * `glob()`, called the same way vitest's own globFiles does (a method of the Vitest
+ * core class; `dot: true`,
  * `ignore: exclude`, `expandDirectories: false`) - against a real temp
  * directory standing in for a post-build tree, so the test fails if the
  * pattern stops actually excluding anything, not just if it goes missing
