@@ -125,16 +125,18 @@ export function userIdBindingsIn(file: string): string[] {
  * src/lib/test-support/prisma-write-scan.ts counts five shapes only because it
  * lists initialised and uninitialised variable declarations separately. A plain
  * variable with an initialiser is reported as its initialiser's text, as
- * `bindingsNamed` does; every other declaration as `<Kind>: ` and then the text
- * of `node.parent`, so it does not read as the one plain declaration a caller
- * expects. `bindingsNamed` also reports `<Kind>: ` for those, but then the
- * declaration's or parameter's own text. The two agree after the prefix only
- * where `node.parent` is that same text (a `let userId;` in a declaration
- * list); wherever the parent is wider they differ, and the width depends on
- * the kind, so read each entry per kind rather than assuming one shape: for a
- * function declaration `node.parent` is the enclosing file or block, so
- * `declarationsNamed` prints all of it where `bindingsNamed` prints the header
- * (`function userId()`).
+ * `bindingsNamed` does, so both scans print the same there. Every other
+ * declaration is `<Kind>: ` and then the text of `node.parent`, so it does not
+ * read as the one plain declaration a caller expects. `bindingsNamed` also
+ * prints `<Kind>: ` for those, then, per kind: the declaring list for a
+ * variable with no initialiser (`let userId`, the same as here, including
+ * `for (const userId of …)` and `let a = 1, userId`), but the declaration
+ * itself for a `catch` (`userId`, where this prints the clause
+ * `catch (userId) {}`); the pattern with its initialiser or type for a
+ * destructured binding (`{ userId } = body`, where this prints `{ userId }`);
+ * the parameter itself for a parameter (`userId: string`, where this prints the
+ * enclosing function); the header for a function declaration (`function
+ * userId()`, where this prints the enclosing file or block).
  */
 export function declarationsNamed(file: string, name: string): string[] {
   const source = sourceFileOf(file);
