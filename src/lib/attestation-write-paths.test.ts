@@ -14,6 +14,7 @@ import {
 import {
   type PrismaModelWrite,
   bindingsNamed,
+  parameterCallSites,
   prismaModelWritesIn,
 } from "@/lib/test-support/prisma-write-scan";
 
@@ -104,8 +105,10 @@ export function scanAttestationWritePaths(root: string): string[] {
 }
 
 /**
- * Every `const/let/var userId = …` initialiser in a file, as source text.
- * Delegates to the shared scanner for the same reason the matcher above
+ * Every binding of `userId` in a file, in the five shapes `bindingsNamed`
+ * reads: a plain `const/let/var userId = …` as its initialiser's text, and a
+ * destructured binding, a parameter, a function declaration or a declaration
+ * with no initialiser as its kind and declaring text. Delegates to the shared scanner for the same reason the matcher above
  * does; the name is kept because it is what the cases below read.
  */
 export function userIdBindingsIn(file: string): string[] {
@@ -642,17 +645,50 @@ describe("ugcportal-15r K3: only the named places write an attestation", () => {
   it("binds that `userId` from the session, and from nothing else", () => {
     /*
      * The other half, and the half a call-site check cannot give: `userId`
-     * is only worth asserting on if it is the session's. Every plain
-     * `const`/`let`/`var` declaration of that name in the file is checked
-     * (`bindingsNamed` sees no other declaration shape), so a second
+     * is only worth asserting on if it is the session's. Every declaration
+     * of that name in the file is checked, in the five shapes
+     * `bindingsNamed`'s docstring lists (plain, destructured, parameter,
+     * function, uninitialised; ugcportal-2k2q), so a second
      * `const userId = body.get("userId")` added later fails here even if
      * the write itself is untouched.
+     *
+     * ONE SHAPE IS FOLLOWED RATHER THAN READ: a parameter. The write sits in
+     * `handleUpload`, whose `userId: string` parameter is a declaration
+     * that cannot say where its value came from — its callers decide that.
+     * So a parameter is accepted only through `parameterCallSites`
+     * (ugcportal-y1tn, folded into ugcportal-2k2q): the function must have
+     * at least one call, be called from nowhere this file cannot see, the
+     * parameter must be neither a rest parameter nor carry a default
+     * initialiser (which would supply the value whenever a call passes
+     * `undefined`, ugcportal-pm4t), and every call must pass at that
+     * position an identifier whose own `const` binding has an initialiser
+     * matching `sessionUserId` below, an unanchored regex that also accepts
+     * `session?.user?.id ?? something` (anchoring it is ugcportal-xxb7).
+     * Each call is checked by name and line, so a call passing anything
+     * else fails naming that line. A parameter this loop never got to the
+     * end of is not in `linked`, and falls through to the strict check
+     * below like every other shape.
      */
-    const bindings = userIdBindingsIn(path.join(SRC_ROOT, WRITE_PATH));
+    const file = path.join(SRC_ROOT, WRITE_PATH);
+    const sessionUserId = /session\??\.user\??\.id/;
+    const bindings = userIdBindingsIn(file);
+
+    const linked = new Set<string>();
+    for (const link of parameterCallSites(file, "userId")) {
+      expect(link.problems, link.parameter).toEqual([]);
+      for (const call of link.calls) {
+        expect(
+          call.binding ?? `unresolved (${call.reason})`,
+          `${link.function} call at line ${call.line} passes ${JSON.stringify(call.argument)} as ${link.parameter}`,
+        ).toMatch(sessionUserId);
+      }
+      linked.add(link.parameter);
+    }
 
     expect(bindings.length).toBeGreaterThan(0);
     for (const binding of bindings) {
-      expect(binding, binding).toMatch(/session\??\.user\??\.id/);
+      if (linked.has(binding)) continue; // every call site checked above
+      expect(binding, binding).toMatch(sessionUserId);
     }
   });
 });
@@ -698,10 +734,13 @@ describe("ugcportal-gkax: the late-attestation route names the session's user to
 
   it("declares `userId` and `access` exactly once each, in any binding shape", () => {
     /*
-     * ugcportal-gkax M1-r2. The case above reads plain declarations only, so
-     * a destructured `const { userId } = …` or a parameter named `userId`
-     * shadowing this one was invisible to it. This reads every shape, so a
-     * second binding of either name fails here whatever it is bound from.
+     * ugcportal-gkax M1-r2. The case above checks what each binding is
+     * bound from: since ugcportal-2k2q, `bindingsNamed` also reports a
+     * destructured binding or a parameter, tagged with its kind, so either
+     * fails that case's `toBe`. It does not check how many bindings there
+     * are, so a second plain `const userId = access.userId` passes it. This
+     * pins the count across every shape, so a second binding of either name
+     * fails here whatever it is bound from.
      */
     expect(declarationsNamed(routeFile, "userId")).toEqual(["access.userId"]);
     expect(declarationsNamed(routeFile, "access")).toEqual([
@@ -732,11 +771,10 @@ describe("ugcportal-gkax: the late-attestation route names the session's user to
   it("and the gate takes that `userId` from the session", () => {
     /*
      * The link the route cannot vouch for itself: `access.userId` is only
-     * the session's user if `requireOwnedMedia` makes it so. Every plain
-     * `const/let/var <name> = …` declaration of each name in that file is
-     * checked, so a second such `userId` declaration read from anywhere
-     * else there fails here. `bindingsNamed` does not see destructured or
-     * parameter bindings.
+     * the session's user if `requireOwnedMedia` makes it so. Every
+     * declaration of each name in that file, in the five shapes
+     * `bindingsNamed`'s docstring lists (ugcportal-2k2q), is checked, so a
+     * second `userId` declaration read from anywhere else there fails here.
      */
     const userIds = bindingsNamed(accessFile, "userId");
     expect(userIds.length).toBeGreaterThan(0);
