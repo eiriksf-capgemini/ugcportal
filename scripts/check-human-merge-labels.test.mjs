@@ -117,6 +117,23 @@ describe("round marker forms", () => {
     // the latest ROUND comment is the blocked one, so the label is listed as C: step 2 labels no non-counting stop for its chain state
     expect(r.staleLabel).toEqual([22]);
   });
+
+  // ugcportal-0n6h / ugcportal-2ww3: the check reads the latest ROUND comment, never a stop comment
+  const stopWithVerdict = { author: REVIEWER, body: `<!-- ugcportal-review-stop: approx-cap -->\n${VERDICT_MARKER}\nReviewed clean; a human must merge` };
+
+  it("PR #274 shape: blocked round 6, then an approx-cap stop, then the label, lists as C", () => {
+    const blocked6 = { author: REVIEWER, body: "<!-- ugcportal-review-round: 6 -->\nBlocking: 1 finding" };
+    expect(classifyPrs([pr(23, label, [blocked6, stopWithVerdict], sens)]).staleLabel).toEqual([23]);
+  });
+
+  it("a labelled clean round 6 then a verdict-marked approx-cap stop lists nothing on the same head, D when the head moved", () => {
+    const clean6 = { author: REVIEWER, body: clean.body.replace("review-round: 1", "review-round: 6") };
+    const same = classifyPrs([pr(24, label, [clean6, stopWithVerdict], sens)]);
+    expect([same.staleLabel, same.staleHead, same.unlabelledClean, same.sensitiveNoLabelNoVerdict]).toEqual([[], [], [], []]);
+    const moved = classifyPrs([pr(25, label, [clean6, stopWithVerdict], sens, OTHER_HEAD)]);
+    expect(moved.staleHead).toEqual([25]);
+    expect(moved.staleLabel).toEqual([]);
+  });
 });
 
 describe("round comment author (R3-5, M-R4-1)", () => {
@@ -194,6 +211,15 @@ describe("reviewer identity, not PR author (M-R4-1)", () => {
   it("no reviewer login reads nothing as round-reviewed (fail closed)", () => {
     expect(classifyRaw([pr(59, [], [clean])], undefined).roundReviewed).toBe(0);
   });
+
+  it("no reviewer login AND a round comment with no author is not round-reviewed (\"\" must not equal \"\", ugcportal-9uf5)", () => {
+    const authorless = { body: clean.body };
+    const r = classifyRaw([pr(60, label, [authorless]), pr(61, [], [authorless])], undefined);
+    expect(r.roundReviewed).toBe(0);
+    expect(r.clean).toBe(0);
+    expect(r.unlabelledClean).toEqual([]);
+    expect(r.staleLabel).toEqual([60]);
+  });
 });
 
 describe("D: the label on a head the clean round did not review (R3-5)", () => {
@@ -232,6 +258,13 @@ describe("D: the label on a head the clean round did not review (R3-5)", () => {
     expect(reviewedHead(clean.body)).toBe(HEAD);
     expect(reviewedHead(`${measured(OTHER_HEAD)}\nReview round 1 (chain exact, head ${HEAD})`)).toBe(OTHER_HEAD);
     expect(reviewedHead("nothing")).toBeNull();
+  });
+
+  it("reads the sha on the ugcportal-measured line, not an earlier at=<sha> in prose (ugcportal-rix6)", () => {
+    const quoted = `${ROUND}\nPrevious round reviewed at=${OTHER_HEAD}\n${measured(HEAD)}\n${VERDICT_MARKER}`;
+    expect(reviewedHead(quoted)).toBe(HEAD);
+    // through classifyPrs: the label sits on HEAD, which the measured line reviewed, so it is not D
+    expect(classifyPrs([pr(48, label, [{ author: REVIEWER, body: quoted }])]).staleHead).toEqual([]);
   });
 });
 
