@@ -31,7 +31,7 @@ agents are working in. **Never run `git` there** — three exceptions. The
 first two are each one call against the single worktree path you supply
 yourself, never a path read off `git worktree list` or borrowed from another
 agent's name. The first is `git worktree add`, to cut a worktree you do not
-already have, in whichever of its two forms your role takes — one call either
+already have, in whichever of its forms your role takes — one call either
 way. An implementer, who will commit, cuts its own branch with it
 (`cd /Users/eiriksf/code/ugcportal && git worktree add -b <branch>
 <worktree-path> origin/<base-commit>`). A reviewer or an analyst, who will
@@ -40,7 +40,21 @@ add --detach <worktree-path> <commit>`, where `<commit>` is the commit you are
 to read), and never passes `-b` there or creates a branch later from inside
 that worktree: `git worktree remove` takes a worktree down but not a branch,
 so a branch a read-only worker cut would outlive its worktree in the shared
-repository. The second is `git worktree remove <worktree-path>`, to take that
+repository. A fix agent spawned onto an existing PR branch (an implementer
+whose brief names the branch and its head commit) cuts no branch either: it
+adds its own worktree detached on the remote branch, with no `-b`
+(`cd /Users/eiriksf/code/ugcportal && git worktree add --detach <own-path>
+origin/<branch>`), at a path named for the agent and round
+(`/tmp/wt-<bead-id>-fix<N>`), and pushes its commits to that branch with the
+HTTPS bot push that `worker-implementer.md` prescribes (`HEAD:refs/heads/<branch>`). It does not
+run `git worktree add <path> <branch>`: git refuses that with "already used
+by worktree" while the implementer's live worktree holds the branch. The
+`git fetch origin <branch>` that makes `origin/<branch>` current is not one of
+the three commands here, so the orchestrator runs it in the shared checkout
+before it spawns you; if `origin/<branch>` is missing, stop and report. If
+`git worktree add` refuses because a registered worktree path is missing, use
+a new path with a fresh suffix as below, never `-f`, and never `git worktree
+prune` by hand. The second is `git worktree remove <worktree-path>`, to take that
 same worktree down again once your work in it is done
 (`cd /Users/eiriksf/code/ugcportal && git worktree remove <worktree-path>`),
 where `<worktree-path>` is the literal path you passed to
