@@ -2340,8 +2340,10 @@ describe("unsettledLayers (ugcportal-qfy9)", () => {
   });
 
   it("keeps a layer blocked when its clearance is unsigned, blank or demoted", () => {
-    // The three ways `layerIsCleared` says no. Each one on its own, so a
-    // helper that checked only "a row exists" fails all three.
+    // Three of the ways `layerIsCleared` says no: the reason and signer ones
+    // (`reason_blank`, `no_signer`, `signer_not_admin`). The basis ones are
+    // in the hx2 blocks below. Each one on its own, so a helper that checked
+    // only "a row exists" fails all of these.
     const broken: readonly GateLayerClearance[] = [
       { ...adminClearance(RightsLayer.MUSIC), reason: "   " },
       { ...adminClearance(RightsLayer.MUSIC), clearedByUserId: null },

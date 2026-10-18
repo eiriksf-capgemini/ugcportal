@@ -1081,11 +1081,11 @@ describe("the rights-layer well (ugcportal-qfy9)", () => {
 
   it("renders a DISTINCT message for each clearance refusal code", async () => {
     /*
-      Not just "a banner appeared". Five codes that all resolved to the same
+      Not just "a banner appeared". Codes that all resolved to the same
       sentence would satisfy a per-code `toContain(ERROR_BANNER_ID)` and
       still tell an admin something true about a refusal that did not
-      happen — so the banner's own text is collected and the five are
-      required to differ.
+      happen — so the banner's own text is collected and every code in
+      `CLEARANCE_WRITE_REFUSALS` is required to differ from the others.
     */
     await createUpload("media-1");
     const banners: string[] = [];

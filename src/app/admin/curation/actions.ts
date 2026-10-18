@@ -192,11 +192,11 @@ export async function recordClearance(formData: FormData) {
  * one of a closed set of codes for everything an admin can legitimately get
  * wrong.
  *
- * THIS ACTION DECIDES NOTHING ABOUT SELLABILITY. It parses three form fields
- * and hands them to `recordPrice` (src/lib/curation-price-write.ts), which is
- * where the uploader's clearance (K2) and the watermarked preview (K3) are
- * checked — the same function POST /api/admin/curation/[id]/price calls. An
- * action that re-implemented either check would be the second copy that
+ * THIS ACTION DECIDES NOTHING ABOUT SELLABILITY. It parses the price form's
+ * fields and hands them to `recordPrice` (src/lib/curation-price-write.ts),
+ * which is where the uploader's clearance (K2) and the watermarked preview
+ * (K3) are checked — the same function POST /api/admin/curation/[id]/price
+ * calls. An action that re-implemented either check would be the second copy that
  * eventually disagrees, on the one write in this product that is about money.
  *
  * A BLANK AMOUNT IS AN UN-PRICING, NOT A MISTAKE. `formData.get` returns
