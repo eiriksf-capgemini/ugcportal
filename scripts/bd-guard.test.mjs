@@ -172,13 +172,14 @@ describe("allows (K2 must-pass, K4)", () => {
     expect(hook('bd create --description "a \\`b\\` c"').code).toBe(0);
   });
   for (const [label, file, anchor] of BLESSED) {
-    it(`K4: blessed heredoc as used in ${label}/SKILL.md`, () => {
+    it(`K4: the pinned former blessed heredoc of ${label} still passes the guard, and the live ${label}/SKILL.md snippet uses the file-based form`, () => {
+      // first half: the pinned temp-dir copy of the former inline block, not the skill
       const text = loadBlessedBlock(file, anchor);
       expect(text).toContain("$(cat <<'");
       const r = hook(text);
       expect(r.stderr).toBe("");
       expect(r.code).toBe(0);
-      // and the skill's live file-form block is allowed raw and filled, with no inline heredoc left
+      // second half: the live skill's file-based block carries no inline heredoc and is allowed raw and filled
       const live = liveBlock(label);
       expect(live).not.toContain("$(cat <<");
       expect(live).toContain('--metadata @"$scratch/meta.json"');
