@@ -116,14 +116,16 @@ export function userIdBindingsIn(file: string): string[] {
 }
 
 /**
- * ugcportal-gkax M1-r2: every DECLARATION of `name` in a file, in every shape
- * a binding can take: a plain `const/let/var name = …`, a destructured
+ * ugcportal-gkax M1-r2: every DECLARATION of `name` in a file, in the four shapes
+ * this visitor checks — variable declarations, destructured binding elements,
+ * parameters, and function declarations: a plain `const/let/var name = …`, a destructured
  * `const { name } = …` or `const { other: name } = …`, a parameter, a
  * function. `bindingsNamed` (shared with POST /api/media's guard, and left
- * alone here) sees only the first. A plain variable is reported as its
- * initialiser's text, the way `bindingsNamed` reports it; every other shape
- * as its kind and the text of the node that declares it, so it does not
- * read as the one plain declaration a caller expects.
+ * alone here) reads five shapes — the four above plus variable declarations
+ * with no initialiser; see its docstring in src/lib/test-support/prisma-write-scan.ts.
+ * A plain variable is reported as its initialiser's text, the way `bindingsNamed`
+ * reports it; every other shape as its kind and the text of the node that declares it,
+ * so it does not read as the one plain declaration a caller expects.
  */
 export function declarationsNamed(file: string, name: string): string[] {
   const source = sourceFileOf(file);
@@ -732,15 +734,16 @@ describe("ugcportal-gkax: the late-attestation route names the session's user to
     }
   });
 
-  it("declares `userId` and `access` exactly once each, in any binding shape", () => {
+  it("declares `userId` and `access` exactly once each, across variable declaration, destructured binding, parameter, and function declaration", () => {
     /*
      * ugcportal-gkax M1-r2. The case above checks what each binding is
      * bound from: since ugcportal-2k2q, `bindingsNamed` also reports a
      * destructured binding or a parameter, tagged with its kind, so either
      * fails that case's `toBe`. It does not check how many bindings there
      * are, so a second plain `const userId = access.userId` passes it. This
-     * pins the count across every shape, so a second binding of either name
-     * fails here whatever it is bound from.
+     * pins the count across variable declaration, destructured binding, parameter,
+     * and function declaration, so a second binding of either name fails here
+     * whatever it is bound from.
      */
     expect(declarationsNamed(routeFile, "userId")).toEqual(["access.userId"]);
     expect(declarationsNamed(routeFile, "access")).toEqual([
