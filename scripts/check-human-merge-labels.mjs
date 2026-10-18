@@ -36,7 +36,8 @@
  * is not read here (ugcportal-osth). The check lists the label by the PR's
  * latest ROUND comment instead: C when that round comment lacks the verdict
  * marker (the PR #274 shape: a blocked round 6, then the stop, then the
- * label), and nothing, or D if the head moved, after a labelled clean round.
+ * label) or when the PR has no round comment by the reviewer at all, and
+ * nothing, or D if the head moved, after a labelled clean round.
  *
  *   A  latest round comment carries the verdict marker line
  *      `<!-- ugcportal-needs-human-merge -->` but the PR has no label.
