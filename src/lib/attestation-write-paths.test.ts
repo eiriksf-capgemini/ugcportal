@@ -14,6 +14,7 @@ import {
 import {
   type PrismaModelWrite,
   bindingsNamed,
+  parameterCallSites,
   prismaModelWritesIn,
 } from "@/lib/test-support/prisma-write-scan";
 
@@ -642,12 +643,39 @@ describe("ugcportal-15r K3: only the named places write an attestation", () => {
      * function, uninitialised; ugcportal-2k2q), so a second
      * `const userId = body.get("userId")` added later fails here even if
      * the write itself is untouched.
+     *
+     * ONE SHAPE IS FOLLOWED RATHER THAN READ: a parameter. The write sits in
+     * `handleUpload`, whose `userId: string` parameter is a declaration
+     * that cannot say where its value came from — its callers decide that.
+     * So a parameter is accepted only through `parameterCallSites`
+     * (ugcportal-y1tn, folded into ugcportal-2k2q): the function must have
+     * at least one call, be called from nowhere this file cannot see, and
+     * every call must pass at that position an identifier whose own `const`
+     * binding is the session's. Each call is checked by name and line, so a
+     * call passing anything else fails naming that line. A parameter this
+     * loop never got to the end of is not in `linked`, and falls through to
+     * the strict check below like every other shape.
      */
-    const bindings = userIdBindingsIn(path.join(SRC_ROOT, WRITE_PATH));
+    const file = path.join(SRC_ROOT, WRITE_PATH);
+    const sessionUserId = /session\??\.user\??\.id/;
+    const bindings = userIdBindingsIn(file);
+
+    const linked = new Set<string>();
+    for (const link of parameterCallSites(file, "userId")) {
+      expect(link.problems, link.parameter).toEqual([]);
+      for (const call of link.calls) {
+        expect(
+          call.binding ?? `unresolved (${call.reason})`,
+          `${link.function} call at line ${call.line} passes ${JSON.stringify(call.argument)} as ${link.parameter}`,
+        ).toMatch(sessionUserId);
+      }
+      linked.add(link.parameter);
+    }
 
     expect(bindings.length).toBeGreaterThan(0);
     for (const binding of bindings) {
-      expect(binding, binding).toMatch(/session\??\.user\??\.id/);
+      if (linked.has(binding)) continue; // every call site checked above
+      expect(binding, binding).toMatch(sessionUserId);
     }
   });
 });

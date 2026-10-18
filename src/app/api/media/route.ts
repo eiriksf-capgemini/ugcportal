@@ -820,8 +820,16 @@ async function handleUpload(
        * two: that test parses every file under src/ and fails if a third
        * call site exists, or if either stops naming `userId`.
        *
-       * `attestedByUserId: userId` — `session.user.id`, read at the top of
-       * this handler and nowhere else. NOT a value from the request body,
+       * `attestedByUserId: userId` — handleUpload's `userId` parameter,
+       * which arrives from the POST handler's call,
+       * `handleUpload(request, peeked.body, userId, …)`, passing the
+       * `const userId = session?.user?.id` that POST binds after `auth()`.
+       * The guard test "binds that `userId` from the session, and from
+       * nothing else" in `src/lib/attestation-write-paths.test.ts` links the
+       * two: it follows the parameter to every call of handleUpload in this
+       * file (`parameterCallSites`, src/lib/test-support/prisma-write-scan.ts)
+       * and fails, naming the call's line, if any call passes anything but a
+       * session-bound const there. NOT a value from the request body,
        * which is the mistake this guards: the whole worth of the row is that
        * it names the person who uploaded the file, and a client-supplied
        * actor would let anyone attest on anyone's behalf. The gate re-checks
