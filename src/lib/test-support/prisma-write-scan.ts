@@ -146,19 +146,52 @@ export function prismaModelWritesIn(
 }
 
 /**
- * Every `const/let/var <name> = …` initialiser in a file, as source text.
+ * Every declaration of `name` in a file, in exactly these five shapes — the
+ * `ts.is*` tests in the visitor below, one branch each:
+ *
+ *  1. a plain `const/let/var <name> = …` with an initialiser
+ *     (`ts.isVariableDeclaration`, identifier name, initialiser present) —
+ *     reported as the initialiser's source text, e.g. `access.userId`;
+ *  2. a destructured binding, `const { <name> } = …`,
+ *     `const { other: <name> } = …`, `const [<name>] = …`, or the same
+ *     pattern in a parameter (`ts.isBindingElement`) — reported as
+ *     `BindingElement: <the enclosing declaration or parameter>`, e.g.
+ *     `BindingElement: { userId } = body`;
+ *  3. a parameter, `function f(<name>) {}` / `(<name>) => …`
+ *     (`ts.isParameter`, identifier name) — reported as
+ *     `Parameter: <the parameter>`, e.g. `Parameter: userId: string`;
+ *  4. a function declaration, `function <name>() {}`
+ *     (`ts.isFunctionDeclaration`) — reported as
+ *     `FunctionDeclaration: <its header up to the body>`;
+ *  5. a variable declared with no initialiser — `let <name>;`,
+ *     `for (const <name> of …)`, `catch (<name>)`
+ *     (`ts.isVariableDeclaration`, identifier name, no initialiser) —
+ *     reported as `VariableDeclaration: <the declaring list or clause>`.
+ *
+ * Shapes 2-5 carry their kind as a prefix so none of them reads as the plain
+ * initialiser a caller expects: a caller asserting
+ * `toBe("access.userId")` on every entry fails on any of them. Every
+ * declaration in those five shapes is returned, not the nearest one, so a
+ * second `const userId = body.get("userId")` — or `const { userId } = body`
+ * — added later is visible to the caller even if the write itself is
+ * untouched.
+ *
+ * NOT read: imports (`import { <name> }`), class, enum and namespace
+ * declarations, and the name of a function or class EXPRESSION. A caller
+ * that needs those has to look for them itself.
  *
  * Used to prove the identifier a write names really does come from where
  * the claim says it does — "called with `session.user.id`" is a claim about
- * where a value came from, and the call site alone cannot answer it. EVERY
- * binding of the name is returned, not the nearest one, so a second
- * `const userId = body.get("userId")` added later is visible to the caller
- * even if the write itself is untouched.
+ * where a value came from, and the call site alone cannot answer it.
  */
 export function bindingsNamed(file: string, name: string): string[] {
   const source = sourceFileOf(file);
   const bindings: string[] = [];
+  const tagged = (node: ts.Node, declaring: string): void => {
+    bindings.push(`${ts.SyntaxKind[node.kind]}: ${declaring}`);
+  };
   const visit = (node: ts.Node): void => {
+    // (1) `const/let/var <name> = …`
     if (
       ts.isVariableDeclaration(node) &&
       ts.isIdentifier(node.name) &&
@@ -167,6 +200,61 @@ export function bindingsNamed(file: string, name: string): string[] {
     ) {
       bindings.push(node.initializer.getText(source));
     }
+
+    // (2) `const { <name> } = …`, `const { other: <name> } = …`,
+    // `const [<name>] = …`, and the same patterns in a parameter.
+    if (
+      ts.isBindingElement(node) &&
+      ts.isIdentifier(node.name) &&
+      node.name.text === name
+    ) {
+      let declaring: ts.Node = node;
+      while (
+        !ts.isVariableDeclaration(declaring) &&
+        !ts.isParameter(declaring) &&
+        declaring.parent !== undefined
+      ) {
+        declaring = declaring.parent;
+      }
+      tagged(node, declaring.getText(source));
+    }
+
+    // (3) a parameter named `<name>`.
+    if (
+      ts.isParameter(node) &&
+      ts.isIdentifier(node.name) &&
+      node.name.text === name
+    ) {
+      tagged(node, node.getText(source));
+    }
+
+    // (4) `function <name>() {}`.
+    if (
+      ts.isFunctionDeclaration(node) &&
+      node.name !== undefined &&
+      node.name.text === name
+    ) {
+      const text = node.getText(source);
+      const header = node.body
+        ? text.slice(0, node.body.getStart(source) - node.getStart(source)).trimEnd()
+        : text;
+      tagged(node, header);
+    }
+
+    // (5) a variable with no initialiser: `let <name>;`,
+    // `for (const <name> of …)`, `catch (<name>)`.
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.name.text === name &&
+      !node.initializer
+    ) {
+      const declaring = ts.isVariableDeclarationList(node.parent)
+        ? node.parent
+        : node;
+      tagged(node, declaring.getText(source));
+    }
+
     ts.forEachChild(node, visit);
   };
   visit(source);

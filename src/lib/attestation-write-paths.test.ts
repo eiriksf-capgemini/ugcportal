@@ -636,9 +636,10 @@ describe("ugcportal-15r K3: only the named places write an attestation", () => {
   it("binds that `userId` from the session, and from nothing else", () => {
     /*
      * The other half, and the half a call-site check cannot give: `userId`
-     * is only worth asserting on if it is the session's. Every plain
-     * `const`/`let`/`var` declaration of that name in the file is checked
-     * (`bindingsNamed` sees no other declaration shape), so a second
+     * is only worth asserting on if it is the session's. Every declaration
+     * of that name in the file is checked, in the five shapes
+     * `bindingsNamed`'s docstring lists (plain, destructured, parameter,
+     * function, uninitialised; ugcportal-2k2q), so a second
      * `const userId = body.get("userId")` added later fails here even if
      * the write itself is untouched.
      */
@@ -724,11 +725,10 @@ describe("ugcportal-gkax: the late-attestation route names the session's user to
   it("and the gate takes that `userId` from the session", () => {
     /*
      * The link the route cannot vouch for itself: `access.userId` is only
-     * the session's user if `requireOwnedMedia` makes it so. Every plain
-     * `const/let/var <name> = …` declaration of each name in that file is
-     * checked, so a second such `userId` declaration read from anywhere
-     * else there fails here. `bindingsNamed` does not see destructured or
-     * parameter bindings.
+     * the session's user if `requireOwnedMedia` makes it so. Every
+     * declaration of each name in that file, in the five shapes
+     * `bindingsNamed`'s docstring lists (ugcportal-2k2q), is checked, so a
+     * second `userId` declaration read from anywhere else there fails here.
      */
     const userIds = bindingsNamed(accessFile, "userId");
     expect(userIds.length).toBeGreaterThan(0);
