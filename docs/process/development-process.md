@@ -541,9 +541,9 @@ by `dispatch-bead`) at dispatch, not in CI: it grades a bead, and a bead can
 change without a PR. `scripts/check-unreachable-beads.mjs` is the same
 shape and advisory.
 
-**Guards in CI.** `guard-sensitive-files` fails a PR that **bundles** a
+**Guards in CI.** The `guards` job includes a step that fails a PR when it **bundles** a
 change to `CLAUDE.md` or `.claude/settings*.json` with unrelated work
-(`scripts/check-sensitive-files.mjs`); a PR containing only such a file is
+(run by `scripts/check-sensitive-files.mjs`); a PR containing only such a file is
 routed to a human by `pr-review-merge` step 2 rather than by CI.
 `guard-conventional-commit-title` enforces the title form. A GitHub ruleset
 on `main` requires both CI contexts with
