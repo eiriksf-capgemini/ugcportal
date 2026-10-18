@@ -331,10 +331,15 @@ commit is present locally, and puts the branch name and the head sha in the
 brief. The fresh agent then adds its OWN detached worktree on that branch,
 from the shared checkout: `git worktree add --detach /tmp/wt-<bead-id>-fix<N>
 origin/<branch>` (`<N>` is the fix round). Its first step is `git rev-parse HEAD` in that
-worktree, compared with the head sha in the brief: on a mismatch the branch
-has moved since the brief was written, so the agent stops and reports both
-shas (the orchestrator re-briefs) and does not proceed on a head the brief
-did not describe. That is the existing-branch form in the machine
+worktree, compared with the head sha in the brief. That compares the worktree's HEAD
+(the shared checkout's local `origin/<branch>` at the moment of `git worktree
+add`) with the brief's sha, and nothing more. On a mismatch the two disagree
+for some reason (the branch moved and was re-fetched, the orchestrator never
+fetched, someone fetched after the brief was written, or the brief's sha is
+wrong), so the agent stops and reports both shas (the orchestrator re-briefs)
+and does not proceed on a head the brief did not describe. A push made after
+the last fetch is not detected by this check, which is why the orchestrator
+fetches immediately before it spawns. That is the existing-branch form in the machine
 section of `.claude/agents/worker-implementer.md`, which applies to a
 worker-implementer fix agent (the agent type fix rounds are spawned as); it
 names no `-b`, and the agent runs no `git fetch` of its own. It pushes with
@@ -350,9 +355,12 @@ path, which the machine section forbids borrowing. A fresh, agent-named path
 also sidesteps `git worktree add` refusing with "missing but already
 registered worktree" when an earlier directory was deleted without `git
 worktree remove` (the machine section permits neither `git worktree prune` nor
-`-f`); for that missing-but-registered refusal the agent uses a new path with
-a fresh suffix, as the machine section says. For any other refusal on the
-path it stops and reports; it does not force it. Do not
+`-f`); for that missing-but-registered refusal, and for a refusal because the
+templated `/tmp/wt-<bead-id>-fix<N>` path is already taken (two runs in the
+same round), the agent follows the machine section's rule: it does not
+inspect or touch what is there and uses a new path with a freshly generated
+short suffix. For any other refusal on the path it stops and reports; it does
+not force it. Do not
 forward the old agent's history.
 
 Case K1, quoted from the bead: an implementer whose last context was 300k
