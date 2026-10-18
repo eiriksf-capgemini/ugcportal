@@ -4,17 +4,18 @@ import { sourceFileOf } from "@/lib/design/scan-source";
 
 /**
  * Test-only helper (not imported by any application code): find every place
- * a given Prisma model is WRITTEN in one source file, by parsing it.
+ * a given Prisma model is WRITTEN in one source file, by parsing it. Also
+ * exports bindingsNamed and parameterCallSites for similar AST-based analysis.
  *
- * ONE SCANNER, TWO CALLERS. `src/lib/attestation-write-paths.test.ts`
- * (ugcportal-15r K3) and `src/lib/curation-clearance-write-paths.test.ts`
- * (ugcportal-qfy9 K2) both make the same kind of claim about the whole
- * tree — "exactly one file writes this table" — and before this module the
- * first of them carried the matcher inline. A near-identical copy of an AST
- * matcher in a second test file is this repo's recurring defect family 4 in
+ * MULTIPLE CALLERS OF prismaModelWritesIn. Run `git grep -n prismaModelWritesIn -- src scripts`
+ * to find them all. Before this module, each test file carried its own
+ * identical copy of an AST matcher inline. A near-identical copy of an AST
+ * matcher in separate test files is this repo's recurring defect family 4 in
  * its sibling-omission form: the two copies drift, one of them learns about
  * a new Prisma write method and the other does not, and the table whose
- * copy went stale quietly acquires a second writer.
+ * copy went stale quietly acquires a second writer. This module centralizes
+ * the claim each test makes — "exactly one file writes this table" — and
+ * prevents that drift.
  *
  * WHY IT PARSES RATHER THAN GREPS. A scan built on
  * `source.includes("prisma.mediaAttestation.create")` passes on a file that
