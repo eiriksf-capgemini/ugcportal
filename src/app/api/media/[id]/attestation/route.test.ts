@@ -424,9 +424,26 @@ describe("K3: the Media row is never written", () => {
     expect(await prisma.mediaAttestation.count()).toBe(0);
     expect(await mediaRow()).toEqual(unattested);
 
-    // The route's other 400: a body that parses as JSON but is not an object
-    // ("Expected a JSON object body"), a branch of its own from the one above.
+    // The route has three 400 branches, each driven here. `{}` above is the
+    // answers refusal (`parseAttestation` returning an error). `[]` is the
+    // `parsed === null` branch: a body that parses as JSON but is not an
+    // object ("Expected a JSON object body").
     expect((await attest([])).status).toBe(400);
+    expect(await prisma.mediaAttestation.count()).toBe(0);
+    expect(await mediaRow()).toEqual(unattested);
+
+    // The third is `!body.ok`: readJsonBody failing on malformed JSON
+    // ("Invalid JSON body"). `attest()` always JSON.stringifys, so this one
+    // builds the raw Request itself.
+    const malformed = await POST(
+      new Request(`http://localhost/api/media/${MEDIA_ID}/attestation`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{",
+      }),
+      { params: Promise.resolve({ id: MEDIA_ID }) },
+    );
+    expect(malformed.status).toBe(400);
     expect(await prisma.mediaAttestation.count()).toBe(0);
     expect(await mediaRow()).toEqual(unattested);
 
