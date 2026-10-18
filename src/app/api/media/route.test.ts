@@ -101,11 +101,12 @@ const mediaCreateOutsideTransaction = vi.fn(() => {
 
 /**
  * The same tripwire for the attestation (ugcportal-15r). A Media row
- * committed without the declaration its uploader just gave is an upload that
- * stays unsellable until it is attested late and whose uploader has already answered the questions;
- * outside the transaction, a failure between the two writes leaves exactly
- * that. A `$transaction` mock that hands back the same client cannot tell the
- * two apart, so this makes the non-transactional path throw.
+ * committed without the declaration its uploader just gave is an unsellable
+ * upload—one where the uploader has already answered the questions, but the
+ * attestation isn't recorded. Outside the transaction, a failure between the
+ * two writes leaves exactly that state. A `$transaction` mock that hands back
+ * the same client cannot tell the two apart, so this makes the non-transactional
+ * path throw.
  */
 const attestationCreateOutsideTransaction = vi.fn(() => {
   throw new Error(
