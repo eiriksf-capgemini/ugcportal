@@ -67,7 +67,7 @@ Measured properties of the schema at f88164f:
 | Property | Command | Value |
 |---|---|---|
 | comment lines | `grep -cE '^\s*(//\|///)' prisma/schema.prisma` over `wc -l` 1351 | 955 (71%) |
-| field-level `@unique` / `@@unique` / `@@index` | `grep -c '@unique'`, `grep -c '@@unique'`, `grep -c '@@index'` | 18 / 4 / 21 |
+| field-level `@unique` / `@@unique` / `@@index` | `grep -c '[^@]@unique'`, `grep -c '@@unique'`, `grep -c '@@index'` | 14 / 4 / 21 |
 | `onDelete` behaviours | `grep -o 'onDelete: [A-Za-z]*' prisma/schema.prisma \| sort \| uniq -c` | 11 Cascade, 2 Restrict, 1 SetNull |
 | nullable booleans / non-null booleans | `grep -cE '^\s+[A-Za-z]+\s+Boolean\?'` / `grep -cE '^\s+[A-Za-z]+\s+Boolean(\s\|$)'` | 9 / 11 |
 
@@ -137,7 +137,7 @@ Reach: `grep -rn --include='*.ts' --include='*.tsx' -E "\b<fn>\b" src | grep -v 
 | `alcoholReclassificationRefusal` | 1 | `curation-triage-write.ts` |
 | `commercialPublishRefusal` | 2 | `publish-gates.ts`, `curation-triage-write.ts` |
 | `isWithheldFromPublicRead` | 0 | test oracle only (4.1) |
-| `publishOperatorRefusal` / `isPublishOperator` | 1 / 2 | publish route; preview route's operator arm |
+| `publishOperatorRefusal` / `isPublishOperator` | 1 / 2 | publish route; preview route's operator arm and `publish-authority.ts`'s own call inside `publishOperatorRefusal` |
 | `requireOwnedMedia` | 6 | every owner route under `api/media/[id]` |
 | `requireAdmin` | 12 | the five admin pages, the three admin action files, and four of the five admin route handlers; the fifth, `api/admin/rights/brands/alcohol/route.ts`, calls `requireAdminAccess` instead (its header, lines 30-31: the one surface that splits 401 from 403) |
 | `isSameOriginRequest` | 3 | three of the five admin route handlers: the POST handlers price, alcohol and decision; the two Instagram handlers are GET and do not call it |
@@ -156,7 +156,7 @@ The cost is a maintenance tax that is real and is paid by tests rather than by t
 
 **The curation surface** (`src/app/admin/curation/page.tsx`, 822 lines, the largest page) renders the sale gate's own blockers per item (`evaluateSellability`) beside the uploader's attestation answers (`ugcportal-vlnn`), and its three actions are the single writers of the triage facts, the layer clearances and the price-plus-licence-grant (`src/lib/curation-triage-write.ts`, `curation-clearance-write.ts`, `curation-price-write.ts`; `src/lib/licence-terms-signal.test.ts` asserts the single-writer property for the grant over the whole tree). The grant is validated on write and re-checked on read by the same function (`checkLicenceTerms`), and a stored grant the writer would refuse withdraws the whole offer rather than the grant alone — the same "do not trust that the row was written through the validator" rule the label and the price follow.
 
-**Conventions the surface keeps consistently** (each read, none a finding): one editable column per route (`PATCH` is `originalName` only; every other field has a sub-route, and each sub-route's header says why); 401/403/404 decided in one place (`requireOwnedMedia`); every admin action calls `requireAdmin` before reading a form field and takes its actor from the session (the security review's 3.9 drove all four); a closed set of blocker codes with a full `Record` of messages so `tsc` fails on a code without a sentence (`PUBLISH_BLOCKERS`, `PUBLISH_AUTHORITY_BLOCKERS`, `TRIAGE_WRITE_REFUSALS`).
+**Conventions the surface keeps consistently** (each read, none a finding): one editable column per route (`PATCH` is `originalName` only; every other field has a sub-route, and each sub-route's header says why); 401/403/404 decided in one place (`requireOwnedMedia`); every admin action calls `requireAdmin` before reading a form field and takes its actor from the session (the security review's 3.9 drove all five); a closed set of blocker codes with a full `Record` of messages so `tsc` fails on a code without a sentence (`PUBLISH_BLOCKERS`, `PUBLISH_AUTHORITY_BLOCKERS`, `TRIAGE_WRITE_REFUSALS`).
 
 ---
 
