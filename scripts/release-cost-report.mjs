@@ -597,8 +597,29 @@ function replaceKeepingSpans(lexed, re, build) {
 const FINDINGS_COUNT_RE =
   /(?<![\w-])(?<!round\s)\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(?:candidate\s+|surviving\s+|new\s+|further\s+)?findings?\b/i;
 
+const STRONG_NONE_RE = /\b(no|zero)\s+(blocking\s+|code\s+)?findings?\b/i;
+
 const NONE_RE =
   /\b(no|zero)\s+(blocking\s+|code\s+)?findings?\b|\bno medium(-or-above| or above)?\s+(found|anywhere|outstanding)|\bnone stands as a defect\b|\bdiff is clean\b|\bnothing to fix\b|\bfound nothing\b/i;
+
+/**
+ * A line whose no-findings phrase is not the round's verdict: a sub-heading
+ * ("Verified, no finding:", "Family 3 -- checked, nothing found:": the line
+ * ends with a colon, or opens with `#`) or a tool-output line (the line opens
+ * with the name of a script or command whose output it quotes, as in
+ * "claims-audit --pr 285: zero findings"). Markdown emphasis is already
+ * stripped from the text it reads.
+ */
+function isSubHeadingOrToolOutput(line, isVerdictLine = false) {
+  const l = line.trim();
+  if (!isVerdictLine && /:\s*$/.test(l)) return true;
+  return /^(?:[-*>\s]*)(?:\$\s*|npx\s+|node\s+)?(?:scripts\/)?(?:claims-audit|sweep-candidates|check-[\w-]+|release-cost-report|vitest|eslint)\b/i.test(l);
+}
+
+/** A quoted phrase ("Auto-approved... no blocking findings") is cited, not said. */
+function stripQuoted(line) {
+  return line.replace(/"[^"\n]*"|\u201c[^\u201d\n]*\u201d/g, " ");
+}
 
 /**
  * Counts the severities the reviewer STATED in one verdict comment.
@@ -618,7 +639,12 @@ const NONE_RE =
  *
  * `stated` is false when the comment names no severity at all and does not
  * say it found nothing -- the report prints "unstated" for that round
- * rather than a number.
+ * rather than a number. "Says it found nothing" is read over the whole
+ * comment, minus sub-heading lines (ending with a colon, the first line
+ * excepted), tool-output lines
+ * (opening with a script name), double-quoted phrases, and, off the first
+ * line, the weaker phrases (see the comment at `statedNone`); a verdict that
+ * sits lower in the body therefore counts (ugcportal-to7b).
  *
  * Two specific non-findings contexts are excluded from the count
  * (ugcportal-zo8n), however close a severity word sits next to the number:
@@ -779,13 +805,29 @@ export function classifySeverity(body) {
   // Stated means the reviewer put a severity on at least one finding, or
   // said in so many words that nothing (or nothing above low) was found.
   // Prose that merely mentions "medium-or-above blocks" does not count.
-  // "Family 3 — checked, nothing found" and a "Verified, no finding:"
-  // sub-heading are not the verdict, so the no-findings phrase counts only on
-  // the verdict line (the first non-empty line), the same line `clean` reads
-  // (ugcportal-45bh).
+  // The no-findings phrase is read over the whole comment, not only the
+  // first line: a round's verdict can sit in the body ("... zero findings
+  // this round. Round 1-3 gate: merges only with zero findings -- met." on
+  // #194 r2; "Verdict: ..." / "Zero findings. Merging." lower down on #151
+  // r3, #152 r1, #154 r3, #155 r2, #165 r2, #185 r1, #206 r3, #219 r2). It
+  // skips what is not the verdict (ugcportal-45bh, narrowed in
+  // ugcportal-to7b):
+  //  - a sub-heading line, one that ends with a colon ("Verified, no
+  //    finding:"), except the first line, which is the verdict line even when
+  //    it introduces a list ("... after verification none stands as a
+  //    defect:", #83 r5), and a verdict on a "## ..." heading line (#271 r3),
+  //    both of which are read;
+  //  - a tool-output line, one that opens with the name of a script it quotes
+  //    ("claims-audit --pr 285: zero findings");
+  //  - a phrase inside double quotes, which is cited, not said; and
+  //  - off the first line, the weaker phrases ("found nothing", "nothing to
+  //    fix", "diff is clean", "none stands as a defect", "no medium ...
+  //    found"): sweep notes say "found nothing elsewhere" about one grep, not
+  //    about the round. Only "no/zero [blocking|code] findings" counts there.
   const verdictLine = text.split("\n").map((l) => l.trim()).find((l) => l !== "") ?? "";
   const none = NONE_RE.test(verdictLine);
-  result.stated = itemMedium + itemLow + summaryMedium + summaryLow > 0 || none;
+  const statedNone = text.split("\n").some((l) => (l.trim() === verdictLine ? NONE_RE : STRONG_NONE_RE).test(stripQuoted(l)) && !isSubHeadingOrToolOutput(l, l.trim() === verdictLine));
+  result.stated = itemMedium + itemLow + summaryMedium + summaryLow > 0 || statedNone;
   // The verdict's own "no findings" form, kept apart from `stated` so a
   // reader can let it outrank a bare findings count (withFindingsKeys). It is
   // true only for an approval-shaped verdict line (the first non-empty line):

@@ -100,6 +100,7 @@ const loadFixture = (name) => JSON.parse(fs.readFileSync(new URL(`./fixtures/${n
 const pr121 = loadFixture("pr-121-round1.json");
 const pr173 = loadFixture("pr-173-round2.json");
 const pr277 = loadFixture("pr-277-round1.json");
+const statedCorpus = loadFixture("stated-verdict-corpus.json");
 const pr258 = loadFixture("pr-258-round1.json");
 const pr185 = loadFixture("pr-185-round1.json");
 const pr131 = loadFixture("pr-131-round1-reply.json");
@@ -1455,6 +1456,18 @@ describe("findings_rN keys (ugcportal-2jvh)", () => {
     expect(item5()).toMatch(/sensitive-path/);
   });
 
+  it("to7b L2: for a blocking-template round, item 5 says the figure depends on where the no-findings phrase sits, and the code does what it says", () => {
+    const head = "<!-- ugcportal-review-round: 1 -->\nReview round 1 (chain exact, head abc1234). **Requires human approval and merge: this PR touches a sensitive path.**\n\n";
+    const tool = "claims-audit --pr 285: 12 findings, all hold";
+    const inBody = classifySeverity(`${head}Review (six finder angles): zero findings.\n\n${tool}`);
+    expect(inBody).toMatchObject({ stated: true, medium: 0, low: 0, findings: 12, clean: false });
+    const asHeading = classifySeverity(`${head}Verified, no finding:\n\n${tool}`);
+    expect(asHeading).toMatchObject({ stated: false, medium: 0, low: 0, findings: 12, clean: false });
+    expect(item5()).not.toMatch(/The figure is unaffected/);
+    expect(item5()).toMatch(/measured zero/);
+    expect(item5()).toMatch(/prints `r<N>:\?` instead of a zero/);
+  });
+
   it("rf5o K2: #216 r1's approval line opens 'Auto-approved' but quotes 'any finding blocks regardless', so it is not clean", () => {
     const line = "Auto-approved (review round 1, chain approx — reviewer and PR author are the same account, so this chain can never reach `exact`; any finding blocks regardless): CI green on head afb70ebfe8e8cc370cd9e24a15f745cbb027d9d9, no sensitive paths touched, no blocking findings.";
     expect(classifySeverity(line).clean).toBe(false);
@@ -1484,6 +1497,44 @@ describe("findings_rN keys (ugcportal-2jvh)", () => {
     expect(classifySeverity(pr277.round1Body)).toMatchObject({ findings: 4, stated: false, clean: false });
     expect(classifySeverity("Auto-approved (review round 1, chain approx): CI green, no sensitive paths touched, no blocking findings.\n\nReviewed inline.")).toMatchObject({ clean: true, stated: true });
     expect(classifySeverity("Zero findings.\n\nFigures re-derived.")).toMatchObject({ clean: true, stated: true });
+  });
+
+  it("to7b M1: stated reads the whole comment, so the nine genuine zero-finding verdicts (real comment bodies) stay stated, #194 r2 included", () => {
+    expect(Object.keys(statedCorpus.genuine)).toEqual(["pr151-r3", "pr152-r1", "pr154-r3", "pr155-r2", "pr165-r2", "pr185-r1", "pr194-r2", "pr206-r3", "pr219-r2"]);
+    for (const [name, body] of Object.entries(statedCorpus.genuine)) {
+      expect({ name, stated: classifySeverity(body).stated }).toEqual({ name, stated: true });
+    }
+    // #194 r2: the verdict line has no no-findings phrase; the closing sentence is the verdict.
+    const b194 = statedCorpus.genuine["pr194-r2"];
+    expect(b194.split("\n").find((l) => l.trim() !== "" && !l.startsWith("<!--"))).toMatch(/^Auto-approved \(review round 2/);
+    expect(classifySeverity(b194)).toMatchObject({ stated: true, clean: false });
+  });
+
+  it("to7b M1: the six real rounds whose no-findings phrase is a sub-heading, a quote or a sweep note stay unstated", () => {
+    for (const [name, body] of Object.entries(statedCorpus.notVerdict)) {
+      expect({ name, stated: classifySeverity(body).stated }).toEqual({ name, stated: false });
+    }
+    expect(Object.keys(statedCorpus.notVerdict)).toEqual(["pr155-r1", "pr221-r2", "pr231-r2", "pr248-r1", "pr258-r1", "pr277-r1"]);
+  });
+
+  it("to7b M1: the excluded forms, one by one, and the forms that still count", () => {
+    const stated = (body) => classifySeverity(`<!-- ugcportal-review-round: 1 -->\nReview round 1 (chain exact, head abc1234). **Blocking: 2 findings.**\n\n${body}`).stated;
+    expect(stated("Verified, no finding:\n\n- Family 3 reads the diff.")).toBe(false);
+    expect(stated("**Verified, no finding:**")).toBe(false);
+    expect(stated("claims-audit --pr 285: zero findings, all hold")).toBe(false);
+    expect(stated("- node scripts/claims-audit.mjs --body: no findings")).toBe(false);
+    expect(stated('The merge note ("Auto-approved... no blocking findings") is now false.')).toBe(false);
+    expect(stated("The repo-wide grep found nothing elsewhere; nothing to fix there.")).toBe(false);
+    // still counted
+    expect(stated("Zero findings this round. Merging.")).toBe(true);
+    expect(stated("Verdict: no blocking findings.")).toBe(true);
+    expect(stated("CI green, zero findings this round. The gate merges only with zero findings -- met.")).toBe(true);
+    // a verdict on a markdown heading line is a verdict (#271 r3)
+    expect(classifySeverity("<!-- ugcportal-review-round: 3 -->\n## Review, round 3, head ae344c9: clean. No findings. Ready to merge.").stated).toBe(true);
+    // the first line is the verdict even when it introduces a list (#83 r5 on the v0.5.0 report)
+    expect(classifySeverity("<!-- ugcportal-review-round: 5 approx -->\nReview round 5 (chain approx). Result: merge. After verification none stands as a defect:\n\n- one candidate ruled out").stated).toBe(true);
+    // the weaker phrase still counts on the first line, as before
+    expect(classifySeverity("Reviewed the diff: found nothing.\n\nSweep done.").stated).toBe(true);
   });
 
   it("zu69 K1/K2: the sibling line for prose-only beads does not say a bead carries keys, and a shared PR with no marker rounds is not listed", () => {
