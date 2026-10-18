@@ -4,7 +4,7 @@
  * Server actions get this from the framework; route handlers do not. It is a
  * second lock rather than the only one — the session cookie is SameSite=Lax,
  * so a cross-site POST arrives with no credentials and the first gate
- * already refuses it: `requireAdmin` on the admin routes, `requireOwnedMedia`
+ * already refuses it: `requireAdmin` or `requireAdminAccess` on the admin routes, `requireOwnedMedia`
  * or `auth()` on the owner-facing media handlers. This exists for the day
  * that cookie policy changes, a subdomain appears, or a handler is reached
  * some way nobody predicted.
@@ -51,8 +51,8 @@ export function expectedOrigin(env: NodeJS.ProcessEnv = process.env): string | n
  * `AUTH_URL=http://localhost:3000`): a crawler-facing route is not optional
  * the way an auth redirect is, so `npm run dev`/`next build` without
  * AUTH_URL configured still produces a working sitemap/canonical link to
- * inspect, with no Origin/Host header to fall back to the way
- * `isSameOriginRequest` does above.
+ * inspect, with no request Origin to compare against, unlike
+ * `isSameOriginRequest`.
  *
  * IN PRODUCTION, THE FALLBACK IS REFUSED. A real deployment that is missing
  * or has a broken AUTH_URL must not silently publish `http://localhost:3000`
