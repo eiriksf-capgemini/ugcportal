@@ -5,19 +5,17 @@ import nextConfig from "./next.config";
 describe("next.config headers (ugcportal-7ex5)", () => {
   it("sends the anti-framing and referrer headers on every path", async () => {
     const rules = await nextConfig.headers!();
-    expect(rules).toHaveLength(1);
-    expect(rules[0].source).toBe("/:path*");
-    expect(rules[0].headers).toEqual([
-      { key: "X-Frame-Options", value: "DENY" },
-      { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
-      { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+    // Whole-object match: a has/missing/basePath/locale condition added to the
+    // rule would narrow which requests get the headers, and must fail here.
+    expect(rules).toEqual([
+      {
+        source: "/:path*",
+        headers: [
+          { key: "X-Frame-Options", value: "DENY" },
+          { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+        ],
+      },
     ]);
-  });
-
-  it("adds no CSP directive that could block the site's own scripts or styles", async () => {
-    const rules = await nextConfig.headers!();
-    const csp = rules[0].headers.find((x) => x.key === "Content-Security-Policy")!;
-    const directives = csp.value.split(";").map((d) => d.trim().split(/\s+/)[0]);
-    expect(directives).toEqual(["frame-ancestors"]);
   });
 });
