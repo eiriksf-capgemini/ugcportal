@@ -124,13 +124,17 @@ export function userIdBindingsIn(file: string): string[] {
  * `for (const x of …)`, `catch (x)`); `bindingsNamed`'s docstring in
  * src/lib/test-support/prisma-write-scan.ts counts five shapes only because it
  * lists initialised and uninitialised variable declarations separately. A plain
- * variable is reported as its initialiser's text, as `bindingsNamed` does; every
- * other declaration as its kind and then the text of `node.parent`, so it does
- * not read as the one plain declaration a caller expects. That text is where the
- * two scans differ: for a destructured binding it is the pattern (`{ userId }`),
- * for a parameter the enclosing function, for a `catch` clause the whole clause
- * (`catch (userId) {}`); `bindingsNamed` reports the declaration or parameter
- * itself (`{ userId }: X`, `access: Y`) and, for a `catch`, the declaration (`userId`).
+ * variable with an initialiser is reported as its initialiser's text, as
+ * `bindingsNamed` does; every other declaration as `<Kind>: ` and then the text
+ * of `node.parent`, so it does not read as the one plain declaration a caller
+ * expects. `bindingsNamed` also reports `<Kind>: ` for those, but then the
+ * declaration's or parameter's own text. The two agree after the prefix only
+ * where `node.parent` is that same text (a `let userId;` in a declaration
+ * list); wherever the parent is wider they differ, and the width depends on
+ * the kind, so read each entry per kind rather than assuming one shape: for a
+ * function declaration `node.parent` is the enclosing file or block, so
+ * `declarationsNamed` prints all of it where `bindingsNamed` prints the header
+ * (`function userId()`).
  */
 export function declarationsNamed(file: string, name: string): string[] {
   const source = sourceFileOf(file);
