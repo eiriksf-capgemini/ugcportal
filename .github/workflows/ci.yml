@@ -80,6 +80,13 @@ jobs:
             console.log('✓ Version fields match: ' + pv);
           "
 
+      # The script runs `npm audit --json` itself and judges the JSON, not
+      # npm's exit status (1 whenever advisories exist); no pipe, so no
+      # status is swallowed (ugcportal-1j4j). Allowlist:
+      # scripts/npm-audit-allowlist.json.
+      - name: Fail on an unallowlisted high or critical npm advisory
+        run: node scripts/check-npm-audit.mjs
+
       - name: Check PR title follows Conventional Commits
         if: github.event_name == 'pull_request'
         env:
