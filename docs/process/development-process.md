@@ -210,7 +210,9 @@ side of a merge commit) cannot be ordered and fail. Ordering is by ancestry,
 not by commit count, so it does not depend on `main` being linear. The
 bead then fails when a commit since the judged premise
 touched a declared path — naming the commit and the path — or when a
-declared path does not exist at `origin/main`'s HEAD. A declaration that is
+declared path does not exist at `origin/main`'s HEAD. Any git failure
+(`git rev-list`, `git log`, `git merge-base`) while measuring fails the
+bead closed, as not measured. A declaration that is
 absent or cannot be checked (empty, a path with whitespace, an absolute
 path, a `..` segment, a glob, or `none` combined with anything but one
 parenthesised reason) fails on either candidate. The declaration is the

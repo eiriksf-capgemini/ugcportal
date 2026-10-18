@@ -1881,7 +1881,7 @@ describe("findPremiseLines", { timeout: 30_000 }, () => {
   it("reads a statement's commits from its label on, in order, so the first one is the verified-at commit", () => {
     // a commit named before the label belongs to another note on the same line
     expect(findPremiseLines("2026-10-15 merged def5678. Premise verified at abc1234.")[0].shas).toEqual(["abc1234"]);
-    // order is kept: premiseCommits dates the statement by the first one, resolving or not
+    // order is kept: resolveStatement dates the statement by the first one, resolving or not
     expect(findPremiseLines("Premise verified at abc1234. Dispatched from origin/main def5678.")[0].shas).toEqual(["abc1234", "def5678"]);
   });
 
@@ -2462,4 +2462,132 @@ describe("the skill file's own invocation does not discard the exit status", { t
       return { status: err.status };
     }
   }
+});
+
+// --- ugcportal-zoee (ze80, jtyl): merge commits and mid-sentence premise mentions -
+
+/**
+ * A scratch repo with a --no-ff merge on main (ugcportal-ze80).
+ *
+ *   c0  src/a.ts, src/b.ts, README.md
+ *   s1  side branch off c0: touches `sideFile` (side.txt, or src/a.ts)
+ *   c1  mainline: touches `mainFile` (src/b.ts, or README.md)
+ *   c2  mainline: README.md
+ *   m   `git merge --no-ff side`  (HEAD)
+ */
+function makeMergeRepo({ sideFile, mainFile }) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "zoee-merge-"));
+  const run = (args) => execFileSync("git", args, { cwd: dir, encoding: "utf8" }).trim();
+  const write = (rel, text) => {
+    fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+    fs.writeFileSync(path.join(dir, rel), text);
+  };
+  const commit = (msg) => {
+    run(["add", "-A"]);
+    run(["commit", "-q", "-m", msg]);
+    return run(["rev-parse", "HEAD"]);
+  };
+  run(["init", "-q", "-b", "main"]);
+  run(["config", "user.email", "test@example.com"]);
+  run(["config", "user.name", "Test"]);
+  write("src/a.ts", "a v0\n");
+  write("src/b.ts", "b v0\n");
+  write("README.md", "r0\n");
+  const c0 = commit("c0");
+  run(["checkout", "-q", "-b", "side"]);
+  write(sideFile, "side v1\n");
+  const s1 = commit("s1 side branch");
+  run(["checkout", "-q", "main"]);
+  write(mainFile, "main v1\n");
+  const c1 = commit("c1 mainline");
+  write("README.md", "r2\n");
+  const c2 = commit("c2 README");
+  run(["merge", "-q", "--no-ff", "-m", "m merge side", "side"]);
+  const m = run(["rev-parse", "HEAD"]);
+  return { dir, c0, s1, c1, c2, m };
+}
+
+describe("ugcportal-zoee ze80: a merge commit on main is not listed as touching nothing", { timeout: 60_000 }, () => {
+  const repos = [];
+  afterAll(() => {
+    for (const r of repos) fs.rmSync(r.dir, { recursive: true, force: true });
+  });
+  const build = (opts) => {
+    const r = makeMergeRepo(opts);
+    repos.push(r);
+    return r;
+  };
+  const freshLineOf = (r, premiseSha, decl) => {
+    const file = path.join(r.dir, `beads-${Math.random().toString(36).slice(2)}.json`);
+    const notes = `Premise verified 2026-10-19 at origin/main ${premiseSha} by reading the code.\nPremise depends on: ${decl}`;
+    fs.writeFileSync(file, JSON.stringify([completeBead({ notes })]));
+    const res = runCliAllowFail(["--beads", file, "--repo", r.dir, "--head", r.m]);
+    return { res, line: res.stdout.split("\n").find((l) => /^\s+(ok|FAIL)\s+premise-fresh\b/.test(l)) || "" };
+  };
+
+  it("K1: every commit listed names a declared file, and the count equals the commits listed", () => {
+    const r = build({ sideFile: "side.txt", mainFile: "src/b.ts" });
+    const { res, line } = freshLineOf(r, r.s1, "src/a.ts, src/b.ts");
+    expect(res.status).toBe(1);
+    expect(failedChecks(res.stdout)).toEqual(["premise-fresh"]);
+    expect(line).not.toContain("touched .");
+    expect(line).not.toContain("touched ;");
+    // the merge brought in side.txt only, which is not declared: only c1 touched a declared path
+    expect(line).toContain(`1 of those commit(s) touched a declared path -- ${r.c1.slice(0, 7)} touched src/b.ts.`);
+    expect(line).not.toContain(`${r.m.slice(0, 7)} touched`);
+  });
+
+  it("K2: a declared path changed only on a merged side branch still fails, naming the side-branch commit", () => {
+    const r = build({ sideFile: "src/a.ts", mainFile: "README.md" });
+    const { res, line } = freshLineOf(r, r.c0, "src/a.ts");
+    expect(res.status).toBe(1);
+    expect(failedChecks(res.stdout)).toEqual(["premise-fresh"]);
+    expect(line).toContain(`${r.s1.slice(0, 7)} touched src/a.ts`);
+    expect(line).not.toContain("touched .");
+    expect(line).not.toContain("touched ;");
+    // the count equals the commits listed: s1, and the merge that brought it in, with its file
+    const listed = line.match(/\b[0-9a-f]{7} touched /g) || [];
+    expect(line).toContain(`${listed.length} of those commit(s) touched a declared path`);
+  });
+});
+
+describe("ugcportal-zoee jtyl: a mention of the premise form is not a statement, and the excerpt starts at the label", { timeout: 60_000 }, () => {
+  let pr;
+  let c;
+  beforeAll(() => {
+    const made = makePathRepo();
+    pr = made.dir;
+    c = made.c;
+  }, 30_000);
+  afterAll(() => {
+    if (pr) fs.rmSync(pr, { recursive: true, force: true });
+  });
+  const run = (bead) => {
+    const file = path.join(pr, `beads-${Math.random().toString(36).slice(2)}.json`);
+    fs.writeFileSync(file, JSON.stringify([bead]));
+    const res = runCliAllowFail(["--beads", file, "--repo", pr, "--head", c[6]]);
+    return { res, line: res.stdout.split("\n").find((l) => /^\s+(ok|FAIL)\s+premise-fresh\b/.test(l)) || "" };
+  };
+
+  it("K1: the cupf shape (the form mentioned mid-sentence in the description) leaves the notes' sound statement to be judged", () => {
+    const base = completeBead();
+    const description = `${base.description}\n\nIn scope: the bead form a guardrail K, Premise verified line, metadata, and nothing else.`;
+    const notes = `Premise verified 2026-10-19 at origin/main ${c[6]} by reading the code.\nPremise depends on: src/lib/a.ts`;
+    const { res, line } = run({ ...base, description, notes });
+    expect(res.status).toBe(0);
+    expect(line).not.toContain("the description's last premise statement");
+    expect(line).toContain(`premise verified at ${c[6].slice(0, 7)}`);
+  });
+
+  it("K2: a description statement naming no commit is quoted from its label, not from the paragraph's first words", () => {
+    const base = completeBead();
+    const head = "Opening words of a long paragraph that runs on well past eighty characters before it gets anywhere near the label. ";
+    const description = `${base.description}\n\n${head}Premise (verified today by reading the code, which this line says nothing more about and names no commit).`;
+    const notes = `Premise verified 2026-10-19 at origin/main ${c[6]} by reading the code.\nPremise depends on: src/lib/a.ts`;
+    const { res, line } = run({ ...base, description, notes });
+    expect(res.status).toBe(1);
+    expect(line).toContain("names no commit");
+    expect(line).toContain('("Premise (verified');
+    expect(line).not.toContain("Opening words");
+  });
 });

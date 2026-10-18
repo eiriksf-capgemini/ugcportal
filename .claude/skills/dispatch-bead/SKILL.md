@@ -95,8 +95,10 @@ it does not depend on `main` being linear. It fails the bead when:
 - the two candidates name different commits neither of which is an
   ancestor of the other (they sit on different sides of a merge commit), so
   the two latest statements cannot be ordered on this history — re-verify
-  against `origin/main`'s HEAD and append one statement there; a git
-  failure while asking also fails, as not measured;
+  against `origin/main`'s HEAD and append one statement there;
+- any git failure (`git rev-list`, `git log`, `git merge-base`) while the
+  gate measures — the counts, the touching commits or the ordering — fails
+  the bead closed, as not measured;
 - a commit on `origin/main` since the judged premise touched a declared path
   — it names the first five such commits, oldest first, each with up to
   five of the declared files it touched, then counts the rest;

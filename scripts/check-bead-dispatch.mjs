@@ -21,8 +21,11 @@
  * from the other's (on a shared commit, the union of both declarations)
  * has had a declared path touched by a
  * commit on `main` since; or a path it declares does not exist at
- * origin/main's HEAD (ugcportal-ul2j). `PREMISE_FRESHNESS_COST`'s comment
- * gives the rules in the order the check applies them.
+ * origin/main's HEAD (ugcportal-ul2j). Any git failure while asking
+ * (`git rev-list` for the counts, `git log` for the touching commits, `git
+ * merge-base` for the ordering) fails the bead closed, as not measured.
+ * `PREMISE_FRESHNESS_COST`'s comment gives the rules in the order the check
+ * applies them.
  *
  * Why this exists: `~/.claude/skills/bead-template/SKILL.md` has defined the
  * required form -- user story, In/Out of scope, K-numbered Given/When/Then
@@ -179,7 +182,8 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
  *      that can still differ -- ordering them by count judged the lower one
  *      with its own narrower declaration and passed a stale premise (round
  *      6, M1). Ordering by ancestry does not depend on main being linear.
- *      A git failure while asking fails closed, as not measured. The cost is deliberate: a bead whose
+ *      Any git failure (`git rev-list`, `git log`, `git merge-base`) fails the
+ *      bead closed, as not measured. The cost is deliberate: a bead whose
  *      description still carries an old typo'd, pruned or off-main premise
  *      fails until that line is re-verified, even when its notes hold a
  *      sound, fresh one -- re-verifying those lines across the backlog is
@@ -365,8 +369,11 @@ const DEPENDS_LINE_RE = /^[\s*_>`#-]*premise depends on\s*:/i;
  * follow a clause boundary (`.`, `:`, `;`, `!`, `?`, `,`, `(`, `[`), with only
  * whitespace or markup between, so "on the premise: the gate at <sha> was
  * green" is not a statement but "2026-10-06 audit: premise re-verified" is.
+ * Nor is a mention of the bead form itself ("a guardrail K, Premise verified
+ * line, metadata"): a verb followed by the word `line` (and not by a line
+ * number) names the form, not a verification (ugcportal-jtyl).
  */
-const PREMISE_LABEL_RE = /(?:^|[.:;!?,(\[])[\s`*_>#(\[-]*premise(?![\w-])[\s,(]*(?:(?:re-?)?(?:verified|checked|measured|confirmed)\b|corrected\b|:)/i;
+const PREMISE_LABEL_RE = /(?:^|[.:;!?,(\[])[\s`*_>#(\[-]*premise(?![\w-])[\s,(]*(?:(?:re-?)?(?:verified|checked|measured|confirmed)\b(?!\s+lines?\b(?!\s+\d))|corrected\b|:)/i;
 /** A line that OPENS with a commit token, after any quoting or list markup: the hard-wrap continuation. */
 const LEADING_SHA_RE = /^[\s`*_>(\[-]*([0-9a-f]{7,40})\b/;
 
@@ -1033,7 +1040,11 @@ function candidateProblem(cand, ctx) {
   const who = `the ${possessive(field)} last premise statement`;
   const at = resolveStatement(st, ctx);
   if (at.kind === "none") {
-    return { dating: true, detail: `${who} names no commit (${JSON.stringify(st.line.length > 80 ? `${st.line.slice(0, 80)}...` : st.line)}), so its freshness cannot be checked.` };
+    // quote from the label, not from the head of a paragraph that may sit well before it
+    const label = PREMISE_LABEL_RE.exec(st.line);
+    const from = label ? Math.max(0, st.line.toLowerCase().indexOf("premise", label.index)) : 0;
+    const excerpt = st.line.slice(from);
+    return { dating: true, detail: `${who} names no commit (${JSON.stringify(excerpt.length > 80 ? `${excerpt.slice(0, 80)}...` : excerpt)}), so its freshness cannot be checked.` };
   }
   if (at.kind === "unresolved") {
     return { dating: true, detail: `${who} names ${at.token}, which does not resolve in this repo (a typo, or a branch commit pruned after its PR was squash-merged), so its freshness cannot be checked.` };
@@ -1252,7 +1263,12 @@ export function makeGitContext(headOverride, repoDir = REPO_ROOT) {
      * The commits in `full..HEAD` that touched any of `paths`, oldest first,
      * each with the files under those paths it touched; null when git
      * failed, so an error fails closed instead of reading as "touched
-     * nothing". `--literal-pathspecs`, because declared paths in this repo
+     * nothing". A merge commit is diffed against its first parent
+     * (`--diff-merges=first-parent`; `--name-only` alone prints no files for
+     * a merge) and dropped when that shows no declared file; the commits it
+     * merged are in the range and listed themselves, so a declared path
+     * changed only on a merged side branch still fails (ugcportal-ze80).
+     * `--literal-pathspecs`, because declared paths in this repo
      * carry glob characters (`src/app/api/media/[id]/`) that would otherwise
      * match a different path or none. `--no-renames`, so a rename counts as
      * touching both its old and its new name. A directory pathspec covers
@@ -1263,14 +1279,19 @@ export function makeGitContext(headOverride, repoDir = REPO_ROOT) {
       if (paths.length === 0) return [];
       try {
         const out = git(
-          ["--literal-pathspecs", "log", "--reverse", "--full-history", "--no-renames", "--format=%x00%H", "--name-only", `${full}..${head}`, "--", ...paths],
+          ["--literal-pathspecs", "log", "--reverse", "--full-history", "--no-renames", "--diff-merges=first-parent", "--format=%x00%H", "--name-only", `${full}..${head}`, "--", ...paths],
           repoDir,
         );
         return out
           .split("\0")
           .map((chunk) => chunk.split("\n").map((l) => l.trim()).filter(Boolean))
           .filter((rows) => rows.length > 0)
-          .map(([sha, ...files]) => ({ sha, files }));
+          .map(([sha, ...files]) => ({ sha, files }))
+          // A merge can be listed (it differs on a declared path from one of its
+          // parents) yet show no declared file against its first parent: it
+          // brought nothing in itself, and the commits it merged are in the
+          // range and listed on their own.
+          .filter((c) => c.files.length > 0);
       } catch {
         return null;
       }
