@@ -294,7 +294,7 @@ export function rawBodyLeaksIn(file: string): string[] {
       (isCallTo(call, "readJsonBody") || isCallTo(call, "isSameOriginRequest")) &&
       call.arguments[0] === ref;
     if (!permitted) {
-      leak(ref, "request read other than by readJsonBody");
+      leak(ref, "request read other than by readJsonBody or isSameOriginRequest");
     }
   }
   for (const ref of referencesTo(post.body, "arguments")) {
@@ -1050,7 +1050,7 @@ describe("the scanner itself, against a fixture tree", () => {
       "  const again = (await request.clone().json()) as Record<string, unknown>;\n  try {\n",
     ]);
     expect(rawBodyLeaksIn(reread).join("\n")).toMatch(
-      /request read other than by readJsonBody/,
+      /request read other than by readJsonBody or isSameOriginRequest/,
     );
 
     const escaped = mutatedRoute([
