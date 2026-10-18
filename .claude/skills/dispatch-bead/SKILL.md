@@ -328,16 +328,25 @@ work, and a fix must land on the PR's existing head branch. The orchestrator,
 which the workers' machine section does not bind, runs `git fetch origin
 <branch>` in the shared checkout itself before it spawns, so that the head
 commit is present locally, and puts the branch name and the head sha in the
-brief. The fresh agent then adds its OWN detached worktree on that commit, from
-the shared checkout: `git worktree add --detach /tmp/wt-<bead-id>-fix<N>
-<head-sha>` (`<N>` is the fix round; `<head-sha>` may be written
-`origin/<branch>`), and pushes with `git push origin HEAD:<branch>`. That
-`--detach <path> <commit>` call is the one the machine section already grants
-reviewers and analysts (it names no `-b`), so the agent runs no `git fetch` of
-its own and needs no exception for it; ugcportal-2day adds the detached
-fix-round form to the implementer's list, and until it lands this section owns
-it. Do not run `git worktree add <path> <branch>`: the PR's head branch is
-normally still checked out in the implementer's live worktree (until the
+brief. The fresh agent then adds its OWN detached worktree on that branch,
+from the shared checkout: `git worktree add --detach /tmp/wt-<bead-id>-fix<N>
+origin/<branch>` (`<N>` is the fix round). Its first step is `git rev-parse HEAD` in that
+worktree, compared with the head sha in the brief. That compares the worktree's HEAD
+(the shared checkout's local `origin/<branch>` at the moment of `git worktree
+add`) with the brief's sha, and nothing more. On a mismatch the two disagree
+for some reason (the branch moved and was re-fetched, the orchestrator never
+fetched, someone fetched after the brief was written, or the brief's sha is
+wrong), so the agent stops and reports both shas (the orchestrator re-briefs)
+and does not proceed on a head the brief did not describe. A push made after
+the last fetch is not detected by this check, which is why the orchestrator
+fetches immediately before it spawns. That is the existing-branch form in the machine
+section of `.claude/agents/worker-implementer.md`, which applies to a
+worker-implementer fix agent (the agent type fix rounds are spawned as); it
+names no `-b`, and the agent runs no `git fetch` of its own. It pushes with
+the HTTPS bot push of that same file (the token header, `UGCPORTAL_PREPUSH=skip`,
+`HEAD:refs/heads/<branch>`) after the bot-identity item of section 2, never
+with a bare `git push` over the SSH remote. Do not run `git worktree add
+<path> <branch>`: the PR's head branch is normally still checked out in the implementer's live worktree (until the
 post-merge sweep removes it), and git then refuses with `fatal: '<branch>' is
 already used by worktree at '<path>'` (reproduced in a scratch repo, git 2.54.0,
 rc=128, in PR #280's body). A detached worktree creates no local branch, so it
@@ -346,7 +355,12 @@ path, which the machine section forbids borrowing. A fresh, agent-named path
 also sidesteps `git worktree add` refusing with "missing but already
 registered worktree" when an earlier directory was deleted without `git
 worktree remove` (the machine section permits neither `git worktree prune` nor
-`-f`). If git still refuses on the path, stop and report that; do not force it. Do not
+`-f`); for that missing-but-registered refusal, and for a refusal because the
+templated `/tmp/wt-<bead-id>-fix<N>` path is already taken (two runs in the
+same round), the agent follows the machine section's rule: it does not
+inspect or touch what is there and uses a new path with a freshly generated
+short suffix. For any other refusal on the path it stops and reports; it does
+not force it. Do not
 forward the old agent's history.
 
 Case K1, quoted from the bead: an implementer whose last context was 300k
@@ -396,13 +410,21 @@ none. `<id>` is the agent that takes the round, the new one when fresh. Note tha
 the next round's two figures are keyed to this agent, the one that made the
 most recent pass, not to the original implementer.
 
-**How idle is measured.** From the previous agent's last pass end (`endTs` in
+**How idle is measured.** Two readings of the same quantity, both from the
+previous agent's last pass end (`endTs` in
 `node scripts/agent-pass-cost.mjs --json`, or the last timestamp in its
-transcript) to the dispatch time, which for a fresh agent is its first call
-(`startTs`). Do not use the orchestrator's own clock (when it noticed the
-review comment, or when it began composing the brief): the idle figures
-recorded on 2026-10-16 did that and overstated the transcript measure (for
-example 25 min recorded against 13.3 min measured for ugcportal-8r06 round 2).
+transcript). The **decision-time** reading is what the resume-or-fresh choice
+is taken on: run `date -u` immediately before the spawn or `SendMessage`, and
+subtract that `endTs` from it. The **record** reading, which is what the
+`Fix round` line is checked against afterwards, is the same `endTs` to the
+dispatch time, which for a fresh agent is its first call (`startTs`). Do not
+take either from the orchestrator's clock at an earlier moment (when it noticed
+the review comment, or when it began composing the brief): the idle figures
+recorded on 2026-10-16 are not shown to have done that: their errors ran both
+ways, some too high and some too low, and an earlier clock reading can only
+make idle too low, so the records do not establish what caused the too-high
+rows (for example 25 min recorded against 13.3 min measured for
+ugcportal-8r06 round 2, but 14 recorded against 19.2 measured for its round 3).
 
 **Correcting a wrong line.** Do not edit or re-use the `Fix round` prefix.
 Append `bd update <id> --append-notes "Correction to the Fix round <N> line: <what was wrong, the right figure and how it was measured>"`.

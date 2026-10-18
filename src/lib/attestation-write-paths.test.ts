@@ -116,14 +116,27 @@ export function userIdBindingsIn(file: string): string[] {
 }
 
 /**
- * ugcportal-gkax M1-r2: every DECLARATION of `name` in a file, in every shape
- * a binding can take: a plain `const/let/var name = …`, a destructured
- * `const { name } = …` or `const { other: name } = …`, a parameter, a
- * function. `bindingsNamed` (shared with POST /api/media's guard, and left
- * alone here) sees only the first. A plain variable is reported as its
- * initialiser's text, the way `bindingsNamed` reports it; every other shape
- * as its kind and the text of the node that declares it, so it does not
- * read as the one plain declaration a caller expects.
+ * ugcportal-gkax M1-r2: every DECLARATION of `name` in a file, in the four
+ * kinds this visitor checks (`ts.isVariableDeclaration`, `ts.isBindingElement`,
+ * `ts.isParameter`, `ts.isFunctionDeclaration`). It reads the same
+ * declarations as `bindingsNamed` (shared with POST /api/media's guard, and left
+ * alone here), including a variable with no initialiser (`let userId;`,
+ * `for (const x of …)`, `catch (x)`); `bindingsNamed`'s docstring in
+ * src/lib/test-support/prisma-write-scan.ts counts five shapes only because it
+ * lists initialised and uninitialised variable declarations separately. A plain
+ * variable with an initialiser is reported as its initialiser's text, as
+ * `bindingsNamed` does, so both scans print the same there. Every other
+ * declaration is `<Kind>: ` and then the text of `node.parent`, so it does not
+ * read as the one plain declaration a caller expects. `bindingsNamed` also
+ * prints `<Kind>: ` for those, then, per kind: the declaring list for a
+ * variable with no initialiser (`let userId`, the same as here, including
+ * `for (const userId of …)` and `let a = 1, userId`), but the declaration
+ * itself for a `catch` (`userId`, where this prints the clause
+ * `catch (userId) {}`); the pattern with its initialiser or type for a
+ * destructured binding (`{ userId } = body`, where this prints `{ userId }`);
+ * the parameter itself for a parameter (`userId: string`, where this prints the
+ * enclosing function); the header for a function declaration (`function
+ * userId()`, where this prints the enclosing file or block).
  */
 export function declarationsNamed(file: string, name: string): string[] {
   const source = sourceFileOf(file);
@@ -732,15 +745,16 @@ describe("ugcportal-gkax: the late-attestation route names the session's user to
     }
   });
 
-  it("declares `userId` and `access` exactly once each, in any binding shape", () => {
+  it("declares `userId` and `access` exactly once each, across variable declaration, destructured binding, parameter, and function declaration", () => {
     /*
      * ugcportal-gkax M1-r2. The case above checks what each binding is
      * bound from: since ugcportal-2k2q, `bindingsNamed` also reports a
      * destructured binding or a parameter, tagged with its kind, so either
      * fails that case's `toBe`. It does not check how many bindings there
      * are, so a second plain `const userId = access.userId` passes it. This
-     * pins the count across every shape, so a second binding of either name
-     * fails here whatever it is bound from.
+     * pins the count across variable declaration, destructured binding, parameter,
+     * and function declaration, so a second binding of either name fails here
+     * whatever it is bound from.
      */
     expect(declarationsNamed(routeFile, "userId")).toEqual(["access.userId"]);
     expect(declarationsNamed(routeFile, "access")).toEqual([
