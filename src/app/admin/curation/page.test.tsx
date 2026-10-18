@@ -905,15 +905,56 @@ describe("the rights-layer well (ugcportal-qfy9)", () => {
 
     const well = layerWell(await renderPage({ edit: "media-1" }), "media-1");
     expect(submittedLayers(well)).toContain(RightsLayer.MUSIC);
+    // And the register says so (ugcportal-hx2, round-2 L1): the row's basis
+    // is accepted, but its signer's current role is not ADMIN, so the gate
+    // does not count it and the register must not list it as cleared.
+    expect(well).not.toContain("MUSIC cleared");
+    expect(well).toContain("MUSIC recorded but not counted");
+    expect(well).toContain("the person who signed it is no longer an admin.");
+    expect(well).toContain("The gate does not treat this layer as cleared.");
+    // The demoted signer and their current role are still shown.
+    expect(well).toContain("demoted@example.com (USER)");
+    expect(well).toContain(
+      "(basis: LICENCE, evidence: rights-evidence/owner-1/music-licence.pdf)",
+    );
+  });
+
+  it("lists a non-MUSIC row whose signer's account is gone as recorded but not counted", async () => {
+    // Not only MUSIC (ugcportal-hx2, round-2 L1): every row's verdict comes
+    // from `layerIsCleared`. A PEOPLE row with no signer — what deleting the
+    // signer's account leaves, since the column is set NULL — is not counted.
+    await createUpload("media-1");
+    await triageWithEveryLayerPresent("media-1");
+    const listing = await prisma.mediaListing.findUniqueOrThrow({
+      where: { mediaId: "media-1" },
+      select: { id: true },
+    });
+    await prisma.mediaRightsClearance.create({
+      data: {
+        listingId: listing.id,
+        layer: RightsLayer.PEOPLE,
+        reason: "Model release on file",
+        clearedByUserId: null,
+      },
+    });
+
+    const well = layerWell(await renderPage({ edit: "media-1" }), "media-1");
+    expect(well).not.toContain("PEOPLE cleared");
+    expect(well).toContain("PEOPLE recorded but not counted");
+    expect(well).toContain("no signer is recorded on it");
+    expect(well).toContain("nobody (no account)");
+    expect(submittedLayers(well)).toContain(RightsLayer.PEOPLE);
   });
 
   describe("a MUSIC row the gate does not count is not listed as cleared (ugcportal-hx2)", () => {
     /*
-      The register's verdict on a MUSIC row comes from the gate's own
-      `musicClearanceBasisProblem`, so a row `layerIsCleared` does not count
-      must not read "MUSIC cleared" while the same well lists MUSIC as not
-      settled. Rows like these are reachable only outside the writer (before
-      the basis column existed, or by hand), so they are created directly.
+      The register's verdict on every row comes from `layerIsCleared` called
+      on that row alone, and its reason from `layerClearanceProblem`, which
+      `layerIsCleared` answers from. So a row the gate does not count never
+      reads "<LAYER> cleared" while the same well lists the layer as not
+      settled. The basis cases below are reachable only outside the writer
+      (before the basis column existed, or by hand), so they are created
+      directly; the demoted-signer and no-signer cases are tested above.
     */
     async function wellWithMusicRow(data: {
       basis: "LICENCE" | "ORIGINAL_SCORE" | "MUTED_DELIVERY" | null;

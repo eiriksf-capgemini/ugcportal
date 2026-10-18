@@ -194,9 +194,12 @@ export async function recordLayerClearance({
   // The basis (ugcportal-hx2), still before the transaction: like the two
   // checks above it is a property of the request, not of any row.
   //
-  // For MUSIC, the same `musicClearanceBasisProblem` the gate reads, so a
-  // row this writes is a row `layerIsCleared` counts and a row it refuses
-  // is one the gate would not — the rule exists once. "Deliver it muted" is
+  // For MUSIC, the same `musicClearanceBasisProblem` the gate reads
+  // (through `layerClearanceProblem`), so a row this writes passes the
+  // gate's basis check and a row it refuses on its basis is one the gate
+  // would not count — the rule exists once. (Whether the gate counts a row
+  // this wrote also turns on its signer still being an admin, which a later
+  // demotion can change.) "Deliver it muted" is
   // refused here by name: the sold file is Media.key, the untouched
   // original, so a clearance resting on muting would sell the track with
   // its audio intact.

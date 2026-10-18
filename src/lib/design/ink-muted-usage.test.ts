@@ -273,7 +273,7 @@ const AUDITED_USAGE: Readonly<Record<string, OccurrenceClassification>> = {
   // `bg-destructive-surface` branch of its enclosing div's own className
   // ternary (the `bg-muted` branch uses text-muted-foreground instead,
   // tracked by dual-meaning-usage.test.ts).
-  "src/app/admin/curation/page.tsx:632:\"mt-2 space-y-1 text-xs text-ink-muted\"": {
+  "src/app/admin/curation/page.tsx:655:\"mt-2 space-y-1 text-xs text-ink-muted\"": {
     surface: "bg-destructive-surface (the blocked-triage error well)",
     pairingIds: ["muted-foreground-on-destructive-surface"],
     lightRatio: 7.7703,

@@ -30,6 +30,9 @@ import {
   isResaleRightsStatus,
   isClearableLayer,
   isSellable,
+  layerClearanceProblem,
+  layerIsCleared,
+  type LayerClearanceProblem,
   triageBlocker,
   unsettledLayers,
   uploaderClearanceBlocker,
@@ -2577,5 +2580,91 @@ describe("ugcportal-hx2: the gate reads a MUSIC clearance's basis", () => {
       basis: true,
       basisEvidence: true,
     });
+  });
+});
+
+describe("layerClearanceProblem: every reason layerIsCleared refuses a row (ugcportal-hx2)", () => {
+  /*
+    The curation register words a not-counted row from this function, and
+    `layerIsCleared` answers `layerClearanceProblem(row) === null`. Each row
+    below is the counted MUSIC row with ONE thing broken, so each refusal is
+    reached on its own, and the table asserts both the problem returned and
+    that `layerIsCleared` refuses the same row — the two cannot part.
+  */
+  const counted: GateLayerClearance = {
+    layer: RightsLayer.MUSIC,
+    reason: "Licence purchased, ref 4412.",
+    basis: ClearanceBasis.LICENCE,
+    basisEvidence: "rights-evidence/owner-1/music-licence.pdf",
+    clearedByUserId: "admin-1",
+    clearedBy: { role: "ADMIN" },
+  };
+
+  const cases: ReadonlyArray<
+    [LayerClearanceProblem, Partial<GateLayerClearance>]
+  > = [
+    ["missing", { basis: null, basisEvidence: null }],
+    [
+      "unrecognised",
+      { basis: "TRUST_ME" as GateLayerClearance["basis"] },
+    ],
+    [
+      "muted_delivery",
+      { basis: ClearanceBasis.MUTED_DELIVERY, basisEvidence: null },
+    ],
+    ["evidence_blank", { basisEvidence: "   " }],
+    [
+      "evidence_unexpected",
+      { basis: ClearanceBasis.ORIGINAL_SCORE, basisEvidence: "x.pdf" },
+    ],
+    ["reason_blank", { reason: "  " }],
+    ["no_signer", { clearedByUserId: null, clearedBy: null }],
+    ["signer_account_gone", { clearedBy: null }],
+    ["signer_not_admin", { clearedBy: { role: "USER" } }],
+  ];
+
+  it("names every problem exactly once", () => {
+    const named = cases.map(([problem]) => problem);
+    expect(new Set(named).size).toBe(named.length);
+    expect(named).toHaveLength(9);
+  });
+
+  for (const [problem, broken] of cases) {
+    it(`returns ${problem}, and layerIsCleared refuses the same row`, () => {
+      const row = { ...counted, ...broken };
+      expect(layerClearanceProblem(row)).toBe(problem);
+      expect(layerIsCleared({ layerClearances: [row] }, row.layer)).toBe(false);
+    });
+  }
+
+  it("returns null for a counted row, which layerIsCleared counts", () => {
+    expect(layerClearanceProblem(counted)).toBeNull();
+    expect(layerIsCleared({ layerClearances: [counted] }, RightsLayer.MUSIC)).toBe(
+      true,
+    );
+  });
+
+  it("does not apply the basis rule off MUSIC: a PEOPLE row with no basis counts", () => {
+    const people: GateLayerClearance = {
+      ...counted,
+      layer: RightsLayer.PEOPLE,
+      basis: null,
+      basisEvidence: null,
+    };
+    expect(layerClearanceProblem(people)).toBeNull();
+    expect(layerIsCleared({ layerClearances: [people] }, RightsLayer.PEOPLE)).toBe(
+      true,
+    );
+  });
+
+  it("reports the signer's demotion on a non-MUSIC row too", () => {
+    const people: GateLayerClearance = {
+      ...counted,
+      layer: RightsLayer.PEOPLE,
+      basis: null,
+      basisEvidence: null,
+      clearedBy: { role: "USER" },
+    };
+    expect(layerClearanceProblem(people)).toBe("signer_not_admin");
   });
 });
