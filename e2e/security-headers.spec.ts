@@ -9,7 +9,7 @@ for (const path of ["/", "/admin/settings/users", "/api/media/preview/does-not-e
     const res = await request.get(path, { maxRedirects: 0 });
     const h = res.headers();
     expect(h["x-frame-options"]).toBe("DENY");
-    expect(h["content-security-policy"]).toContain("frame-ancestors 'none'");
+    expect(h["content-security-policy"]).toBe("frame-ancestors 'none'");
     expect(h["referrer-policy"]).toBe("strict-origin-when-cross-origin");
   });
 }

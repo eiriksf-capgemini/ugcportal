@@ -1,15 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import nextConfig from "./next.config";
+import nextConfig, { securityHeaders } from "./next.config";
 
 describe("next.config headers (ugcportal-7ex5)", () => {
   it("sends the anti-framing and referrer headers on every path", async () => {
     const rules = await nextConfig.headers!();
     expect(rules).toHaveLength(1);
     expect(rules[0].source).toBe("/:path*");
+    expect(rules[0].headers).toBe(securityHeaders);
     const h = Object.fromEntries(rules[0].headers.map((x) => [x.key, x.value]));
     expect(h["X-Frame-Options"]).toBe("DENY");
-    expect(h["Content-Security-Policy"]).toContain("frame-ancestors 'none'");
+    expect(h["Content-Security-Policy"]).toBe("frame-ancestors 'none'");
     expect(h["Referrer-Policy"]).toBe("strict-origin-when-cross-origin");
   });
 
