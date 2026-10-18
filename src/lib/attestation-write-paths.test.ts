@@ -715,7 +715,9 @@ describe("ugcportal-gkax: the late-attestation route names the session's user to
      * test's K2 case sends a list of actor keys and can only ever cover that
      * list; a binding that reads a key nobody listed passed both suites in
      * review. This holds the route's source to the rule `rawBodyLeaksIn`
-     * states (the request read once, by `readJsonBody`; the parsed body
+     * states (the request read by `readJsonBody` for its body and by
+     * `isSameOriginRequest` for two headers, Origin and Sec-Fetch-Site, and by
+     * nothing else; the parsed body
      * handed whole to `attestationFromBody`; inside that, the object read
      * only through the shape check and the parser's reader), so a read of any
      * key into a natural binding shape (destructured, parameter, alias,
