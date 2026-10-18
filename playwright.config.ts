@@ -10,8 +10,8 @@ const E2E_PORT = process.env["UGCPORTAL_E2E_PORT"] ? parseInt(process.env["UGCPO
  * Not wired into the `quality` CI job in this PR: that job runs lint/test/
  * build/typecheck against no running server and no database, and this suite
  * needs both (`npm run dev` against a real `prisma db push`'d SQLite file,
- * per the bead's own verification plan: see UGCPORTAL_E2E_PORT env var for
- * the port, default localhost:3000). It is a locally (and manually, for now)
+ * served on the port the UGCPORTAL_E2E_PORT env var selects, default 3000).
+ * It is a locally (and manually, for now)
  * run check, same as the bead describes — a CI job for it is a reasonable
  * fase-2-or-later follow-up, not something this phase's scope requires.
  */
