@@ -128,7 +128,9 @@ export function userIdBindingsIn(file: string): string[] {
  * other declaration as its kind and then the text of `node.parent`, so it does
  * not read as the one plain declaration a caller expects. That text is where the
  * two scans differ: for a destructured binding it is the pattern (`{ userId }`),
- * where `bindingsNamed` reports the whole declaration or parameter.
+ * for a parameter the enclosing function, for a `catch` clause the whole clause
+ * (`catch (userId) {}`); `bindingsNamed` reports the declaration or parameter
+ * itself (`{ userId }: X`, `access: Y`) and, for a `catch`, the declaration (`userId`).
  */
 export function declarationsNamed(file: string, name: string): string[] {
   const source = sourceFileOf(file);
