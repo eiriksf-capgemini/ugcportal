@@ -116,10 +116,10 @@ function triageErrorPath(
  * and no multi-select, because the whole point of the bead is that a
  * justification covers the layer it names and no other.
  *
- * `reason` is the one piece of free text on this screen, and it is never
- * echoed into a redirect, a code or a message: it goes to the column and
- * nowhere else. The codes below say what was wrong; none of them repeats
- * what was typed.
+ * `reason` and the MUSIC layer's `basisEvidence` (ugcportal-hx2) are this
+ * form's free text, and neither is ever echoed into a redirect, a code or a
+ * message: each goes to its column and nowhere else. The codes below say
+ * what was wrong; none of them repeats what was typed.
  */
 export async function recordClearance(formData: FormData) {
   const session = await requireAdmin();
@@ -147,6 +147,16 @@ export async function recordClearance(formData: FormData) {
   }
 
   const reason = formData.get("reason");
+  // The MUSIC layer's basis and its licence evidence (ugcportal-hx2). Passed
+  // through as given — a missing field becomes `null`, i.e. "no basis" — and
+  // judged in the write, which is the one place that decides which basis a
+  // layer may carry. Checking here as well would be the second copy of that
+  // rule. Only the MUSIC form renders these fields (clearance-form.test.tsx,
+  // "renders no basis or evidence field on any other layer"); any other
+  // layer that arrives carrying one is refused by the write, not ignored
+  // here.
+  const basis = formData.get("basis");
+  const basisEvidence = formData.get("basisEvidence");
   const outcome = await recordLayerClearance({
     mediaId,
     layer,
@@ -155,6 +165,8 @@ export async function recordClearance(formData: FormData) {
     // justification was given, which the write refuses with a sentence the
     // admin can act on.
     reason: typeof reason === "string" ? reason : "",
+    basis: typeof basis === "string" ? basis : null,
+    basisEvidence: typeof basisEvidence === "string" ? basisEvidence : null,
     // From the session, never from the form. The clearance names the person
     // the gate will re-read the role of; a form-supplied actor would let a
     // caller sign an admin's name to their own justification.
@@ -180,11 +192,11 @@ export async function recordClearance(formData: FormData) {
  * one of a closed set of codes for everything an admin can legitimately get
  * wrong.
  *
- * THIS ACTION DECIDES NOTHING ABOUT SELLABILITY. It parses three form fields
- * and hands them to `recordPrice` (src/lib/curation-price-write.ts), which is
- * where the uploader's clearance (K2) and the watermarked preview (K3) are
- * checked — the same function POST /api/admin/curation/[id]/price calls. An
- * action that re-implemented either check would be the second copy that
+ * THIS ACTION DECIDES NOTHING ABOUT SELLABILITY. It parses the price form's
+ * fields and hands them to `recordPrice` (src/lib/curation-price-write.ts),
+ * which is where the uploader's clearance (K2) and the watermarked preview
+ * (K3) are checked — the same function POST /api/admin/curation/[id]/price
+ * calls. An action that re-implemented either check would be the second copy that
  * eventually disagrees, on the one write in this product that is about money.
  *
  * A BLANK AMOUNT IS AN UN-PRICING, NOT A MISTAKE. `formData.get` returns
