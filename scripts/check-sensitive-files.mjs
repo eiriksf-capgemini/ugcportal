@@ -34,15 +34,6 @@ import { isMainModule } from "./lib/is-main.mjs";
 export const SENSITIVE_PATTERN = /^(?:\.claude\/settings(?:\.local)?\.json|CLAUDE\.md)$/;
 
 /**
- * @param {string[]} changedFiles repo-root-relative paths of every file the
- *   PR (or push) changed
- * @returns {{ ok: boolean, sensitive: string[], nonSensitive: string[] }}
- *   `ok` is true when there is nothing to split out: no sensitive file
- *   changed at all, or every changed file is sensitive. `ok` is false only
- *   when at least one sensitive file is changed alongside at least one
- *   non-sensitive file.
- */
-/**
  * Splits `CHANGED_FILES` into paths, and classifies the two ways it can
  * arrive carrying nothing (ugcportal-kssp, mitigation 1).
  *
@@ -77,6 +68,15 @@ export function classifyChangedFilesInput(raw) {
   return { files, verdict: files.length === 0 ? "empty" : "ok" };
 }
 
+/**
+ * @param {string[]} changedFiles repo-root-relative paths of every file the
+ *   PR (or push) changed
+ * @returns {{ ok: boolean, sensitive: string[], nonSensitive: string[] }}
+ *   `ok` is true when there is nothing to split out: no sensitive file
+ *   changed at all, or every changed file is sensitive. `ok` is false only
+ *   when at least one sensitive file is changed alongside at least one
+ *   non-sensitive file.
+ */
 export function checkSensitiveFiles(changedFiles) {
   const sensitive = changedFiles.filter((f) => SENSITIVE_PATTERN.test(f));
   const nonSensitive = changedFiles.filter((f) => !SENSITIVE_PATTERN.test(f));

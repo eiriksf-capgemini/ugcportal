@@ -6,7 +6,7 @@
  * same step-2 paragraph of pr-review-merge writes both, so a reviewer who
  * skips the paragraph leaves neither and that question prints 0 (round-1
  * finding M1). The check instead starts from what every review round writes,
- * the round marker, and reports three classes for a human to look at. A PR
+ * the round marker, and reports four classes (A-D below) for a human to look at. A PR
  * is "round-reviewed" when some comment's FIRST LINE is exactly
  * `<!-- ugcportal-review-round: N -->` (or `N approx`); its LATEST such
  * comment is the PR's current verdict. A line is matched only when it is
