@@ -6,6 +6,7 @@ import {
   toOwnerMedia,
 } from "@/lib/media-access";
 import { mediaPreviewColumns } from "@/lib/media";
+import { isSameOriginRequest } from "@/lib/origin";
 import { prisma } from "@/lib/prisma";
 import { publishOperatorRefusal } from "@/lib/publish-authority";
 import { publishGateRefusal, publishGateSources } from "@/lib/publish-gates";
@@ -53,7 +54,7 @@ type RouteContext = { params: Promise<{ id: string }> };
  * Letting the write decide means the database's current state is what the
  * answer is based on.
  */
-export async function POST(_request: Request, { params }: RouteContext) {
+export async function POST(request: Request, { params }: RouteContext) {
   const { id } = await params;
 
   const access = await requireOwnedMedia(id);
@@ -62,6 +63,14 @@ export async function POST(_request: Request, { params }: RouteContext) {
       { error: access.error },
       { status: access.status },
     );
+  }
+
+  // Second lock, after the auth gate so an anonymous caller still gets 401:
+  // the session cookie is SameSite=Lax and that is the only thing between a
+  // cross-site request and this write today. See src/lib/origin.ts and
+  // ugcportal-qf9v. Route handlers get no framework Origin check.
+  if (!isSameOriginRequest(request)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   // AND OWNING THE ROW IS NOT PERMISSION TO PUBLISH IT (ugcportal-9gt1).
@@ -309,7 +318,7 @@ export async function POST(_request: Request, { params }: RouteContext) {
  * DELETE on this sub-resource ("the published state"), not on the media item;
  * DELETE /api/media/[id] still deletes the row and its objects.
  */
-export async function DELETE(_request: Request, { params }: RouteContext) {
+export async function DELETE(request: Request, { params }: RouteContext) {
   const { id } = await params;
 
   const access = await requireOwnedMedia(id);
@@ -318,6 +327,14 @@ export async function DELETE(_request: Request, { params }: RouteContext) {
       { error: access.error },
       { status: access.status },
     );
+  }
+
+  // Second lock, after the auth gate so an anonymous caller still gets 401:
+  // the session cookie is SameSite=Lax and that is the only thing between a
+  // cross-site request and this write today. See src/lib/origin.ts and
+  // ugcportal-qf9v. Route handlers get no framework Origin check.
+  if (!isSameOriginRequest(request)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   const { count } = await prisma.media.updateMany({

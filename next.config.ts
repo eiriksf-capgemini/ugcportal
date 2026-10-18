@@ -1,6 +1,24 @@
 import type { NextConfig } from "next";
 
+/**
+ * Anti-framing and referrer headers sent on every response (ugcportal-7ex5).
+ *
+ * Deliberately only frame-ancestors in the Content-Security-Policy: no
+ * script-src/style-src/default-src, so nothing here can block the site's own
+ * scripts or styles. A full CSP is a separate decision (consent-gated
+ * analytics loader). Strict-Transport-Security is the TLS proxy's.
+ */
+const securityHeaders = [
+  { key: "X-Frame-Options", value: "DENY" },
+  { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+  { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+];
+
 const nextConfig: NextConfig = {
+  async headers() {
+    return [{ source: "/:path*", headers: securityHeaders }];
+  },
+
   // Emits a self-contained `.next/standalone` build (server + only the
   // production node_modules actually reachable at runtime) so the
   // production Docker image doesn't need the full node_modules tree or
