@@ -651,12 +651,15 @@ describe("ugcportal-15r K3: only the named places write an attestation", () => {
      * that cannot say where its value came from — its callers decide that.
      * So a parameter is accepted only through `parameterCallSites`
      * (ugcportal-y1tn, folded into ugcportal-2k2q): the function must have
-     * at least one call, be called from nowhere this file cannot see, and
-     * every call must pass at that position an identifier whose own `const`
-     * binding is the session's. Each call is checked by name and line, so a
-     * call passing anything else fails naming that line. A parameter this
-     * loop never got to the end of is not in `linked`, and falls through to
-     * the strict check below like every other shape.
+     * at least one call, be called from nowhere this file cannot see, the
+     * parameter must be neither a rest parameter nor carry a default
+     * initialiser (which would supply the value whenever a call passes
+     * `undefined`, ugcportal-pm4t), and every call must pass at that
+     * position an identifier whose own `const` binding is the session's.
+     * Each call is checked by name and line, so a call passing anything
+     * else fails naming that line. A parameter this loop never got to the
+     * end of is not in `linked`, and falls through to the strict check
+     * below like every other shape.
      */
     const file = path.join(SRC_ROOT, WRITE_PATH);
     const sessionUserId = /session\??\.user\??\.id/;

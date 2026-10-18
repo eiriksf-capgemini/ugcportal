@@ -257,6 +257,30 @@ describe("parameterCallSites", () => {
     ]);
   });
 
+  it("reports a default initialiser, a second source of the value whenever a call passes undefined", () => {
+    // ugcportal-pm4t: the call passes the session's `userId`, which is
+    // `string | undefined`; when it is undefined the parameter takes
+    // `body.actor` instead, and no call site shows that.
+    const file = fixture(
+      [
+        handler("handle(body, userId)"),
+        `function handle(body: { actor: string }, userId: string = body.actor) { return userId; }`,
+      ].join("\n"),
+    );
+
+    expect(parameterCallSites(file, "userId")).toEqual([
+      {
+        parameter: "Parameter: userId: string = body.actor",
+        function: "handle",
+        position: 1,
+        calls: [{ line: 6, argument: "userId", binding: "session?.user?.id", reason: null }],
+        problems: [
+          "a default initialiser at line 8: body.actor, which supplies userId whenever a call passes undefined",
+        ],
+      },
+    ]);
+  });
+
   it("skips a leading `this` parameter, which takes no argument, when reading a call's argument", () => {
     const file = fixture(
       [

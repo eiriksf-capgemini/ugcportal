@@ -297,11 +297,13 @@ export type ParameterLink = {
   /** Every call of that function in this file, in source order. */
   readonly calls: readonly ParameterCallSite[];
   /**
-   * Why `calls` might not be every way the parameter gets its value. Empty
-   * only when the function is a named, non-exported `function` declaration,
-   * the parameter is not a rest parameter, the function is referenced in
-   * this file ONLY as the callee of a call, there is at least one such call,
-   * and no call spreads an argument at or before the parameter's position.
+   * Why `calls` might not be every way the parameter gets its value.
+   * Empty only when the function is a named, non-exported `function`
+   * declaration, the parameter is not a rest parameter and has no default
+   * initialiser (a second source of its value whenever a call passes
+   * `undefined`), the function is referenced in this file ONLY as the
+   * callee of a call, there is at least one such call, and no call spreads
+   * an argument at or before the parameter's position.
    */
   readonly problems: readonly string[];
 };
@@ -411,6 +413,14 @@ export function parameterCallSites(file: string, name: string): ParameterLink[] 
       let functionName: string | null = null;
 
       if (node.dotDotDotToken !== undefined) problems.push("a rest parameter");
+      // A default is a second source of the value, beside the argument: it
+      // applies whenever a call passes `undefined` at that position, which
+      // the call's argument text does not show (ugcportal-pm4t).
+      if (node.initializer !== undefined) {
+        problems.push(
+          `a default initialiser at line ${lineOf(node.initializer)}: ${node.initializer.getText(source)}, which supplies ${name} whenever a call passes undefined`,
+        );
+      }
       if (!ts.isFunctionDeclaration(owner) || owner.name === undefined) {
         problems.push(
           `enclosing ${ts.SyntaxKind[owner.kind]} has no declared name the scan can follow`,
