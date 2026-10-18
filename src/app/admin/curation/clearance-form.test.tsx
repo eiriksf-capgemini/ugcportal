@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { CurationClearanceForm } from "@/app/admin/curation/clearance-form";
-import { RightsLayer } from "@/generated/prisma/enums";
+import { ClearanceBasis, RightsLayer } from "@/generated/prisma/enums";
 import { CLEARABLE_LAYERS, TRIAGE_FACTS } from "@/lib/resale-rights";
 
 /**
@@ -117,5 +117,62 @@ describe("the layer the form submits", () => {
       return id;
     });
     expect(new Set(ids).size).toBe(CLEARABLE_LAYERS.length);
+  });
+});
+
+describe("ugcportal-hx2: the MUSIC form asks for a basis", () => {
+  /** The `<select name="basis">` element's markup, or null. */
+  function basisSelect(markup: string): string | null {
+    return /<select[^>]*name="basis"[\s\S]*?<\/select>/.exec(markup)?.[0] ?? null;
+  }
+
+  /** The non-empty `value`s the basis select offers, in order. */
+  function offeredBases(markup: string): string[] {
+    const select = basisSelect(markup) ?? "";
+    return [...select.matchAll(/<option[^>]*value="([^"]*)"/g)]
+      .map((match) => match[1])
+      .filter((value) => value !== "");
+  }
+
+  it("offers exactly LICENCE and ORIGINAL_SCORE, and never MUTED_DELIVERY", () => {
+    const markup = render(RightsLayer.MUSIC);
+    expect(offeredBases(markup)).toEqual([
+      ClearanceBasis.LICENCE,
+      ClearanceBasis.ORIGINAL_SCORE,
+    ]);
+    expect(markup).not.toContain(`value="${ClearanceBasis.MUTED_DELIVERY}"`);
+  });
+
+  it("starts on an empty option, so no basis is submitted by default", () => {
+    // A select whose first real option were pre-selected would submit
+    // LICENCE for an admin who never looked at the box.
+    const select = basisSelect(render(RightsLayer.MUSIC)) ?? "";
+    const selected = /<option[^>]*selected[^>]*value="([^"]*)"|<option[^>]*value="([^"]*)"[^>]*selected/.exec(
+      select,
+    );
+    expect(selected).not.toBeNull();
+    expect(selected?.[1] ?? selected?.[2]).toBe("");
+  });
+
+  it("has an evidence input for the licence", () => {
+    const markup = render(RightsLayer.MUSIC);
+    expect(markup).toMatch(/<input[^>]*name="basisEvidence"/);
+    expect(markup).toContain("For a licence only");
+  });
+
+  it("says that delivering the video muted is not a clearance basis (K3)", () => {
+    expect(render(RightsLayer.MUSIC)).toContain(
+      "Delivering the video muted is not a clearance basis: the file a buyer receives is the raw original with its sound intact",
+    );
+  });
+
+  it("renders no basis or evidence field on any other layer (K4)", () => {
+    // The write refuses a basis on these layers; a form that offered one
+    // would be a box whose every choice fails.
+    for (const layer of CLEARABLE_LAYERS.filter((l) => l !== RightsLayer.MUSIC)) {
+      const markup = render(layer);
+      expect(markup, layer).not.toContain('name="basis"');
+      expect(markup, layer).not.toContain('name="basisEvidence"');
+    }
   });
 });

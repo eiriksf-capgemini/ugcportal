@@ -230,7 +230,8 @@ function returnsNull(statement: ts.Statement): boolean {
  * rule, all of it checked over the AST of that one file:
  *
  *  A. `POST` reads its `request` parameter only as the first argument of a
- *     `readJsonBody(…)` call, calls `readJsonBody` exactly once, and never
+ *     `readJsonBody(…)` call (or of `isSameOriginRequest(…)`, which reads
+ *     headers only; ugcportal-qf9v), calls `readJsonBody` exactly once, and never
  *     names `arguments`.
  *  B. The name bound from that call is read only as `.ok`, `.status` or
  *     `.error`, or as `.value` passed as the sole argument of
@@ -274,7 +275,12 @@ export function rawBodyLeaksIn(file: string): string[] {
   }
   for (const ref of referencesTo(post.body, requestParam.text)) {
     const call = ref.parent;
-    if (!(isCallTo(call, "readJsonBody") && call.arguments[0] === ref)) {
+    // `isSameOriginRequest(request)` (ugcportal-qf9v) reads two headers and
+    // never the body, so it is the one other permitted use of the request.
+    const permitted =
+      (isCallTo(call, "readJsonBody") || isCallTo(call, "isSameOriginRequest")) &&
+      call.arguments[0] === ref;
+    if (!permitted) {
       leak(ref, "request read other than by readJsonBody");
     }
   }
@@ -748,7 +754,9 @@ describe("ugcportal-gkax: the late-attestation route names the session's user to
      * test's K2 case sends a list of actor keys and can only ever cover that
      * list; a binding that reads a key nobody listed passed both suites in
      * review. This holds the route's source to the rule `rawBodyLeaksIn`
-     * states (the request read once, by `readJsonBody`; the parsed body
+     * states (the request read by `readJsonBody` for its body and by
+     * `isSameOriginRequest` for two headers, Origin and Sec-Fetch-Site, and by
+     * nothing else; the parsed body
      * handed whole to `attestationFromBody`; inside that, the object read
      * only through the shape check and the parser's reader), so a read of any
      * key into a natural binding shape (destructured, parameter, alias,

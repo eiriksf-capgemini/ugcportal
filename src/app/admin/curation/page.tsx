@@ -17,6 +17,9 @@ import {
   MEDIA_GATE_SELECT,
   TRIAGE_FACTS,
   evaluateSellability,
+  layerClearanceProblem,
+  layerIsCleared,
+  type LayerClearanceProblem,
   unsettledLayers,
 } from "@/lib/resale-rights";
 import {
@@ -74,6 +77,52 @@ export const UPLOAD_LIST_ID = "curation-uploads";
  * styling choice either side could change; the id is there to be matched.
  */
 export const ERROR_BANNER_ID = "curation-triage-error";
+
+/**
+ * Why a stored clearance row does not settle its layer, in words, one per
+ * `layerClearanceProblem` answer (ugcportal-hx2). A `switch` ending in a
+ * `never` assignment, so a problem added there and not worded here fails
+ * `tsc` rather than rendering nothing.
+ *
+ * Only the wording lives here. Whether a row counts is decided by
+ * `layerIsCleared`, called on that one row, and why it does not by
+ * `layerClearanceProblem`, which `layerIsCleared` itself answers from — no
+ * condition written in this file decides either, so a row the gate does not
+ * count is never listed as "cleared".
+ *
+ * Which of these the product can reach: `signer_not_admin` (the signer was
+ * demoted after signing) and `no_signer` (the signer's account was deleted,
+ * which sets the column NULL). The writer refuses every basis problem and a
+ * blank reason, and records the acting admin as the signer, so the rest are
+ * reachable only with a row it did not store — one written before the basis
+ * column existed, or by hand.
+ */
+function notCountedBecause(problem: LayerClearanceProblem): string {
+  switch (problem) {
+    case "missing":
+      return "it states no basis — a licence for the track or the uploader’s own original score — and a written reason on its own is not one.";
+    case "unrecognised":
+      return "its basis is not one a music clearance can rest on.";
+    case "muted_delivery":
+      return "its basis is muted delivery, which is not a clearance while the buyer receives the raw original with its sound intact.";
+    case "evidence_blank":
+      return "its licence basis has no evidence reference saying where the licence is.";
+    case "evidence_unexpected":
+      return "it carries licence evidence on a basis that takes none.";
+    case "reason_blank":
+      return "it has no written justification.";
+    case "no_signer":
+      return "no signer is recorded on it — none was, or the account that signed it has since been deleted.";
+    case "signer_account_gone":
+      return "the account recorded as its signer no longer exists.";
+    case "signer_not_admin":
+      return "the person who signed it is no longer an admin.";
+    default: {
+      const unworded: never = problem;
+      return unworded;
+    }
+  }
+}
 
 /**
  * What the page needs about one upload.
@@ -178,6 +227,12 @@ const UPLOAD_SELECT = {
         select: {
           layer: true,
           reason: true,
+          // The MUSIC layer's basis (ugcportal-hx2): `layerIsCleared` reads
+          // both, so `unsettledLayers` below and the register's per-row
+          // verdict need them, and the register shows the basis beside the
+          // reason.
+          basis: true,
+          basisEvidence: true,
           clearedAt: true,
           clearedByUserId: true,
           clearedBy: { select: { name: true, email: true, role: true } },
@@ -680,22 +735,68 @@ export default async function AdminCurationPage({
                     </p>
                     {clearances.length > 0 ? (
                       <dl className="mt-2 space-y-1 text-xs text-muted-foreground">
-                        {clearances.map((recorded) => (
-                          <div key={recorded.layer}>
-                            <dt className="inline font-medium">
-                              {recorded.layer} cleared:{" "}
-                            </dt>
-                            <dd className="inline">
-                              {recorded.reason} —{" "}
+                        {clearances.map((recorded) => {
+                          // The gate's own verdict on this one row
+                          // (ugcportal-hx2): `layerIsCleared` called with
+                          // the row alone, the shape the gate reads. Only a
+                          // row it counts is listed as "cleared"; any other
+                          // says why, from `layerClearanceProblem`, the
+                          // function `layerIsCleared` answers from.
+                          const counted = layerIsCleared(
+                            { layerClearances: [recorded] },
+                            recorded.layer,
+                          );
+                          const problem = counted
+                            ? null
+                            : layerClearanceProblem(recorded);
+                          const basis = recorded.basis
+                            ? ` (basis: ${recorded.basis}${
+                                recorded.basisEvidence?.trim()
+                                  ? `, evidence: ${recorded.basisEvidence.trim()}`
+                                  : ""
+                              })`
+                            : null;
+                          const signer = (
+                            <>
+                              —{" "}
                               {recorded.clearedBy?.name ??
                                 recorded.clearedBy?.email ??
                                 recorded.clearedByUserId ??
                                 "nobody"}{" "}
                               ({recorded.clearedBy?.role ?? "no account"}) ·{" "}
                               {dateTimeFormat.format(recorded.clearedAt)}
-                            </dd>
-                          </div>
-                        ))}
+                            </>
+                          );
+                          return counted ? (
+                            <div key={recorded.layer}>
+                              <dt className="inline font-medium">
+                                {recorded.layer} cleared:{" "}
+                              </dt>
+                              <dd className="inline">
+                                {recorded.reason}
+                                {basis} {signer}
+                              </dd>
+                            </div>
+                          ) : (
+                            <div key={recorded.layer}>
+                              <dt className="inline font-medium">
+                                {recorded.layer} recorded but not counted:{" "}
+                              </dt>
+                              <dd className="inline">
+                                {recorded.reason}
+                                {basis} {signer}. Not counted because{" "}
+                                {problem === null
+                                  ? // Unreachable while `layerIsCleared`
+                                    // answers `layerClearanceProblem(row)
+                                    // === null`; worded rather than left
+                                    // blank if the two ever part.
+                                    "the gate does not count it."
+                                  : notCountedBecause(problem)}{" "}
+                                The gate does not treat this layer as cleared.
+                              </dd>
+                            </div>
+                          );
+                        })}
                       </dl>
                     ) : null}
                     {clearableBlocking.length === 0 ? (

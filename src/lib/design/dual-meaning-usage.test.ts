@@ -304,9 +304,13 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   // the label was text-ink-muted (tuned for the near-black scale that well
   // used to read) and is text-muted-foreground now, the same flip the
   // sibling rights screen's own wells made.
+  //
+  // text-muted-foreground: 1 -> 3 (ugcportal-hx2): the MUSIC form's basis
+  // select and licence-evidence input each carry a helper line under their
+  // label, inside the same `bg-muted` rights-layer well as the first one.
   "src/app/admin/curation/clearance-form.tsx": {
     "text-ink": 1,
-    "text-muted-foreground": 1,
+    "text-muted-foreground": 3,
   },
   // ugcportal-yzo7: the price form. One `text-ink`, in the shared field
   // class its number input and its currency select both take, whose own

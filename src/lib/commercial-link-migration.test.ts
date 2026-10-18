@@ -216,9 +216,11 @@ describe("ugcportal-qnq9.2.1: adding the commercial link to an existing database
     // The entries are the catch-up applied after this bead's own
     // migration: 20261010100000 (ugcportal-aqw) adds `coversUploadsBefore`
     // and `coversFutureUploads` to ResaleRightsReview, and 20261017120000
-    // (ugcportal-74w.1) adds `licenceTerms` to MediaListing; each rewrites
-    // that table's stored `sql`. Nothing on this bead's own side of the
-    // schema moves, which is the claim being made.
+    // (ugcportal-74w.1) adds `licenceTerms` to MediaListing, and
+    // 20261018120000 (ugcportal-hx2) adds `basis` and `basisEvidence` to
+    // MediaRightsClearance; each rewrites that table's stored `sql`. Nothing
+    // on this bead's own side of the schema moves, which is the claim being
+    // made.
     const redefined = after
       .filter(
         (entry) =>
@@ -226,7 +228,11 @@ describe("ugcportal-qnq9.2.1: adding the commercial link to an existing database
       )
       .map(key)
       .sort();
-    expect(redefined).toEqual(["table:MediaListing", "table:ResaleRightsReview"]);
+    expect(redefined).toEqual([
+      "table:MediaListing",
+      "table:MediaRightsClearance",
+      "table:ResaleRightsReview",
+    ]);
   });
 
   it("leaves the pre-existing item's row byte-for-byte as it was", async () => {

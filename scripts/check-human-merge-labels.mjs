@@ -6,7 +6,7 @@
  * same step-2 paragraph of pr-review-merge writes both, so a reviewer who
  * skips the paragraph leaves neither and that question prints 0 (round-1
  * finding M1). The check instead starts from what every review round writes,
- * the round marker, and reports three classes for a human to look at. A PR
+ * the round marker, and reports four classes (A-D below) for a human to look at. A PR
  * is "round-reviewed" when some comment's FIRST LINE is exactly
  * `<!-- ugcportal-review-round: N -->` (or `N approx`); its LATEST such
  * comment is the PR's current verdict. A line is matched only when it is
@@ -73,9 +73,15 @@ export const COMMENT_WINDOW = 100;
 /** `gh pr list --json files` fetches files(first: 100). */
 export const FILE_WINDOW = 100;
 
+/**
+ * Mirrors the sensitive-path list in .claude/skills/pr-review-merge/SKILL.md
+ * step 2, which is the authority: change that list first, then this one and
+ * its test rows in the same PR.
+ */
 const SENSITIVE_PATH_RES = [
   /^\.claude\/settings(\.local)?\.json$/,
   /^\.claude\/skills\//,
+  /^\.claude\/agents\//,
   /^CLAUDE\.md$/,
   /^\.github\/workflows\//,
   /(^|\/)docker-compose\.yml$/,

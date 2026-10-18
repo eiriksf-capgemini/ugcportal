@@ -863,6 +863,9 @@ describe("the rights-layer well (ugcportal-qfy9)", () => {
         listingId: listing.id,
         layer: RightsLayer.MUSIC,
         reason: "Licence purchased, ref 4412",
+        // A MUSIC clearance counts only with a basis (ugcportal-hx2).
+        basis: "LICENCE",
+        basisEvidence: "rights-evidence/owner-1/music-licence.pdf",
         clearedByUserId: "admin-1",
       },
     });
@@ -893,12 +896,124 @@ describe("the rights-layer well (ugcportal-qfy9)", () => {
         listingId: listing.id,
         layer: RightsLayer.MUSIC,
         reason: "Licence purchased",
+        // A MUSIC clearance counts only with a basis (ugcportal-hx2).
+        basis: "LICENCE",
+        basisEvidence: "rights-evidence/owner-1/music-licence.pdf",
         clearedByUserId: "demoted-1",
       },
     });
 
     const well = layerWell(await renderPage({ edit: "media-1" }), "media-1");
     expect(submittedLayers(well)).toContain(RightsLayer.MUSIC);
+    // And the register says so (ugcportal-hx2, round-2 L1): the row's basis
+    // is accepted, but its signer's current role is not ADMIN, so the gate
+    // does not count it and the register must not list it as cleared.
+    expect(well).not.toContain("MUSIC cleared");
+    expect(well).toContain("MUSIC recorded but not counted");
+    expect(well).toContain("the person who signed it is no longer an admin.");
+    expect(well).toContain("The gate does not treat this layer as cleared.");
+    // The demoted signer and their current role are still shown.
+    expect(well).toContain("demoted@example.com (USER)");
+    expect(well).toContain(
+      "(basis: LICENCE, evidence: rights-evidence/owner-1/music-licence.pdf)",
+    );
+  });
+
+  it("lists a non-MUSIC row whose signer's account is gone as recorded but not counted", async () => {
+    // Not only MUSIC (ugcportal-hx2, round-2 L1): every row's verdict comes
+    // from `layerIsCleared`. A PEOPLE row with no signer — what deleting the
+    // signer's account leaves, since the column is set NULL — is not counted.
+    await createUpload("media-1");
+    await triageWithEveryLayerPresent("media-1");
+    const listing = await prisma.mediaListing.findUniqueOrThrow({
+      where: { mediaId: "media-1" },
+      select: { id: true },
+    });
+    await prisma.mediaRightsClearance.create({
+      data: {
+        listingId: listing.id,
+        layer: RightsLayer.PEOPLE,
+        reason: "Model release on file",
+        clearedByUserId: null,
+      },
+    });
+
+    const well = layerWell(await renderPage({ edit: "media-1" }), "media-1");
+    expect(well).not.toContain("PEOPLE cleared");
+    expect(well).toContain("PEOPLE recorded but not counted");
+    expect(well).toContain("no signer is recorded on it");
+    expect(well).toContain("nobody (no account)");
+    expect(submittedLayers(well)).toContain(RightsLayer.PEOPLE);
+  });
+
+  describe("a MUSIC row the gate does not count is not listed as cleared (ugcportal-hx2)", () => {
+    /*
+      The register's verdict on every row comes from `layerIsCleared` called
+      on that row alone, and its reason from `layerClearanceProblem`, which
+      `layerIsCleared` answers from. So a row the gate does not count never
+      reads "<LAYER> cleared" while the same well lists the layer as not
+      settled. The basis cases below are reachable only outside the writer
+      (before the basis column existed, or by hand), so they are created
+      directly; the demoted-signer and no-signer cases are tested above.
+    */
+    async function wellWithMusicRow(data: {
+      basis: "LICENCE" | "ORIGINAL_SCORE" | "MUTED_DELIVERY" | null;
+      basisEvidence: string | null;
+    }): Promise<string> {
+      await createUpload("media-1");
+      await triageWithEveryLayerPresent("media-1");
+      const listing = await prisma.mediaListing.findUniqueOrThrow({
+        where: { mediaId: "media-1" },
+        select: { id: true },
+      });
+      await prisma.mediaRightsClearance.create({
+        data: {
+          listingId: listing.id,
+          layer: RightsLayer.MUSIC,
+          reason: "Track is fine, ref 7781",
+          ...data,
+          clearedByUserId: "admin-1",
+        },
+      });
+      return layerWell(await renderPage({ edit: "media-1" }), "media-1");
+    }
+
+    it("says a MUSIC row with no basis is recorded but not counted, and not cleared", async () => {
+      const well = await wellWithMusicRow({ basis: null, basisEvidence: null });
+      expect(well).not.toContain("MUSIC cleared");
+      expect(well).toContain("MUSIC recorded but not counted");
+      expect(well).toContain("it states no basis");
+      expect(well).toContain("The gate does not treat this layer as cleared.");
+      // The reason is still shown, so the admin can see what was recorded.
+      expect(well).toContain("Track is fine, ref 7781");
+      // And it agrees with the rest of the well: MUSIC is still blocking.
+      expect(submittedLayers(well)).toContain(RightsLayer.MUSIC);
+    });
+
+    it("says a MUTED_DELIVERY row is recorded but not counted, and not cleared", async () => {
+      const well = await wellWithMusicRow({
+        basis: "MUTED_DELIVERY",
+        basisEvidence: null,
+      });
+      expect(well).not.toContain("MUSIC cleared");
+      expect(well).toContain("MUSIC recorded but not counted");
+      expect(well).toContain("its basis is muted delivery");
+      expect(well).toContain("The gate does not treat this layer as cleared.");
+      expect(submittedLayers(well)).toContain(RightsLayer.MUSIC);
+    });
+
+    it("still lists a LICENCE row with evidence as cleared, with its basis and evidence", async () => {
+      const well = await wellWithMusicRow({
+        basis: "LICENCE",
+        basisEvidence: "rights-evidence/owner-1/music-licence.pdf",
+      });
+      expect(well).toContain("MUSIC cleared");
+      expect(well).toContain(
+        "(basis: LICENCE, evidence: rights-evidence/owner-1/music-licence.pdf)",
+      );
+      expect(well).not.toContain("recorded but not counted");
+      expect(submittedLayers(well)).not.toContain(RightsLayer.MUSIC);
+    });
   });
 
   it("offers no form for a layer no clearance settles", async () => {
@@ -966,11 +1081,11 @@ describe("the rights-layer well (ugcportal-qfy9)", () => {
 
   it("renders a DISTINCT message for each clearance refusal code", async () => {
     /*
-      Not just "a banner appeared". Five codes that all resolved to the same
+      Not just "a banner appeared". Codes that all resolved to the same
       sentence would satisfy a per-code `toContain(ERROR_BANNER_ID)` and
       still tell an admin something true about a refusal that did not
-      happen — so the banner's own text is collected and the five are
-      required to differ.
+      happen — so the banner's own text is collected and every code in
+      `CLEARANCE_WRITE_REFUSALS` is required to differ from the others.
     */
     await createUpload("media-1");
     const banners: string[] = [];

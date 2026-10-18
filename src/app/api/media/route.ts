@@ -23,6 +23,7 @@ import {
 } from "@/lib/media";
 import { MEDIA_OWNER_SELECT } from "@/lib/media-access";
 import { listMedia } from "@/lib/media-listing";
+import { isSameOriginRequest } from "@/lib/origin";
 import { prisma } from "@/lib/prisma";
 import {
   isConfiguredUser,
@@ -266,6 +267,14 @@ export async function POST(request: Request) {
   const userId = session?.user?.id;
   if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // Second lock, after the auth gate so an anonymous caller still gets 401:
+  // the session cookie is SameSite=Lax and that is the only thing between a
+  // cross-site request and this write today. See src/lib/origin.ts and
+  // ugcportal-qf9v. Route handlers get no framework Origin check.
+  if (!isSameOriginRequest(request)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   // Unchanged from ugcportal-i04, and still only an early-out rather than the

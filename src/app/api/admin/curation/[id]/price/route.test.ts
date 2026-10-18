@@ -506,6 +506,9 @@ describe("ugcportal-0ss K1: the gate at the price-setting endpoint", () => {
         listingId: "listing-1",
         layer: "MUSIC",
         reason: "Licence purchased, receipt in evidence.",
+        // A MUSIC clearance counts only with a basis (ugcportal-hx2).
+        basis: "LICENCE",
+        basisEvidence: "rights-evidence/owner-1/music-licence.pdf",
         clearedByUserId: "admin-1",
       },
     });
