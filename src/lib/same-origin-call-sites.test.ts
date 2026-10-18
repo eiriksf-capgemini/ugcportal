@@ -17,19 +17,27 @@ import { describe, expect, it } from "vitest";
  * to a list. The rule is per HANDLER, not per file: a file that locks its
  * POST and forgets its DELETE is named for the DELETE. A mutating export in a
  * shape this scan cannot follow (`export const POST = ...`, a re-export, a
- * destructured `export const { GET, POST } = ...`, `export * from "..."`) is
- * reported too, since "cannot analyse" must not read as "passes". A route that
- * is exempt is named in UNANALYSABLE_EXEMPT with its reason, in this file.
+ * destructured `export const { GET, POST } = ...` at any nesting depth,
+ * `export * from "..."`) is reported too, since "cannot analyse" must not read
+ * as "passes". An exemption is named in UNANALYSABLE_EXEMPT with its file, the
+ * export names it covers and its reason, in this file.
  */
 
 const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 /**
- * Routes whose unanalysable mutating export is accepted, keyed by repo-relative
- * path. The reason is part of the entry so an exemption cannot be silent.
+ * Unanalysable mutating exports that are accepted, keyed by repo-relative path.
+ * An entry covers only the export names in `handlers` for that file: an
+ * unanalysable mutating export of the file under any other name, or a nameless
+ * `export *`, is still reported. The reason is part of the entry so an
+ * exemption cannot be silent.
  */
-const UNANALYSABLE_EXEMPT: Record<string, string> = {
-  "src/app/api/auth/[...nextauth]/route.ts":
-    "Auth.js handlers (`export const { GET, POST } = handlers`) carry their own CSRF token",
+const UNANALYSABLE_EXEMPT: Record<string, { handlers: string[]; reason: string }> = {
+  "src/app/api/auth/[...nextauth]/route.ts": {
+    // GET is not a mutating name, so the scan never reports it and nothing needs covering.
+    handlers: ["POST"],
+    reason:
+      "Auth.js handlers (`export const { GET, POST } = handlers`) carry their own CSRF token",
+  },
 };
 
 const API_ROOT = resolve(__dirname, "..", "app", "api");
@@ -63,43 +71,72 @@ function callsLock(node: ts.Node): boolean {
   return found;
 }
 
+type Handler = {
+  handler: string;
+  /** The exported name; null for `export *`, which brings in no name this scan sees. */
+  exportName: string | null;
+  unanalysable: boolean;
+  locked: boolean;
+};
+
+/** Calls `visit` with every identifier bound by a (possibly nested) binding pattern. */
+function boundNames(pattern: ts.BindingPattern, visit: (name: string) => void): void {
+  for (const el of pattern.elements) {
+    if (!ts.isBindingElement(el)) continue;
+    if (ts.isIdentifier(el.name)) visit(el.name.text);
+    else boundNames(el.name, visit);
+  }
+}
+
 /** Every mutating export of one source file, with whether it locks. */
-export function mutatingHandlers(
-  name: string,
-  source: string,
-): { handler: string; locked: boolean }[] {
+export function mutatingHandlers(name: string, source: string): Handler[] {
   const ast = ts.createSourceFile(name, source, ts.ScriptTarget.Latest, true);
-  const out: { handler: string; locked: boolean }[] = [];
+  const out: Handler[] = [];
+  const unfollowed = (exportName: string) =>
+    out.push({
+      handler: `${exportName} (unanalysable form)`,
+      exportName,
+      unanalysable: true,
+      locked: false,
+    });
   const exported = (n: ts.Node) =>
     ts.canHaveModifiers(n) &&
     (ts.getModifiers(n) ?? []).some((m) => m.kind === ts.SyntaxKind.ExportKeyword);
   for (const stmt of ast.statements) {
     if (ts.isFunctionDeclaration(stmt) && exported(stmt) && stmt.name) {
       if (MUTATING.has(stmt.name.text)) {
-        out.push({ handler: stmt.name.text, locked: callsLock(stmt) });
+        out.push({
+          handler: stmt.name.text,
+          exportName: stmt.name.text,
+          unanalysable: false,
+          locked: callsLock(stmt),
+        });
       }
     } else if (ts.isVariableStatement(stmt) && exported(stmt)) {
       for (const d of stmt.declarationList.declarations) {
         if (ts.isIdentifier(d.name) && MUTATING.has(d.name.text)) {
           // Not a function declaration: not followed, so reported.
-          out.push({ handler: `${d.name.text} (unanalysable form)`, locked: false });
+          unfollowed(d.name.text);
         } else if (ts.isObjectBindingPattern(d.name) || ts.isArrayBindingPattern(d.name)) {
-          // `export const { GET, POST } = handlers`: names bound from elsewhere.
-          for (const el of d.name.elements) {
-            if (ts.isBindingElement(el) && ts.isIdentifier(el.name) && MUTATING.has(el.name.text)) {
-              out.push({ handler: `${el.name.text} (unanalysable form)`, locked: false });
-            }
-          }
+          // `export const { GET, POST } = handlers`, at any depth: names bound from elsewhere.
+          boundNames(d.name, (n) => {
+            if (MUTATING.has(n)) unfollowed(n);
+          });
         }
       }
     } else if (ts.isExportDeclaration(stmt) && !stmt.exportClause) {
       // `export * from "..."`: which names it brings in is not followed.
-      out.push({ handler: "export * (unanalysable form)", locked: false });
+      out.push({
+        handler: "export * (unanalysable form)",
+        exportName: null,
+        unanalysable: true,
+        locked: false,
+      });
     } else if (ts.isExportDeclaration(stmt) && stmt.exportClause) {
       if (ts.isNamedExports(stmt.exportClause)) {
         for (const e of stmt.exportClause.elements) {
           if (MUTATING.has(e.name.text)) {
-            out.push({ handler: `${e.name.text} (unanalysable form)`, locked: false });
+            unfollowed(e.name.text);
           }
         }
       }
@@ -110,11 +147,15 @@ export function mutatingHandlers(
 
 function unlocked(
   files: { name: string; source: string }[],
-  exempt: Record<string, string> = {},
+  exempt: Record<string, { handlers: string[]; reason: string }> = {},
 ): string[] {
   return files.flatMap(({ name, source }) =>
     mutatingHandlers(name, source)
-      .filter((h) => !h.locked && !(h.handler.endsWith("(unanalysable form)") && name in exempt))
+      .filter(
+        (h) =>
+          !h.locked &&
+          !(h.unanalysable && h.exportName !== null && exempt[name]?.handlers.includes(h.exportName)),
+      )
       .map((h) => `${h.handler} in ${name}`),
   );
 }
@@ -126,11 +167,14 @@ describe("every mutating route handler applies the same-origin second lock (ugcp
   }));
 
   it("examines the route files it should (guards against matching nothing)", () => {
-    // 10 route.ts files held mutating handlers when this was written; the
-    // lower bound only has to prove the walk found the tree, not pin a count.
-    expect(files.length).toBeGreaterThanOrEqual(13);
+    // At d5ebe5d the scan measured 15 route.ts files under src/app/api, 11 of
+    // them with a mutating export, and 14 mutating handlers in all (13 function
+    // declarations plus the Auth.js POST). These are lower bounds on the first
+    // and last of those numbers, so adding a route never fails them; they only
+    // prove the walk found the tree and the parser found handlers in it.
+    expect(files.length).toBeGreaterThanOrEqual(15);
     const handlers = files.flatMap((f) => mutatingHandlers(f.name, f.source));
-    expect(handlers.length).toBeGreaterThanOrEqual(13);
+    expect(handlers.length).toBeGreaterThanOrEqual(14);
   });
 
   it("names no handler that lacks isSameOriginRequest", () => {
@@ -138,10 +182,13 @@ describe("every mutating route handler applies the same-origin second lock (ugcp
   });
 
   it("keeps every exemption pointing at a route that still has an unanalysable export", () => {
-    for (const name of Object.keys(UNANALYSABLE_EXEMPT)) {
+    for (const [name, { handlers }] of Object.entries(UNANALYSABLE_EXEMPT)) {
       const f = files.find((x) => x.name === name);
       expect(f, name).toBeDefined();
-      expect(unlocked([f!]), name).not.toEqual([]);
+      const found = mutatingHandlers(f!.name, f!.source)
+        .filter((h) => h.unanalysable)
+        .map((h) => h.exportName);
+      for (const handler of handlers) expect(found, `${name} ${handler}`).toContain(handler);
     }
   });
 
@@ -194,12 +241,36 @@ describe("every mutating route handler applies the same-origin second lock (ugcp
       ]);
     });
 
-    it("lets a named exemption pass an unanalysable export, and only that file", () => {
+    it("reports a nested destructured export", () => {
+      const source = `export const { handlers: { GET, POST }, auth: [DELETE] } = NextAuth(config);`;
+      expect(unlocked([{ name: "fixture/route.ts", source }])).toEqual([
+        "POST (unanalysable form) in fixture/route.ts",
+        "DELETE (unanalysable form) in fixture/route.ts",
+      ]);
+    });
+
+    it("lets a named exemption pass the exports it names, and only in that file", () => {
       const source = `export const { GET, POST } = handlers;`;
-      const exempt = { "fixture/route.ts": "carries its own CSRF token" };
+      const exempt = {
+        "fixture/route.ts": { handlers: ["GET", "POST"], reason: "carries its own CSRF token" },
+      };
       expect(unlocked([{ name: "fixture/route.ts", source }], exempt)).toEqual([]);
       expect(unlocked([{ name: "fixture/other.ts", source }], exempt)).toEqual([
         "POST (unanalysable form) in fixture/other.ts",
+      ]);
+    });
+
+    it("fails an unlisted mutating export, or an export *, in an exempt file", () => {
+      const exempt = {
+        "fixture/route.ts": { handlers: ["GET", "POST"], reason: "carries its own CSRF token" },
+      };
+      const extra = `export const { GET, POST } = handlers;\nexport const DELETE = handlers.POST;`;
+      expect(unlocked([{ name: "fixture/route.ts", source: extra }], exempt)).toEqual([
+        "DELETE (unanalysable form) in fixture/route.ts",
+      ]);
+      const star = `export const { GET, POST } = handlers;\nexport * from "./other";`;
+      expect(unlocked([{ name: "fixture/route.ts", source: star }], exempt)).toEqual([
+        "export * (unanalysable form) in fixture/route.ts",
       ]);
     });
   });
