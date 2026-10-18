@@ -779,9 +779,12 @@ export function classifySeverity(body) {
   // Stated means the reviewer put a severity on at least one finding, or
   // said in so many words that nothing (or nothing above low) was found.
   // Prose that merely mentions "medium-or-above blocks" does not count.
-  // "Family 3 — checked, nothing found" is about one family, not the
-  // verdict, so the bare phrase does not count; the verdict-level forms do.
-  const none = NONE_RE.test(text);
+  // "Family 3 — checked, nothing found" and a "Verified, no finding:"
+  // sub-heading are not the verdict, so the no-findings phrase counts only on
+  // the verdict line (the first non-empty line), the same line `clean` reads
+  // (ugcportal-45bh).
+  const verdictLine = text.split("\n").map((l) => l.trim()).find((l) => l !== "") ?? "";
+  const none = NONE_RE.test(verdictLine);
   result.stated = itemMedium + itemLow + summaryMedium + summaryLow > 0 || none;
   // The verdict's own "no findings" form, kept apart from `stated` so a
   // reader can let it outrank a bare findings count (withFindingsKeys). It is
@@ -789,15 +792,26 @@ export function classifySeverity(body) {
   // it opens with Approved / Auto-approved / Clean / No findings / Zero
   // findings / Verified clean, matches NONE_RE, states no findings count
   // ("3 findings", "two findings"), and carries none of "Blocking:", "Not
-  // merged", "block(s)", "left for a human". A blocking verdict that quotes
-  // the band rule ("merge requires zero findings") is therefore never clean
-  // (#157 r3, #207 r2, #209 r4), nor is a sub-heading such as "Verified, no
-  // finding:" in a blocking round (#277 r1, #258 r1).
-  const verdictLine = text.split("\n").map((l) => l.trim()).find((l) => l !== "") ?? "";
+  // merged", "block(s)", "left for a human". Only that line is read, so:
+  //  - a round written in the blocking template ("Review round N (chain
+  //    ...). **Blocking ...**", zero-finding rounds on sensitive-path PRs
+  //    included) opens with "Review round", does not read clean, and an
+  //    all-zero key on it is flagged inconsistent when its prose carries a
+  //    bare count (rf5o);
+  //  - a blocking line that opens with an approval word does read clean when
+  //    it has none of the blocking words ("No findings above low; merge
+  //    requires zero findings, so L1 must be fixed first."), so a later bare
+  //    count in that body does not flag an all-zero key (peom); and
+  //  - "no blocking findings" on a round 4-6 approval does not mean the round
+  //    found nothing: deferred lows appear only as a bare count in the body.
+  // A quote of the band rule ("merge requires zero findings") after a
+  // non-approval opening word, and a sub-heading such as "Verified, no
+  // finding:" in a blocking round (#157 r3, #207 r2, #209 r4; #277 r1, #258
+  // r1), do not read clean.
   const approvalShaped = /^[*_`\s]*(?:auto-)?approved\b|^[*_`\s]*(?:clean|no findings|zero findings|verified clean)\b/i.test(verdictLine);
   const statesCount = FINDINGS_COUNT_RE.test(verdictLine);
   const blockingWord = /\bblocking\s*:|\bnot merged\b|\bblocks?\b|\bleft for a human\b/i.test(verdictLine);
-  result.clean = none && NONE_RE.test(verdictLine) && approvalShaped && !statesCount && !blockingWord;
+  result.clean = none && approvalShaped && !statesCount && !blockingWord;
   return result;
 }
 
@@ -932,6 +946,12 @@ export function analysePr(data, reviewer) {
       r.medium += sev.medium;
       r.low += sev.low;
       r.stated = r.stated || sev.stated;
+      // A bare findings count in the addendum joins the round and clears
+      // `clean` (4hsc); an addendum with no count changes neither.
+      if (sev.findings != null) {
+        r.findings = (r.findings ?? 0) + sev.findings;
+        r.clean = false;
+      }
       r.addenda += 1;
       continue;
     }
@@ -1526,6 +1546,7 @@ export function roundsSplit(rows) {
   const best = new Map();
   for (const r of rows) {
     for (const [n, sp] of Object.entries(r.prRoundSplit ?? {})) {
+      if (sp.keys + sp.prose === 0) continue; // a PR with no marker rounds has none to count (zu69)
       const cur = best.get(n);
       if (!cur || sp.keys > cur.sp.keys) best.set(n, { id: r.id, sp });
     }
@@ -1534,7 +1555,7 @@ export function roundsSplit(rows) {
   const fellBack = new Map();
   for (const { id, sp } of best.values()) if (sp.prose > 0) fellBack.set(id, (fellBack.get(id) ?? 0) + sp.prose);
   const siblings = [];
-  for (const r of rows) for (const n of Object.keys(r.prRoundSplit ?? {})) if (best.get(n)?.id !== r.id) siblings.push(`${short(r.id)} (gh-${n})`);
+  for (const r of rows) for (const n of Object.keys(r.prRoundSplit ?? {})) if (best.has(n) && best.get(n).id !== r.id) siblings.push(`${short(r.id)} (gh-${n})`);
   return {
     fromKeys: sum([...best.values()].map((v) => v.sp.keys)),
     fromProse: sum([...best.values()].map((v) => v.sp.prose)),
@@ -1790,7 +1811,7 @@ function renderDataGaps(rowsByRelease, prAnalysesByNumber, unmerged) {
     if (unstated.length) lines.push(`  - rounds whose verdict states no severity: ${unstated.join(", ")}`);
     const split = roundsSplit(rows);
     lines.push(`  - rounds whose severity came from \`findings_rN\` keys: ${split.fromKeys}; rounds that fell back to the prose parse: ${split.fromProse}${split.fellBack.length ? ` -- ${split.fellBack.join(", ")}` : ""}`);
-    if (split.siblings.length) lines.push(`  - sibling bead, PR counted once (its rounds are in the line above under the bead that carries the keys, not again): ${split.siblings.join(", ")}`);
+    if (split.siblings.length) lines.push(`  - sibling bead, PR counted once (its rounds are counted once, under one other bead on the same PR, not again): ${split.siblings.join(", ")}`);
     const keyProblems = rows.filter((r) => r.keyFallbacks.length).map((r) => `${r.id.replace("ugcportal-", "")} (${r.keyFallbacks.join(", ")})`);
     if (keyProblems.length) lines.push(`  - \`findings_rN\` present but not used, prose kept (${keyProblems.length}): ${keyProblems.join("; ")}`);
     const unstatedF = rows.filter((r) => r.unstatedFindings > 0).map((r) => `${r.id.replace("ugcportal-", "")} (${r.unstatedFindings})`);

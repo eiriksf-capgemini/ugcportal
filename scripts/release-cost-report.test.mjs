@@ -56,6 +56,7 @@ import {
   GENERATED_START,
   SUMMED_SNAPSHOTS,
   addendumRound,
+  analysePr,
   agentCostFromPasses,
   aggregate,
   keyedConflicts,
@@ -1368,7 +1369,7 @@ describe("findings_rN keys (ugcportal-2jvh)", () => {
     }
   });
 
-  it("P1: clean is read from the verdict line: genuine first-line approvals are clean, 'Blocking:' never is, a later sentence never is", () => {
+  it("P1: clean is read from the verdict line: a first-line approval with no blocking word is clean (the #216 r1 shape, which quotes 'any finding blocks regardless', is not), 'Blocking:' never is, a later sentence never is", () => {
     expect(classifySeverity("Auto-approved (review round 1, chain approx): CI green, no sensitive paths touched, no blocking findings.\n\nReviewed inline.").clean).toBe(true);
     expect(classifySeverity("Zero findings.\n\nFigures re-derived.").clean).toBe(true);
     expect(classifySeverity("Review round 2. Blocking: no findings left, but CI is red.").clean).toBe(false);
@@ -1413,6 +1414,91 @@ describe("findings_rN keys (ugcportal-2jvh)", () => {
       "Auto-approved (review round 1, chain approx \u2014 self-asserted, reviewer is the PR's author; head ea9ee12): CI green, no sensitive paths touched, no blocking findings.",
       "Auto-approved (review round 1, chain approx): CI green, no sensitive paths touched, no blocking findings.",
     ]) expect(classifySeverity(l).clean, l).toBe(true);
+  });
+
+  // ---- ugcportal-to7b (batch of peom, rf5o, 45bh, oium, 4hsc, zu69) ----
+  const ZERO_KEY = { findings_r1: "f1:0 f2:0 f3:0 f4:0 med:0 low:0" };
+  const readSource = (rel) => fs.readFileSync(new URL(rel, import.meta.url), "utf8");
+  const item5 = () => {
+    const skill = readSource("../.claude/skills/pr-review-merge/SKILL.md");
+    const start = skill.indexOf("5. **Record the round's findings by family and severity");
+    const end = skill.indexOf("\n**The reviewer run itself", start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    return skill.slice(start, end);
+  };
+
+  it("peom K1: a qualified no-findings opener on a blocking line reads clean (the rule is not narrowed), so its all-zero key is not flagged; no comment claims otherwise", () => {
+    const body = "No findings above low; merge requires zero findings, so L1 must be fixed first.\n\nOne finding, L1: a stale comment.";
+    const c = classifySeverity(body);
+    expect(c).toMatchObject({ clean: true, findings: 1, medium: 0, low: 0 });
+    const out = withFindingsKeys(pr(1, [{ ...round(1, 0, 0), ...c }]), ZERO_KEY);
+    expect(out.rounds[0]).toMatchObject({ source: "keys" });
+    // the claims that this shape is "never clean" are gone from the script and from step 4a item 5
+    expect(readSource("./release-cost-report.mjs")).not.toMatch(/never clean/);
+    expect(item5()).not.toMatch(/never clean/);
+  });
+
+  it("peom K2: item 5 qualifies a round 4-6 approval's 'no blocking findings': lows may have been deferred", () => {
+    const text = item5();
+    expect(text).not.toMatch(/says the round found nothing/);
+    expect(text).toMatch(/round 4-6[^.]*deferred/i);
+  });
+
+  it("rf5o K1: a zero-finding round in the blocking template with a tool-output bare count never reads clean, so its all-zero key is inconsistent; item 5 says so", () => {
+    const body = "Review round 2 (chain exact, head 59c940f). **Blocking — sensitive path only, zero findings this round.**\n\nclaims-audit --pr 285: 12 findings, all hold";
+    const c = classifySeverity(body);
+    expect(c).toMatchObject({ clean: false, findings: 12, medium: 0, low: 0 });
+    const out = withFindingsKeys(pr(1, [{ ...round(1, 0, 0), ...c }]), ZERO_KEY);
+    expect(out.rounds[0]).toMatchObject({ source: "prose", fallbackReason: "inconsistent" });
+    expect(item5()).toMatch(/blocking template/);
+    expect(item5()).toMatch(/sensitive-path/);
+  });
+
+  it("rf5o K2: #216 r1's approval line opens 'Auto-approved' but quotes 'any finding blocks regardless', so it is not clean", () => {
+    const line = "Auto-approved (review round 1, chain approx — reviewer and PR author are the same account, so this chain can never reach `exact`; any finding blocks regardless): CI green on head afb70ebfe8e8cc370cd9e24a15f745cbb027d9d9, no sensitive paths touched, no blocking findings.";
+    expect(classifySeverity(line).clean).toBe(false);
+  });
+
+  it("4hsc K1/K2: an addendum's bare findings count joins its round and clears clean; an addendum with no count changes nothing", () => {
+    const reviewer = "rev";
+    const mk = (addendum) => ({
+      pr: { number: 7, title: "t", state: "MERGED", mergedAt: "2026-10-16T00:00:00Z", author: { login: "bot" } },
+      comments: [
+        { user: { login: reviewer }, created_at: "2026-10-16T01:00:00Z", updated_at: "2026-10-16T01:00:00Z", body: "<!-- ugcportal-review-round: 1 -->\nAuto-approved (review round 1, chain exact): CI green, no sensitive paths touched, no blocking findings." },
+        { user: { login: reviewer }, created_at: "2026-10-16T02:00:00Z", updated_at: "2026-10-16T02:00:00Z", body: addendum },
+      ],
+      reviews: [],
+      inline: [],
+    });
+    const counted = analysePr(mk("Addendum to round 1: two findings I missed, F1 and F2."), reviewer);
+    expect(counted.rounds[0]).toMatchObject({ n: 1, findings: 2, clean: false, addenda: 1 });
+    expect(withFindingsKeys(counted, ZERO_KEY).rounds[0]).toMatchObject({ source: "prose", fallbackReason: "inconsistent" });
+    const plain = analysePr(mk("Addendum to round 1: re-read the sweep output, nothing to add."), reviewer);
+    expect(plain.rounds[0]).toMatchObject({ n: 1, findings: null, clean: true, addenda: 1 });
+    expect(withFindingsKeys(plain, ZERO_KEY).rounds[0]).toMatchObject({ source: "keys" });
+  });
+
+  it("45bh K1/K2: a 'Verified, no finding:' sub-heading does not set stated (#277 r1 verbatim); a genuine verdict-line 'no findings' still does", () => {
+    expect(pr277.round1Body).toMatch(/Verified, no finding/);
+    expect(classifySeverity(pr277.round1Body)).toMatchObject({ findings: 4, stated: false, clean: false });
+    expect(classifySeverity("Auto-approved (review round 1, chain approx): CI green, no sensitive paths touched, no blocking findings.\n\nReviewed inline.")).toMatchObject({ clean: true, stated: true });
+    expect(classifySeverity("Zero findings.\n\nFigures re-derived.")).toMatchObject({ clean: true, stated: true });
+  });
+
+  it("zu69 K1/K2: the sibling line for prose-only beads does not say a bead carries keys, and a shared PR with no marker rounds is not listed", () => {
+    const mkBead = (id) => ({ id: `ugcportal-${id}`, title: id, metadata: { prs: "gh-908,gh-909" } });
+    const a = mkBead("kkk30");
+    const b = mkBead("kkk31");
+    const rel = { version: "v9.9.9", ids: [a.id, b.id], entries: new Map([a, b].map((x) => [x.id, { title: "x", type: "Features" }])) };
+    const rows3 = buildRows(rel, new Map([[a.id, a], [b.id, b]]), new Map([[908, pr(908, [round(1, 1, 0)])], [909, pr(909, [])]]));
+    const split = roundsSplit(rows3);
+    expect(split.siblings).toEqual(["kkk31 (gh-908)"]);
+    const report = renderReport({ releases: ["v9.9.9"], rowsByRelease: new Map([["v9.9.9", rows3]]), membershipChecks: [], unmerged: [], generatedAt: "2026-10-16", reviewer: "x", prCount: 0 });
+    expect(report).toContain("sibling bead, PR counted once");
+    expect(report).toContain("kkk31 (gh-908)");
+    expect(report).not.toContain("gh-909)");
+    expect(report).not.toMatch(/sibling bead[^\n]*carries the keys/);
   });
 
   it("L2: a PR shared by a keyed bead and a prose sibling counts its rounds once, as keyed, and names the sibling separately", () => {
