@@ -105,8 +105,10 @@ export function scanAttestationWritePaths(root: string): string[] {
 }
 
 /**
- * Every `const/let/var userId = …` initialiser in a file, as source text.
- * Delegates to the shared scanner for the same reason the matcher above
+ * Every binding of `userId` in a file, in the five shapes `bindingsNamed`
+ * reads: a plain `const/let/var userId = …` as its initialiser's text, and a
+ * destructured binding, a parameter, a function declaration or a declaration
+ * with no initialiser as its kind and declaring text. Delegates to the shared scanner for the same reason the matcher above
  * does; the name is kept because it is what the cases below read.
  */
 export function userIdBindingsIn(file: string): string[] {
@@ -721,10 +723,13 @@ describe("ugcportal-gkax: the late-attestation route names the session's user to
 
   it("declares `userId` and `access` exactly once each, in any binding shape", () => {
     /*
-     * ugcportal-gkax M1-r2. The case above reads plain declarations only, so
-     * a destructured `const { userId } = …` or a parameter named `userId`
-     * shadowing this one was invisible to it. This reads every shape, so a
-     * second binding of either name fails here whatever it is bound from.
+     * ugcportal-gkax M1-r2. The case above checks what each binding is
+     * bound from: since ugcportal-2k2q, `bindingsNamed` also reports a
+     * destructured binding or a parameter, tagged with its kind, so either
+     * fails that case's `toBe`. It does not check how many bindings there
+     * are, so a second plain `const userId = access.userId` passes it. This
+     * pins the count across every shape, so a second binding of either name
+     * fails here whatever it is bound from.
      */
     expect(declarationsNamed(routeFile, "userId")).toEqual(["access.userId"]);
     expect(declarationsNamed(routeFile, "access")).toEqual([

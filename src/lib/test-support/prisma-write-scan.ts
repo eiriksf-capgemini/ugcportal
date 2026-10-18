@@ -166,7 +166,9 @@ export function prismaModelWritesIn(
  *  5. a variable declared with no initialiser — `let <name>;`,
  *     `for (const <name> of …)`, `catch (<name>)`
  *     (`ts.isVariableDeclaration`, identifier name, no initialiser) —
- *     reported as `VariableDeclaration: <the declaring list or clause>`.
+ *     reported as `VariableDeclaration: <the declaring list>` (`let userId`,
+ *     `const userId`), or, for a `catch` clause, which has no list, as
+ *     `VariableDeclaration: <the declaration itself>` (`userId`).
  *
  * Shapes 2-5 carry their kind as a prefix so none of them reads as the plain
  * initialiser a caller expects: a caller asserting
@@ -242,7 +244,8 @@ export function bindingsNamed(file: string, name: string): string[] {
     }
 
     // (5) a variable with no initialiser: `let <name>;`,
-    // `for (const <name> of …)`, `catch (<name>)`.
+    // `for (const <name> of …)`, `catch (<name>)` — the declaring list's
+    // text, or the declaration's own for a `catch`, which has no list.
     if (
       ts.isVariableDeclaration(node) &&
       ts.isIdentifier(node.name) &&
@@ -285,7 +288,11 @@ export type ParameterLink = {
   readonly parameter: string;
   /** The enclosing function's declared name, or `null` when it has none the scan can follow. */
   readonly function: string | null;
-  /** The parameter's 0-based position in that function's parameter list. */
+  /**
+   * The 0-based ARGUMENT position a call supplies the parameter at: its index
+   * in the parameter list, less one when the list starts with a TypeScript
+   * `this` parameter, which takes no argument.
+   */
   readonly position: number;
   /** Every call of that function in this file, in source order. */
   readonly calls: readonly ParameterCallSite[];
@@ -391,7 +398,14 @@ export function parameterCallSites(file: string, name: string): ParameterLink[] 
   const visit = (node: ts.Node): void => {
     if (ts.isParameter(node) && ts.isIdentifier(node.name) && node.name.text === name) {
       const owner = node.parent;
-      const position = owner.parameters.indexOf(node);
+      // A leading TypeScript `this` parameter is erased at compile time and
+      // takes no call argument, so it does not count towards the position a
+      // call's arguments are read at (`f(this: void, userId)` is called as
+      // `f(x)`, and `x` is `userId`).
+      const first = owner.parameters[0];
+      const skipsThis =
+        first !== undefined && ts.isIdentifier(first.name) && first.name.text === "this" ? 1 : 0;
+      const position = owner.parameters.indexOf(node) - skipsThis;
       const problems: string[] = [];
       const calls: ParameterCallSite[] = [];
       let functionName: string | null = null;

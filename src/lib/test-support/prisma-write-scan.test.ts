@@ -10,7 +10,9 @@ import { bindingsNamed, parameterCallSites } from "@/lib/test-support/prisma-wri
  * ugcportal-2k2q: `bindingsNamed` against one temp-file fixture per
  * declaration shape. Each shape has its own case, and each fixture holds
  * only its own shape beside one plain initialiser, so deleting that shape's
- * branch from the visitor fails that case and no other (K2) — the plain
+ * branch from the visitor fails that shape's case (K2); deleting branch (3)
+ * also fails `parameterCallSites`'s parity case below, which compares
+ * against `bindingsNamed`'s `Parameter:` entries — the plain
  * initialiser shows the new entries arrive alongside it rather than in
  * place of it (K1). Every case asserts the WHOLE result with `toEqual`, so
  * a shape that went missing, or arrived twice, or lost its kind prefix,
@@ -91,7 +93,7 @@ describe("bindingsNamed", () => {
     ]);
   });
 
-  it("reports a declaration with no initialiser, tagged, with its declaring list or clause", () => {
+  it("reports a declaration with no initialiser, tagged, with its declaring list, or the declaration itself in a catch", () => {
     const file = fixture(
       [
         PLAIN,
@@ -231,6 +233,8 @@ describe("parameterCallSites", () => {
         `export const asValue = [1].map(handle as any);`,
         `export const spread = (args: [unknown, string]) => handle(...args);`,
         `export { handle };`,
+        `const table = { handle };`,
+        `export const viaTable = (body: any) => table.handle(body, body.actor);`,
         helper,
         `export function exported(userId: string) { return userId; }`,
         `exported("x");`,
@@ -245,10 +249,30 @@ describe("parameterCallSites", () => {
         "handle referenced other than as a call's callee at line 8: handle as any",
         "handle called with a spread argument at line 9",
         "handle referenced other than as a call's callee at line 10: handle",
+        "handle referenced other than as a call's callee at line 11: handle",
       ],
       ["exported is exported, so its callers are not all in this file"],
       ["enclosing ArrowFunction has no declared name the scan can follow"],
       ["a rest parameter"],
+    ]);
+  });
+
+  it("skips a leading `this` parameter, which takes no argument, when reading a call's argument", () => {
+    const file = fixture(
+      [
+        handler("handle(ownerId, userId)"),
+        `function handle(this: void, userId: string, ...rest: unknown[]) { return userId; }`,
+      ].join("\n"),
+    );
+
+    expect(parameterCallSites(file, "userId")).toEqual([
+      {
+        parameter: "Parameter: userId: string",
+        function: "handle",
+        position: 0,
+        calls: [{ line: 6, argument: "ownerId", binding: "body.ownerId", reason: null }],
+        problems: [],
+      },
     ]);
   });
 
