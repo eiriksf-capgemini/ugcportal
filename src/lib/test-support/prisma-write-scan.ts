@@ -8,14 +8,15 @@ import { sourceFileOf } from "@/lib/design/scan-source";
  * exports bindingsNamed and parameterCallSites for similar AST-based analysis.
  *
  * MULTIPLE CALLERS OF prismaModelWritesIn. Run `git grep -n prismaModelWritesIn -- src scripts`
- * to find them all. Before this module, each test file carried its own
- * identical copy of an AST matcher inline. A near-identical copy of an AST
+ * to find them all. The matcher was first written inline in
+ * attestation-write-paths.test.ts and moved here when this module was
+ * created (#199); every later guard imports it. A near-identical copy of an AST
  * matcher in separate test files is this repo's recurring defect family 4 in
  * its sibling-omission form: the two copies drift, one of them learns about
  * a new Prisma write method and the other does not, and the table whose
  * copy went stale quietly acquires a second writer. This module centralizes
  * the claim each test makes — "exactly one file writes this table" — and
- * prevents that drift.
+ * removes the second copy that could drift.
  *
  * WHY IT PARSES RATHER THAN GREPS. A scan built on
  * `source.includes("prisma.mediaAttestation.create")` passes on a file that
