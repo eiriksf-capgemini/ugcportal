@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { MEDIA_OWNER_SELECT, requireOwnedMedia } from "@/lib/media-access";
+import { isSameOriginRequest } from "@/lib/origin";
 import { prisma } from "@/lib/prisma";
 import { PRISMA_RECORD_NOT_FOUND, prismaErrorCode } from "@/lib/prisma-errors";
 import { readJsonBody } from "@/lib/request-body";
@@ -57,6 +58,14 @@ export async function PUT(request: Request, { params }: RouteContext) {
   const access = await requireOwnedMedia(id);
   if (!access.ok) {
     return NextResponse.json({ error: access.error }, { status: access.status });
+  }
+
+  // Second lock, after the auth gate so an anonymous caller still gets 401:
+  // the session cookie is SameSite=Lax and that is the only thing between a
+  // cross-site request and this write today. See src/lib/origin.ts and
+  // ugcportal-qf9v. Route handlers get no framework Origin check.
+  if (!isSameOriginRequest(request)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   const body = await readJsonBody(request, MAX_TAGS_BODY_BYTES);
