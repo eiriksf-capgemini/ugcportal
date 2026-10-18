@@ -227,7 +227,8 @@ function returnsNull(statement: ts.Statement): boolean {
  * rule, all of it checked over the AST of that one file:
  *
  *  A. `POST` reads its `request` parameter only as the first argument of a
- *     `readJsonBody(…)` call, calls `readJsonBody` exactly once, and never
+ *     `readJsonBody(…)` call (or of `isSameOriginRequest(…)`, which reads
+ *     headers only; ugcportal-qf9v), calls `readJsonBody` exactly once, and never
  *     names `arguments`.
  *  B. The name bound from that call is read only as `.ok`, `.status` or
  *     `.error`, or as `.value` passed as the sole argument of
@@ -271,7 +272,12 @@ export function rawBodyLeaksIn(file: string): string[] {
   }
   for (const ref of referencesTo(post.body, requestParam.text)) {
     const call = ref.parent;
-    if (!(isCallTo(call, "readJsonBody") && call.arguments[0] === ref)) {
+    // `isSameOriginRequest(request)` (ugcportal-qf9v) reads two headers and
+    // never the body, so it is the one other permitted use of the request.
+    const permitted =
+      (isCallTo(call, "readJsonBody") || isCallTo(call, "isSameOriginRequest")) &&
+      call.arguments[0] === ref;
+    if (!permitted) {
       leak(ref, "request read other than by readJsonBody");
     }
   }
