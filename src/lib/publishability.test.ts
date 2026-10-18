@@ -42,6 +42,9 @@ const VALID_ATTESTATION = {
 const PEOPLE_CLEARANCE = {
   layer: RightsLayer.PEOPLE,
   reason: "Model release on file; covers online commercial publication.",
+  // Only MUSIC carries a basis (ugcportal-hx2); every other layer's is null.
+  basis: null,
+  basisEvidence: null,
   clearedByUserId: ADMIN,
   clearedBy: { role: Role.ADMIN },
 };

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { RightsLayer } from "@/generated/prisma/enums";
+import { ClearanceBasis, RightsLayer } from "@/generated/prisma/enums";
 import {
   CLEARABLE_LAYERS,
   CURRENT_CHECKLIST_VERSION,
@@ -61,6 +61,17 @@ const ALL_LAYERS_PRESENT = Object.fromEntries(
     fact.settledBy === "clearance",
   ]),
 ) as Record<string, boolean>;
+
+/**
+ * The basis each layer's clearance needs (ugcportal-hx2): MUSIC rests on the
+ * uploader's original score, every other layer on its reason alone. Spread
+ * into the writes below that are about something OTHER than the basis, so
+ * they go on measuring what they measured; the basis rule's own tests at the
+ * end of this file pass theirs by hand.
+ */
+function basisFor(layer: RightsLayer): { basis: ClearanceBasis | null } {
+  return { basis: layer === RightsLayer.MUSIC ? ClearanceBasis.ORIGINAL_SCORE : null };
+}
 
 /** Every layer a clearance can settle, which is what the fixture presents. */
 const PRESENT_LAYERS: readonly RightsLayer[] = CLEARABLE_LAYERS;
@@ -253,6 +264,7 @@ describe("K1: clearing one layer settles that layer and no other", () => {
       const outcome = await recordLayerClearance({
         mediaId: "media-1",
         layer,
+        ...basisFor(layer),
         reason: `Justification for ${layer} and for nothing else`,
         actorUserId: ADMIN,
       });
@@ -280,6 +292,7 @@ describe("K1: clearing one layer settles that layer and no other", () => {
     await recordLayerClearance({
       mediaId: "media-1",
       layer: RightsLayer.MUSIC,
+      basis: ClearanceBasis.ORIGINAL_SCORE,
       reason: "Licence purchased from the rights holder, ref 4412",
       actorUserId: ADMIN,
     });
@@ -304,6 +317,7 @@ describe("K1: clearing one layer settles that layer and no other", () => {
     await recordLayerClearance({
       mediaId: "media-1",
       layer: RightsLayer.MUSIC,
+      basis: ClearanceBasis.ORIGINAL_SCORE,
       reason: "Signed by the first admin",
       actorUserId: ADMIN,
     });
@@ -330,6 +344,7 @@ describe("K1: clearing one layer settles that layer and no other", () => {
     await recordLayerClearance({
       mediaId: "media-1",
       layer: RightsLayer.MUSIC,
+      basis: ClearanceBasis.ORIGINAL_SCORE,
       reason: "Licence purchased",
       actorUserId: ADMIN,
       now: pinned,
@@ -349,6 +364,7 @@ describe("K1: clearing one layer settles that layer and no other", () => {
       await recordLayerClearance({
         mediaId: "media-1",
         layer,
+        ...basisFor(layer),
         reason: `Justification for ${layer}`,
         actorUserId: ADMIN,
       });
@@ -372,6 +388,7 @@ describe("K1: clearing one layer settles that layer and no other", () => {
       await recordLayerClearance({
         mediaId: "media-1",
         layer,
+        ...basisFor(layer),
         reason: `Justification for ${layer}`,
         actorUserId: layer === RightsLayer.MUSIC ? SECOND_ADMIN : ADMIN,
       });
@@ -401,6 +418,7 @@ describe("K1: clearing one layer settles that layer and no other", () => {
     await recordLayerClearance({
       mediaId: "media-1",
       layer: RightsLayer.MUSIC,
+      basis: ClearanceBasis.ORIGINAL_SCORE,
       reason: "Licence purchased",
       actorUserId: ADMIN,
     });
@@ -427,6 +445,7 @@ describe("K2: one layer's clearance never settles another", () => {
       await recordLayerClearance({
         mediaId: "media-1",
         layer: cleared,
+        ...basisFor(cleared),
         reason: `Justification for ${cleared}`,
         actorUserId: ADMIN,
       });
@@ -443,6 +462,7 @@ describe("K2: one layer's clearance never settles another", () => {
     await recordLayerClearance({
       mediaId: "media-1",
       layer: RightsLayer.MUSIC,
+      basis: ClearanceBasis.ORIGINAL_SCORE,
       reason: "Licence purchased for the first upload",
       actorUserId: ADMIN,
     });
@@ -462,6 +482,7 @@ describe("K2: one layer's clearance never settles another", () => {
     const first = await recordLayerClearance({
       mediaId: "media-1",
       layer: RightsLayer.MUSIC,
+      basis: ClearanceBasis.ORIGINAL_SCORE,
       reason: "Licence purchased from the rights holder",
       actorUserId: ADMIN,
     });
@@ -470,6 +491,7 @@ describe("K2: one layer's clearance never settles another", () => {
     const second = await recordLayerClearance({
       mediaId: "media-1",
       layer: RightsLayer.MUSIC,
+      basis: ClearanceBasis.ORIGINAL_SCORE,
       reason: "Actually we decided it was fine",
       actorUserId: SECOND_ADMIN,
     });
@@ -594,6 +616,7 @@ describe("K2: one layer's clearance never settles another", () => {
     const outcome = await recordLayerClearance({
       mediaId: "media-1",
       layer: RightsLayer.MUSIC,
+      basis: ClearanceBasis.ORIGINAL_SCORE,
       // Whitespace, not empty: the gate trims, so a space-only reason is
       // the shape that would look recorded and settle nothing.
       reason: "   \n  ",
@@ -607,6 +630,7 @@ describe("K2: one layer's clearance never settles another", () => {
     await recordLayerClearance({
       mediaId: "media-1",
       layer: RightsLayer.MUSIC,
+      basis: ClearanceBasis.ORIGINAL_SCORE,
       reason: "  Licence purchased  ",
       actorUserId: ADMIN,
     });
@@ -618,6 +642,7 @@ describe("K2: one layer's clearance never settles another", () => {
     const outcome = await recordLayerClearance({
       mediaId: "media-untriaged",
       layer: RightsLayer.MUSIC,
+      basis: ClearanceBasis.ORIGINAL_SCORE,
       reason: "Licence purchased",
       actorUserId: ADMIN,
     });
@@ -629,6 +654,7 @@ describe("K2: one layer's clearance never settles another", () => {
     const outcome = await recordLayerClearance({
       mediaId: "media-does-not-exist",
       layer: RightsLayer.MUSIC,
+      basis: ClearanceBasis.ORIGINAL_SCORE,
       reason: "Licence purchased",
       actorUserId: ADMIN,
     });
@@ -642,6 +668,7 @@ describe("K3: no clearance without a current ADMIN behind it", () => {
     const outcome = await recordLayerClearance({
       mediaId: "media-1",
       layer: RightsLayer.MUSIC,
+      basis: ClearanceBasis.ORIGINAL_SCORE,
       reason: "I had a look and it seems fine",
       actorUserId: PLAIN_USER,
     });
@@ -655,6 +682,7 @@ describe("K3: no clearance without a current ADMIN behind it", () => {
     const outcome = await recordLayerClearance({
       mediaId: "media-1",
       layer: RightsLayer.MUSIC,
+      basis: ClearanceBasis.ORIGINAL_SCORE,
       reason: "Licence purchased",
       actorUserId: "nobody-at-all",
     });
@@ -675,6 +703,7 @@ describe("K3: no clearance without a current ADMIN behind it", () => {
     const refused = await recordLayerClearance({
       mediaId: "media-1",
       layer: RightsLayer.MUSIC,
+      basis: ClearanceBasis.ORIGINAL_SCORE,
       reason: "Licence purchased",
       actorUserId: ADMIN,
     });
@@ -685,6 +714,7 @@ describe("K3: no clearance without a current ADMIN behind it", () => {
     const recorded = await recordLayerClearance({
       mediaId: "media-1",
       layer: RightsLayer.MUSIC,
+      basis: ClearanceBasis.ORIGINAL_SCORE,
       reason: "Licence purchased",
       actorUserId: ADMIN,
     });
@@ -701,6 +731,7 @@ describe("K3: no clearance without a current ADMIN behind it", () => {
     await recordLayerClearance({
       mediaId: "media-1",
       layer: RightsLayer.MUSIC,
+      basis: ClearanceBasis.ORIGINAL_SCORE,
       reason: "Licence purchased",
       actorUserId: SECOND_ADMIN,
     });
@@ -710,5 +741,193 @@ describe("K3: no clearance without a current ADMIN behind it", () => {
     );
     expect(clearance?.clearedByUserId).toBe(SECOND_ADMIN);
     expect(clearance?.clearedBy?.role).toBe("ADMIN");
+  });
+});
+
+describe("ugcportal-hx2: a MUSIC clearance needs a structured basis", () => {
+  /** The MUSIC row on media-1, or null. */
+  async function musicRow() {
+    return prisma.mediaRightsClearance.findFirst({
+      where: { layer: RightsLayer.MUSIC, listing: { mediaId: "media-1" } },
+    });
+  }
+
+  /*
+    K1, the refusals. Each one is a request the writer must turn away with
+    its own named code and NO ROW — asserted by count, so a writer that
+    wrote the row and then reported the refusal fails here too. And the
+    layer must still be blocking afterwards: a refusal that left MUSIC
+    settled would be the fail-open this bead exists to close.
+  */
+  const REFUSED: readonly {
+    name: string;
+    basis: string | null | undefined;
+    basisEvidence?: string | null;
+    code: string;
+  }[] = [
+    { name: "a missing basis (undefined)", basis: undefined, code: "clearance_basis_missing" },
+    { name: "a null basis", basis: null, code: "clearance_basis_missing" },
+    { name: "an empty-string basis", basis: "", code: "clearance_basis_missing" },
+    {
+      name: "MUTED_DELIVERY",
+      basis: ClearanceBasis.MUTED_DELIVERY,
+      code: "clearance_basis_muted_delivery",
+    },
+    {
+      // Evidence does not rescue it: there is nothing muted to point at.
+      name: "MUTED_DELIVERY with evidence",
+      basis: ClearanceBasis.MUTED_DELIVERY,
+      basisEvidence: "deliverables/muted.mp4",
+      code: "clearance_basis_muted_delivery",
+    },
+    {
+      name: "LICENCE with no evidence",
+      basis: ClearanceBasis.LICENCE,
+      code: "clearance_basis_evidence_blank",
+    },
+    {
+      name: "LICENCE with whitespace-only evidence",
+      basis: ClearanceBasis.LICENCE,
+      basisEvidence: " \n\t ",
+      code: "clearance_basis_evidence_blank",
+    },
+    {
+      name: "a basis that is not a ClearanceBasis",
+      basis: "TRUST_ME",
+      code: "clearance_basis_unrecognised",
+    },
+    {
+      // Case matters: the enum is upper-case, and a lenient match here would
+      // be a second spelling the gate does not share.
+      name: "a lower-case spelling of a real basis",
+      basis: "licence",
+      basisEvidence: "rights-evidence/licence.pdf",
+      code: "clearance_basis_unrecognised",
+    },
+    {
+      name: "evidence beside an original score",
+      basis: ClearanceBasis.ORIGINAL_SCORE,
+      basisEvidence: "rights-evidence/licence.pdf",
+      code: "clearance_basis_evidence_unexpected",
+    },
+  ];
+
+  for (const { name, basis, basisEvidence, code } of REFUSED) {
+    it(`refuses ${name} with ${code} and writes no row`, async () => {
+      const outcome = await recordLayerClearance({
+        mediaId: "media-1",
+        layer: RightsLayer.MUSIC,
+        reason: "The admin's reason, which on its own is not a basis",
+        basis,
+        basisEvidence,
+        actorUserId: ADMIN,
+      });
+      expect(outcome.kind).toBe(code);
+      expect(await prisma.mediaRightsClearance.count()).toBe(0);
+      expect(await blockingLayers()).toContain(RightsLayer.MUSIC);
+    });
+  }
+
+  it("records ORIGINAL_SCORE, with basis stored and evidence null, and settles MUSIC", async () => {
+    const outcome = await recordLayerClearance({
+      mediaId: "media-1",
+      layer: RightsLayer.MUSIC,
+      reason: "The uploader composed and performed the track",
+      basis: ClearanceBasis.ORIGINAL_SCORE,
+      // The form submits the evidence box empty for an original score.
+      basisEvidence: "",
+      actorUserId: ADMIN,
+    });
+    expect(outcome.kind).toBe("recorded");
+    const row = await musicRow();
+    expect(row?.basis).toBe(ClearanceBasis.ORIGINAL_SCORE);
+    expect(row?.basisEvidence).toBeNull();
+    // Through the gate, not just the row: the writer's accepted set and the
+    // gate's must be the same set.
+    expect(await blockingLayers()).not.toContain(RightsLayer.MUSIC);
+  });
+
+  it("records LICENCE with its evidence trimmed, and settles MUSIC", async () => {
+    const outcome = await recordLayerClearance({
+      mediaId: "media-1",
+      layer: RightsLayer.MUSIC,
+      reason: "Sync and master licence covering resale",
+      basis: ClearanceBasis.LICENCE,
+      basisEvidence: "  rights-evidence/owner-1/sync-licence.pdf ",
+      actorUserId: ADMIN,
+    });
+    expect(outcome.kind).toBe("recorded");
+    const row = await musicRow();
+    expect(row?.basis).toBe(ClearanceBasis.LICENCE);
+    expect(row?.basisEvidence).toBe("rights-evidence/owner-1/sync-licence.pdf");
+    expect(await blockingLayers()).not.toContain(RightsLayer.MUSIC);
+  });
+
+  it("puts MUSIC back when the stored basis is changed to MUTED_DELIVERY underneath it", async () => {
+    // FIXTURE MUTATION on a row the writer accepted: only the basis column
+    // changes, through Prisma directly, and the layer must start blocking.
+    await recordLayerClearance({
+      mediaId: "media-1",
+      layer: RightsLayer.MUSIC,
+      reason: "The uploader composed and performed the track",
+      basis: ClearanceBasis.ORIGINAL_SCORE,
+      actorUserId: ADMIN,
+    });
+    expect(await blockingLayers()).not.toContain(RightsLayer.MUSIC);
+    await prisma.mediaRightsClearance.updateMany({
+      where: { layer: RightsLayer.MUSIC },
+      data: { basis: ClearanceBasis.MUTED_DELIVERY },
+    });
+    expect(await blockingLayers()).toContain(RightsLayer.MUSIC);
+  });
+
+  it("K4: refuses a basis, or evidence, on every layer other than MUSIC", async () => {
+    /*
+      The whole clearable set minus MUSIC, rather than one example: a writer
+      that checked `layer === PEOPLE` instead of `layer !== MUSIC` would pass
+      a single-layer test. Each of the three bases, and evidence with no
+      basis, is refused — and nothing is written.
+    */
+    const others = CLEARABLE_LAYERS.filter((layer) => layer !== RightsLayer.MUSIC);
+    expect(others.length).toBeGreaterThan(0);
+    for (const layer of others) {
+      for (const input of [
+        { basis: ClearanceBasis.LICENCE, basisEvidence: "rights-evidence/x.pdf" },
+        { basis: ClearanceBasis.ORIGINAL_SCORE },
+        { basis: ClearanceBasis.MUTED_DELIVERY },
+        { basis: null, basisEvidence: "rights-evidence/x.pdf" },
+      ]) {
+        const outcome = await recordLayerClearance({
+          mediaId: "media-1",
+          layer,
+          reason: `Justification for ${layer}`,
+          ...input,
+          actorUserId: ADMIN,
+        });
+        expect(outcome.kind, `${layer} ${JSON.stringify(input)}`).toBe(
+          "clearance_basis_not_applicable",
+        );
+      }
+    }
+    expect(await prisma.mediaRightsClearance.count()).toBe(0);
+  });
+
+  it("K4: records a non-MUSIC layer with no basis, and stores basis null", async () => {
+    // The sibling of the refusal above, so it is shown to be about the
+    // basis and not a refusal of every non-MUSIC write. Whitespace evidence
+    // is "none", the same reading the MUSIC branch gives it.
+    const outcome = await recordLayerClearance({
+      mediaId: "media-1",
+      layer: RightsLayer.PEOPLE,
+      reason: "Release read; covers commercial resale",
+      basis: "",
+      basisEvidence: "   ",
+      actorUserId: ADMIN,
+    });
+    expect(outcome.kind).toBe("recorded");
+    const [row] = await prisma.mediaRightsClearance.findMany();
+    expect(row.layer).toBe(RightsLayer.PEOPLE);
+    expect(row.basis).toBeNull();
+    expect(row.basisEvidence).toBeNull();
   });
 });

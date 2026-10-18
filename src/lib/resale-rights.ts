@@ -1,4 +1,5 @@
 import {
+  ClearanceBasis,
   ResaleRightsRoute,
   ResaleRightsStatus,
   MediaAuthorship,
@@ -220,9 +221,86 @@ export type GateReview = {
 export type GateLayerClearance = {
   layer: RightsLayer;
   reason: string;
+  /**
+   * The structured ground for a MUSIC clearance (ugcportal-hx2); see
+   * `musicClearanceBasisProblem`. Required in the type rather than optional,
+   * so a hand-rolled select that forgot it fails `tsc` instead of reading as
+   * "no basis" — which would fail closed, but silently.
+   */
+  basis: ClearanceBasis | null;
+  basisEvidence: string | null;
   clearedByUserId: string | null;
   clearedBy: { role: Role } | null;
 };
+
+/**
+ * The one layer whose clearance must state a structured basis
+ * (ugcportal-hx2, docs/legal/manual-upload-rights-review.md section 2,
+ * C.4.1). Every other layer's clearance carries basis NULL; the writer
+ * (src/lib/curation-clearance-write.ts) refuses one that does not.
+ */
+export const BASIS_LAYER: RightsLayer = RightsLayer.MUSIC;
+
+/**
+ * Why a MUSIC clearance's basis does not settle the layer, or null when it
+ * does. ONE rule, read by both the writer (which refuses the write with a
+ * code per problem) and the gate (`layerIsCleared`, through
+ * `layerClearanceProblem`, which treats any problem as "not cleared"), so
+ * the two cannot drift for MUSIC: a MUSIC row the writer would refuse on its
+ * basis is one the gate does not count, however it got into the table. (The
+ * writer's other basis rule — none on any other layer — is the writer's
+ * alone; see `layerClearanceProblem` for why.)
+ *
+ *   - `missing`: no basis at all. A free-text reason is not a stated ground,
+ *     and every MUSIC row written before ugcportal-hx2 is in this state.
+ *   - `unrecognised`: a value that is not a ClearanceBasis member — a
+ *     tampered form field, or a column written by hand.
+ *   - `muted_delivery`: "the buyer gets it with the sound off". NOT A
+ *     CLEARANCE while the sold file is the raw original: Media.key is
+ *     stored untouched at upload and nothing in this product transcodes it,
+ *     so the buyer would receive the audio whatever the clearance promised.
+ *     Refused while the deliverable is the raw original; producing a muted
+ *     deliverable is outside ugcportal-hx2.
+ *   - `evidence_blank`: LICENCE with no pointer to the licence. A licence
+ *     nobody can produce is not one this instance can stand behind.
+ *   - `evidence_unexpected`: evidence on a basis that does not take any.
+ *     Refused rather than stored, so on a row the writer stored,
+ *     `basisEvidence` is the pointer to a LICENCE and not a note left beside
+ *     another basis.
+ *
+ * Takes `unknown` on purpose: the writer calls it on a form field, and the
+ * gate on a column whose type a hand-written statement need not respect.
+ */
+export type MusicClearanceBasisProblem =
+  | "missing"
+  | "unrecognised"
+  | "muted_delivery"
+  | "evidence_blank"
+  | "evidence_unexpected";
+
+export function musicClearanceBasisProblem(
+  basis: unknown,
+  basisEvidence: unknown,
+): MusicClearanceBasisProblem | null {
+  const hasEvidence =
+    typeof basisEvidence === "string" && basisEvidence.trim() !== "";
+  if (basis === null || basis === undefined || basis === "") {
+    return "missing";
+  }
+  // Positive matches only: each accepting branch names its exact value, and
+  // everything else — MUTED_DELIVERY, a typo, a value a later migration adds
+  // to the enum — lands on a refusal.
+  if (basis === ClearanceBasis.LICENCE) {
+    return hasEvidence ? null : "evidence_blank";
+  }
+  if (basis === ClearanceBasis.ORIGINAL_SCORE) {
+    return hasEvidence ? "evidence_unexpected" : null;
+  }
+  if (basis === ClearanceBasis.MUTED_DELIVERY) {
+    return "muted_delivery";
+  }
+  return "unrecognised";
+}
 
 /**
  * The sale record for one upload, as the gate sees it: the Part C triage and
@@ -408,6 +486,10 @@ export const MEDIA_GATE_SELECT = {
         select: {
           layer: true,
           reason: true,
+          // The MUSIC layer's structured ground (ugcportal-hx2), read by
+          // `layerIsCleared` through `musicClearanceBasisProblem`.
+          basis: true,
+          basisEvidence: true,
           clearedByUserId: true,
           clearedBy: { select: { role: true } },
         },
@@ -441,7 +523,9 @@ function isTriaged(value: unknown): value is boolean {
 }
 
 /**
- * True when *this specific layer* carries a justification an admin signed.
+ * True when *this specific layer* carries a justification an admin signed —
+ * and, for MUSIC, an accepted basis (ugcportal-hx2). Every way a row it
+ * finds can fail is named in `layerClearanceProblem`, which this calls.
  *
  * Per layer, not per upload. An earlier revision took any item-level
  * clearance as settling all three, so an upload cleared with "music licence
@@ -464,27 +548,90 @@ export function layerIsCleared(
    * layer on a listing it loaded two columns of, and widening its read to
    * satisfy a parameter type would have meant loading the whole triage to
    * answer a question about none of it. The alternative — a second copy of
-   * these four conditions over there — is this repo's defect family 4, a
+   * these conditions (`layerClearanceProblem`) over there — is this repo's defect family 4, a
    * rule enforced at one of N call sites.
    */
   listing: { layerClearances?: GateLayerClearance[] } | null | undefined,
   layer: RightsLayer,
 ): boolean {
-  // `?? []` and `?.trim()` for the same reason as everything else in this
-  // module: a missing relation or a null column must answer "not cleared",
-  // not throw a TypeError that some caller might catch and treat as a
-  // transient failure.
+  // `?? []` (and `?.trim()` in `layerClearanceProblem`) for the same reason
+  // as everything else in this module: a missing relation or a null column
+  // must answer "not cleared", not throw a TypeError that some caller might
+  // catch and treat as a transient failure.
   const clearance = (listing?.layerClearances ?? []).find(
     (candidate) => candidate.layer === layer,
   );
   if (!clearance) {
     return false;
   }
-  return Boolean(
-    clearance.reason?.trim() &&
-      clearance.clearedByUserId &&
-      clearance.clearedBy?.role === "ADMIN",
-  );
+  // Every reason a row does not count lives in `layerClearanceProblem`, so
+  // the curation register can say *why* a row is not counted from the same
+  // function this verdict comes from (ugcportal-hx2).
+  return layerClearanceProblem(clearance) === null;
+}
+
+/**
+ * Why one stored clearance row does not settle its layer, or null when it
+ * does (ugcportal-hx2). Every way `layerIsCleared` can refuse a row it found
+ * is one of these, because `layerIsCleared` answers with exactly
+ * `layerClearanceProblem(row) === null`; the curation register words the
+ * answer, so the register and the gate cannot disagree about a row.
+ *
+ *   - any `MusicClearanceBasisProblem`: a MUSIC row without a stated,
+ *     accepted basis. Checked here, at the gate, and not only in the writer,
+ *     so a row written some other way — by hand, by a future second writer,
+ *     or before the column existed (basis NULL) — is not counted either.
+ *     Basis MUTED_DELIVERY in particular never clears: the sold file is the
+ *     raw original, so "deliver it muted" is a promise nothing keeps.
+ *     Only MUSIC: the writer refuses a basis or evidence on every other
+ *     layer (`clearance_basis_not_applicable`); the gate does not re-check
+ *     that, because the publish scope's SQL mirror of this predicate
+ *     (PEOPLE_LAYER_CLEARED in src/lib/publishability.ts) would then
+ *     disagree with it on a state nothing writes.
+ *   - `reason_blank`: no written justification (empty or whitespace).
+ *   - `no_signer`: `clearedByUserId` is NULL. The relation has no
+ *     `onDelete`, so Prisma's default for an optional relation (SET NULL)
+ *     applies: deleting the signer's account lands a row here.
+ *   - `signer_account_gone`: a signer id with no account loaded behind it.
+ *   - `signer_not_admin`: the signer's account exists but its current role
+ *     is not ADMIN — the gate re-reads the role, so a demotion un-clears.
+ *
+ * Checked in that order, and only the first problem is returned.
+ */
+export type LayerClearanceProblem =
+  | MusicClearanceBasisProblem
+  | "reason_blank"
+  | "no_signer"
+  | "signer_account_gone"
+  | "signer_not_admin";
+
+export function layerClearanceProblem(
+  clearance: GateLayerClearance,
+): LayerClearanceProblem | null {
+  if (clearance.layer === BASIS_LAYER) {
+    const basisProblem = musicClearanceBasisProblem(
+      clearance.basis,
+      clearance.basisEvidence,
+    );
+    if (basisProblem !== null) {
+      return basisProblem;
+    }
+  }
+  // `?.trim()`: a null column must answer "not cleared", not throw; see
+  // `layerIsCleared`.
+  if (!clearance.reason?.trim()) {
+    return "reason_blank";
+  }
+  if (!clearance.clearedByUserId) {
+    return "no_signer";
+  }
+  if (!clearance.clearedBy) {
+    return "signer_account_gone";
+  }
+  if (clearance.clearedBy.role !== "ADMIN") {
+    return "signer_not_admin";
+  }
+  return null;
 }
 
 /**

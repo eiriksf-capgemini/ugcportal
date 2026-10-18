@@ -5,9 +5,9 @@
  * round parser and the merge-outcome heuristic. The bd / gh / git plumbing
  * is not exercised here; most fixtures below are shaped like the real
  * comments and notes in this repo (quoted from PRs #75, #79, #94, #95,
- * #98). Five are real bodies fetched once with `gh api` and committed
- * under scripts/fixtures/ (ugcportal-577s, ugcportal-zo8n, ugcportal-x9c7)
- * rather than hit over the network from a test: PR #121's round-1 body (a
+ * #98). Seven are real bodies fetched once with `gh api` and committed
+ * under scripts/fixtures/ (ugcportal-577s, ugcportal-zo8n, ugcportal-x9c7,
+ * ugcportal-2jvh) rather than hit over the network from a test: PR #121's round-1 body (a
  * zero-finding approval that reproduces both of the original defects at
  * once), PR #173's round-2 body (an auto-merge whose body says "no
  * sensitive paths touched"), PR #185's round-1 body (a genuine
@@ -15,10 +15,15 @@
  * proximity-only flag exclusion silently zeroed -- PR #131's round-1 reply
  * ("two lows fixed", with an unrelated `--since` flag later in the same
  * paragraph) and PR #193's round-1 review ("one CONFIRMED low", with the
- * CSS custom property `--color-petrol-deep` later on the same line).
+ * CSS custom property `--color-petrol-deep` later on the same line); and the
+ * round-1 bodies of PR #277 and PR #258, two blocking verdicts with a
+ * "Verified, no finding:" sub-heading (ugcportal-2jvh).
  *
- * Two suites at the end cover the cost unit and recording helper
- * (ugcportal-cii0), with inline fixtures. "cost unit" tests costUnitOf
+ * Six named suites follow the helper suites above: "cost unit" and
+ * "agentCostFromPasses" (ugcportal-cii0, with inline fixtures), "controls
+ * table" (ugcportal-md4c), "findings_rN keys" (ugcportal-2jvh),
+ * "tokens_qa_convention" and "an excluded tokens_impl ..." (both
+ * ugcportal-zu0a). "cost unit" tests costUnitOf
  * (one unit per bead; a cost_ite_* is accepted only as a positive integer
  * on a side not marked incomplete), the tokens_impl_convention flag,
  * buildRows, aggregate, the per-unit review shares (pct), the tier table
@@ -28,6 +33,9 @@
  * INCOMPLETE when a transcript is missing, the coverage checks
  * (uncoveredByAgents, coverageIncomplete across two recordings), the
  * INCOMPLETE note forms (formatAgentCost) and runAgentCost's arguments.
+ * "controls table" (ugcportal-md4c) tests each control's runs, cost and
+ * examined/matched counts over transcript fixtures, the caught_by counts, and
+ * the lower-bound marking when input is skipped or unpriced.
  * "findings_rN keys" (ugcportal-2jvh) covers the keyed
  * severity reader (parseFindingsKey, withFindingsKeys, the `clean` verdict
  * read from an approval-shaped verdict line only, keyedConflicts, roundsSplit, and the
@@ -489,8 +497,9 @@ describe("classifySeverity (severity is read from the reviewer's words, never gu
       // classifySeverity's item-label and summary regexes all run over the
       // stripped text, so the lexer is only safe to substitute for the old
       // one-line strip if it removes exactly the same characters and
-      // nothing else. Every committed real body is checked, plus the
-      // shapes the lexer has branches for.
+      // nothing else. Five of the seven committed real bodies are checked
+      // (pr121, pr173, pr185, pr131, pr193; pr277 and pr258 are not in this
+      // list), plus the shapes the lexer has branches for.
       const SHAPES = [
         pr121.round1Body,
         pr173.round2Body,
@@ -1365,6 +1374,12 @@ describe("findings_rN keys (ugcportal-2jvh)", () => {
     expect(classifySeverity("Review round 2. Blocking: no findings left, but CI is red.").clean).toBe(false);
     expect(classifySeverity("Review round 2. Blocking: 2 findings.\n\nNo findings in family 3.").clean).toBe(false);
     expect(classifySeverity("Review round 2 (chain exact).\n\nNo findings this round.").clean).toBe(false);
+  });
+
+  it("P1: a marker-first approval (#173 r2 verbatim) is clean: the verdict line skips the round-marker line", () => {
+    // pins the mutant text.split -> raw.split on the verdictLine line of classifySeverity
+    expect(pr173.round2Body.trimStart()).toMatch(/^<!-- ugcportal-review-round: 2 -->/);
+    expect(classifySeverity(pr173.round2Body).clean).toBe(true);
   });
 
   it("M1: a blocking verdict line that states the band rule is never clean, so an all-zero key on it is inconsistent (#157 r3 severity word removed, #207 r2, #209 r4)", () => {

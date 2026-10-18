@@ -8,7 +8,7 @@ import {
   vi,
 } from "vitest";
 
-import { RightsLayer } from "@/generated/prisma/enums";
+import { ClearanceBasis, RightsLayer } from "@/generated/prisma/enums";
 import { TRIAGE_FACTS } from "@/lib/resale-rights";
 import {
   applyMigrations,
@@ -66,10 +66,15 @@ function clearanceForm(
   overrides: Record<string, string | null> = {},
 ): FormData {
   const data = new FormData();
+  // The MUSIC form submits a basis (ugcportal-hx2) and no other layer's form
+  // has the field, so the default follows the layer: ORIGINAL_SCORE for
+  // MUSIC, absent otherwise. An override of `basis` (null included) wins.
+  const layer = "layer" in overrides ? overrides.layer : RightsLayer.MUSIC;
   const fields: Record<string, string | null> = {
     mediaId: "media-1",
     layer: RightsLayer.MUSIC,
     reason: "Licence purchased from the rights holder, ref 4412",
+    basis: layer === RightsLayer.MUSIC ? ClearanceBasis.ORIGINAL_SCORE : null,
     ...overrides,
   };
   for (const [key, value] of Object.entries(fields)) {
@@ -321,7 +326,7 @@ describe("what the action refuses before it writes", () => {
 
   it("never echoes the submitted reason into the redirect", async () => {
     /*
-      `reason` is the one piece of free text on this screen. It goes to the
+      `reason` is free text (as is the MUSIC form's evidence, below). It goes to the
       column and nowhere else: a refusal that put it back in the URL would
       make it renderable by whatever reads `?error=`, which is the shape
       every outcomes module in this repo is built to avoid.
@@ -337,5 +342,116 @@ describe("what the action refuses before it writes", () => {
     expect(String(target)).toContain("clearance_layer_not_clearable");
     expect(String(target)).not.toContain(secret);
     expect(decodeURIComponent(String(target))).not.toContain(secret);
+  });
+});
+
+describe("ugcportal-hx2: the MUSIC form's basis, posted through the action", () => {
+  /*
+    K1 at the public entry point. Each basis the form can submit — and the
+    ones only a hand-made POST can — goes through the real action into the
+    real writer, and what lands is read back from the table. The writer's own
+    file asserts the same refusals one level down; this one is what proves
+    the action actually forwards `basis` and `basisEvidence` rather than
+    dropping them (a dropped basis would turn every case below into
+    `clearance_basis_missing`, which the accepted cases catch).
+  */
+  const REFUSED: readonly {
+    name: string;
+    fields: Record<string, string | null>;
+    code: string;
+  }[] = [
+    { name: "no basis field at all", fields: { basis: null }, code: "clearance_basis_missing" },
+    { name: "the select left on its empty option", fields: { basis: "" }, code: "clearance_basis_missing" },
+    {
+      name: "MUTED_DELIVERY, which the form does not offer",
+      fields: { basis: ClearanceBasis.MUTED_DELIVERY },
+      code: "clearance_basis_muted_delivery",
+    },
+    {
+      name: "MUTED_DELIVERY with evidence attached",
+      fields: { basis: ClearanceBasis.MUTED_DELIVERY, basisEvidence: "muted.mp4" },
+      code: "clearance_basis_muted_delivery",
+    },
+    {
+      name: "LICENCE with no evidence field",
+      fields: { basis: ClearanceBasis.LICENCE },
+      code: "clearance_basis_evidence_blank",
+    },
+    {
+      name: "LICENCE with whitespace evidence",
+      fields: { basis: ClearanceBasis.LICENCE, basisEvidence: "   " },
+      code: "clearance_basis_evidence_blank",
+    },
+    {
+      name: "a value that is not a basis",
+      fields: { basis: "TRUST_ME" },
+      code: "clearance_basis_unrecognised",
+    },
+    {
+      name: "evidence beside an original score",
+      fields: { basis: ClearanceBasis.ORIGINAL_SCORE, basisEvidence: "licence.pdf" },
+      code: "clearance_basis_evidence_unexpected",
+    },
+  ];
+
+  for (const { name, fields, code } of REFUSED) {
+    it(`refuses ${name} with ${code}, and writes nothing`, async () => {
+      await recordClearance(clearanceForm(fields));
+      expect(redirectedError()).toBe(code);
+      // Back onto the row, like every other refusal on this screen.
+      expect(redirectedParams().get("edit")).toBe("media-1");
+      expect(await clearances()).toEqual([]);
+    });
+  }
+
+  it("records ORIGINAL_SCORE, with no evidence", async () => {
+    await recordClearance(
+      clearanceForm({ basis: ClearanceBasis.ORIGINAL_SCORE, basisEvidence: "" }),
+    );
+    expect(redirectedParams().get("clearance")).toBe("recorded");
+    const [row] = await clearances();
+    expect(row.layer).toBe(RightsLayer.MUSIC);
+    expect(row.basis).toBe(ClearanceBasis.ORIGINAL_SCORE);
+    expect(row.basisEvidence).toBeNull();
+  });
+
+  it("records LICENCE with its evidence, trimmed", async () => {
+    await recordClearance(
+      clearanceForm({
+        basis: ClearanceBasis.LICENCE,
+        basisEvidence: "  rights-evidence/owner-1/sync-licence.pdf  ",
+      }),
+    );
+    expect(redirectedParams().get("clearance")).toBe("recorded");
+    const [row] = await clearances();
+    expect(row.basis).toBe(ClearanceBasis.LICENCE);
+    expect(row.basisEvidence).toBe("rights-evidence/owner-1/sync-licence.pdf");
+  });
+
+  it("refuses a basis posted with any other layer (K4)", async () => {
+    for (const layer of [
+      RightsLayer.PEOPLE,
+      RightsLayer.MINORS,
+      RightsLayer.THIRD_PARTY_CREATOR,
+      RightsLayer.SPONSORED_CONTENT,
+    ]) {
+      redirectMock.mockReset();
+      await recordClearance(
+        clearanceForm({ layer, basis: ClearanceBasis.ORIGINAL_SCORE }),
+      );
+      expect(redirectedError(), layer).toBe("clearance_basis_not_applicable");
+    }
+    expect(await clearances()).toEqual([]);
+  });
+
+  it("never echoes the submitted evidence into the redirect", async () => {
+    // The evidence is free text too, and goes to its column and nowhere else.
+    const secret = "unique-evidence-text-7c1d";
+    await recordClearance(
+      clearanceForm({ basis: ClearanceBasis.ORIGINAL_SCORE, basisEvidence: secret }),
+    );
+    const target = String(redirectMock.mock.calls.at(-1)?.[0]);
+    expect(target).toContain("clearance_basis_evidence_unexpected");
+    expect(decodeURIComponent(target)).not.toContain(secret);
   });
 });
