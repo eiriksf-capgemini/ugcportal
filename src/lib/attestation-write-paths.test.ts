@@ -116,16 +116,19 @@ export function userIdBindingsIn(file: string): string[] {
 }
 
 /**
- * ugcportal-gkax M1-r2: every DECLARATION of `name` in a file, in the four shapes
- * this visitor checks — variable declarations, destructured binding elements,
- * parameters, and function declarations: a plain `const/let/var name = …`, a destructured
- * `const { name } = …` or `const { other: name } = …`, a parameter, a
- * function. `bindingsNamed` (shared with POST /api/media's guard, and left
- * alone here) reads five shapes — the four above plus variable declarations
- * with no initialiser; see its docstring in src/lib/test-support/prisma-write-scan.ts.
- * A plain variable is reported as its initialiser's text, the way `bindingsNamed`
- * reports it; every other shape as its kind and the text of the node that declares it,
- * so it does not read as the one plain declaration a caller expects.
+ * ugcportal-gkax M1-r2: every DECLARATION of `name` in a file, in the four
+ * kinds this visitor checks (`ts.isVariableDeclaration`, `ts.isBindingElement`,
+ * `ts.isParameter`, `ts.isFunctionDeclaration`). It reads the same
+ * declarations as `bindingsNamed` (shared with POST /api/media's guard, and left
+ * alone here), including a variable with no initialiser (`let userId;`,
+ * `for (const x of …)`, `catch (x)`); `bindingsNamed`'s docstring in
+ * src/lib/test-support/prisma-write-scan.ts counts five shapes only because it
+ * lists initialised and uninitialised variable declarations separately. A plain
+ * variable is reported as its initialiser's text, as `bindingsNamed` does; every
+ * other declaration as its kind and then the text of `node.parent`, so it does
+ * not read as the one plain declaration a caller expects. That text is where the
+ * two scans differ: for a destructured binding it is the pattern (`{ userId }`),
+ * where `bindingsNamed` reports the whole declaration or parameter.
  */
 export function declarationsNamed(file: string, name: string): string[] {
   const source = sourceFileOf(file);
