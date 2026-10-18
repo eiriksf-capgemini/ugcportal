@@ -424,6 +424,12 @@ describe("K3: the Media row is never written", () => {
     expect(await prisma.mediaAttestation.count()).toBe(0);
     expect(await mediaRow()).toEqual(unattested);
 
+    // The route's other 400: a body that parses as JSON but is not an object
+    // ("Expected a JSON object body"), a branch of its own from the one above.
+    expect((await attest([])).status).toBe(400);
+    expect(await prisma.mediaAttestation.count()).toBe(0);
+    expect(await mediaRow()).toEqual(unattested);
+
     expect((await attest(attestationBody())).status).toBe(201);
     const before = await mediaRow();
 
