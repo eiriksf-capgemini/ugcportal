@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ClearanceBasis,
   MediaAuthorship,
   ResaleRightsStatus,
   RightsLayer,
@@ -29,12 +30,35 @@ import {
   isResaleRightsStatus,
   isClearableLayer,
   isSellable,
+  layerClearanceProblem,
+  layerIsCleared,
+  type LayerClearanceProblem,
   triageBlocker,
   unsettledLayers,
   uploaderClearanceBlocker,
 } from "@/lib/resale-rights";
 
 const NOW = new Date("2026-09-24T12:00:00.000Z");
+
+/**
+ * The basis a MUSIC clearance needs to count (ugcportal-hx2): a licence, with
+ * a pointer to its evidence. Fixtures that clear MUSIC for some OTHER
+ * question spread this in, so they go on measuring that question rather than
+ * the basis rule; the basis rule's own tests build their rows by hand.
+ */
+const MUSIC_LICENCE_BASIS = {
+  basis: ClearanceBasis.LICENCE,
+  basisEvidence: "rights-evidence/owner-1/music-licence.pdf",
+} as const;
+
+/** MUSIC's accepted basis, or the null every other layer must carry. */
+function basisFor(
+  layer: RightsLayer,
+): Pick<GateLayerClearance, "basis" | "basisEvidence"> {
+  return layer === RightsLayer.MUSIC
+    ? MUSIC_LICENCE_BASIS
+    : { basis: null, basisEvidence: null };
+}
 
 /**
  * The cut-off the baseline clearance is signed against (ugcportal-aqw): the
@@ -765,6 +789,8 @@ describe("per-upload triage (checklist Part C)", () => {
         {
           layer: RightsLayer.PEOPLE,
           reason: "Release covers commercial resale.",
+          basis: null,
+          basisEvidence: null,
           clearedByUserId: "admin-1",
           clearedBy: { role: "USER" },
         },
@@ -781,6 +807,8 @@ describe("per-upload triage (checklist Part C)", () => {
         {
           layer: RightsLayer.PEOPLE,
           reason: "Release read; covers commercial resale, no time limit.",
+          basis: null,
+          basisEvidence: null,
           clearedByUserId: "admin-1",
           clearedBy: { role: "ADMIN" },
         },
@@ -797,6 +825,7 @@ describe("per-upload triage (checklist Part C)", () => {
         {
           layer: RightsLayer.MUSIC,
           reason: "Licence purchased.",
+          ...MUSIC_LICENCE_BASIS,
           clearedByUserId: "admin-1",
           clearedBy: { role: "ADMIN" },
         },
@@ -835,6 +864,7 @@ describe("per-upload triage (checklist Part C)", () => {
     return {
       layer,
       reason: "Licence on file, see evidence.",
+      ...basisFor(layer),
       clearedByUserId: "admin-1",
       clearedBy: { role: "ADMIN" },
       ...overrides,
@@ -1123,6 +1153,8 @@ describe("ugcportal-qn3: minors as a triage fact", () => {
       layer: RightsLayer.MINORS,
       reason:
         "Guardian consent on file, signed, naming online commercial publication.",
+      basis: null,
+      basisEvidence: null,
       clearedByUserId: "admin-1",
       clearedBy: { role: "ADMIN" },
       ...overrides,
@@ -1199,6 +1231,7 @@ describe("ugcportal-qn3: minors as a triage fact", () => {
         {
           layer: RightsLayer.MUSIC,
           reason: "Sync and master licence covering resale, on file.",
+          ...MUSIC_LICENCE_BASIS,
           clearedByUserId: "admin-1",
           clearedBy: { role: "ADMIN" },
         },
@@ -1230,6 +1263,8 @@ describe("ugcportal-qn3: minors as a triage fact", () => {
     const peopleClearance: GateLayerClearance = {
       layer: RightsLayer.PEOPLE,
       reason: "Release read; covers commercial resale, no time limit.",
+      basis: null,
+      basisEvidence: null,
       clearedByUserId: "admin-1",
       clearedBy: { role: "ADMIN" },
     };
@@ -1289,6 +1324,8 @@ describe("ugcportal-qnq9.3: alcohol as a triage fact", () => {
     return {
       layer: RightsLayer.ALCOHOL,
       reason: "It was grape juice, not wine.",
+      basis: null,
+      basisEvidence: null,
       clearedByUserId: "admin-1",
       clearedBy: { role: "ADMIN" },
       ...overrides,
@@ -1345,6 +1382,7 @@ describe("ugcportal-qnq9.3: alcohol as a triage fact", () => {
             {
               layer: RightsLayer.MUSIC,
               reason: "Sync and master licence covering resale, on file.",
+              ...MUSIC_LICENCE_BASIS,
               clearedByUserId: "admin-1",
               clearedBy: { role: "ADMIN" },
             },
@@ -1370,6 +1408,7 @@ describe("ugcportal-qnq9.3: alcohol as a triage fact", () => {
       layerClearances: Object.values(RightsLayer).map((layer) => ({
         layer,
         reason: "Cleared, with evidence on file.",
+        ...basisFor(layer),
         clearedByUserId: "admin-1",
         clearedBy: { role: "ADMIN" as const },
       })),
@@ -2186,6 +2225,7 @@ describe("unsettledLayers (ugcportal-qfy9)", () => {
     return {
       layer,
       reason: `Justification for ${layer}`,
+      ...basisFor(layer),
       clearedByUserId: "admin-1",
       clearedBy: { role: "ADMIN" },
     };
@@ -2300,8 +2340,10 @@ describe("unsettledLayers (ugcportal-qfy9)", () => {
   });
 
   it("keeps a layer blocked when its clearance is unsigned, blank or demoted", () => {
-    // The three ways `layerIsCleared` says no. Each one on its own, so a
-    // helper that checked only "a row exists" fails all three.
+    // Three of the ways `layerIsCleared` says no: the reason and signer ones
+    // (`reason_blank`, `no_signer`, `signer_not_admin`). The basis ones are
+    // in the hx2 blocks below. Each one on its own, so a helper that checked
+    // only "a row exists" fails all of these.
     const broken: readonly GateLayerClearance[] = [
       { ...adminClearance(RightsLayer.MUSIC), reason: "   " },
       { ...adminClearance(RightsLayer.MUSIC), clearedByUserId: null },
@@ -2388,5 +2430,243 @@ describe("CLEARABLE_LAYERS and isClearableLayer (ugcportal-qfy9)", () => {
     ]) {
       expect(isClearableLayer(value), JSON.stringify(value)).toBe(false);
     }
+  });
+});
+
+describe("ugcportal-hx2: the gate reads a MUSIC clearance's basis", () => {
+  /*
+    K2. The rows here are built by hand, NOT through recordLayerClearance —
+    which is the point: the writer refuses MUTED_DELIVERY and a missing
+    basis, so the only way such a row reaches the gate is around the writer
+    (a hand-written statement, a future second writer, or a row from before
+    the column existed). The gate has to hold on its own.
+
+    Everything about the clearance except the basis is the shape that DOES
+    clear MUSIC — signed, by a current admin, with a reason — and the
+    sibling ORIGINAL_SCORE and LICENCE cases below are the same object with
+    only the basis changed. So a gate that refused every MUSIC row passes
+    the refusals and fails the siblings, and a gate that ignored the basis
+    passes the siblings and fails the refusals.
+  */
+  function musicClearance(
+    basis: GateLayerClearance["basis"],
+    basisEvidence: string | null = null,
+  ): GateLayerClearance {
+    return {
+      layer: RightsLayer.MUSIC,
+      reason: "Signed off by an admin who read the request.",
+      basis,
+      basisEvidence,
+      clearedByUserId: "admin-1",
+      clearedBy: { role: "ADMIN" },
+    };
+  }
+
+  function musicUpload(clearance: GateLayerClearance): GateUpload {
+    return withListing({ containsMusic: true, layerClearances: [clearance] });
+  }
+
+  it("is NOT sellable with basis MUTED_DELIVERY", () => {
+    expect(
+      evaluateSellability(musicUpload(musicClearance(ClearanceBasis.MUTED_DELIVERY)), NOW),
+    ).toEqual({ sellable: false, blocker: "third_party_layer_uncleared" });
+  });
+
+  it("is NOT sellable with basis MUTED_DELIVERY even with evidence", () => {
+    expect(
+      evaluateSellability(
+        musicUpload(
+          musicClearance(ClearanceBasis.MUTED_DELIVERY, "deliverables/muted.mp4"),
+        ),
+        NOW,
+      ),
+    ).toEqual({ sellable: false, blocker: "third_party_layer_uncleared" });
+  });
+
+  it("is NOT sellable with basis null — a reason-only MUSIC row from before the column", () => {
+    expect(evaluateSellability(musicUpload(musicClearance(null)), NOW)).toEqual({
+      sellable: false,
+      blocker: "third_party_layer_uncleared",
+    });
+  });
+
+  it("is NOT sellable with basis LICENCE and no evidence", () => {
+    for (const evidence of [null, "", "   "]) {
+      expect(
+        evaluateSellability(
+          musicUpload(musicClearance(ClearanceBasis.LICENCE, evidence)),
+          NOW,
+        ),
+        JSON.stringify(evidence),
+      ).toEqual({ sellable: false, blocker: "third_party_layer_uncleared" });
+    }
+  });
+
+  it("is NOT sellable with a basis value the enum does not have", () => {
+    // A column a hand-written statement filled; the type is no guarantee.
+    expect(
+      evaluateSellability(
+        musicUpload(
+          musicClearance("TRUST_ME" as GateLayerClearance["basis"], "x.pdf"),
+        ),
+        NOW,
+      ),
+    ).toEqual({ sellable: false, blocker: "third_party_layer_uncleared" });
+  });
+
+  it("IS sellable with basis ORIGINAL_SCORE — the gate reads the basis, it does not refuse every MUSIC row", () => {
+    expect(
+      evaluateSellability(musicUpload(musicClearance(ClearanceBasis.ORIGINAL_SCORE)), NOW),
+    ).toEqual({ sellable: true });
+  });
+
+  it("IS sellable with basis LICENCE and evidence", () => {
+    expect(
+      evaluateSellability(
+        musicUpload(
+          musicClearance(ClearanceBasis.LICENCE, "rights-evidence/owner-1/sync.pdf"),
+        ),
+        NOW,
+      ),
+    ).toEqual({ sellable: true });
+  });
+
+  it("lists MUSIC as unsettled for exactly the refused bases", () => {
+    // `unsettledLayers` is what the admin screen draws its forms from, so
+    // it must agree with the gate row for row.
+    const listing = (clearance: GateLayerClearance): GateListing => ({
+      ...clearListing({ containsMusic: true }),
+      layerClearances: [clearance],
+    });
+    expect(unsettledLayers(listing(musicClearance(ClearanceBasis.MUTED_DELIVERY)))).toEqual([
+      RightsLayer.MUSIC,
+    ]);
+    expect(unsettledLayers(listing(musicClearance(null)))).toEqual([RightsLayer.MUSIC]);
+    expect(unsettledLayers(listing(musicClearance(ClearanceBasis.ORIGINAL_SCORE)))).toEqual(
+      [],
+    );
+  });
+
+  it("does not read a basis on any other layer", () => {
+    /*
+      Only MUSIC is basis-checked at the gate; the "no basis on another
+      layer" rule is the writer's (K4). Asserted so the scope of the gate
+      change is pinned: a PEOPLE clearance with basis null — every PEOPLE
+      clearance there is — still settles PEOPLE.
+    */
+    expect(
+      evaluateSellability(
+        withListing({
+          depictsPeople: true,
+          modelReleaseKey: "rights-evidence/owner-1/release.pdf",
+          layerClearances: [
+            {
+              layer: RightsLayer.PEOPLE,
+              reason: "Release read; covers commercial resale.",
+              basis: null,
+              basisEvidence: null,
+              clearedByUserId: "admin-1",
+              clearedBy: { role: "ADMIN" },
+            },
+          ],
+        }),
+        NOW,
+      ),
+    ).toEqual({ sellable: true });
+  });
+
+  it("selects the basis columns in MEDIA_GATE_SELECT", () => {
+    // Without them every real MUSIC row would read as basis-undefined and
+    // block — fail-closed, but it would make the whole layer unclearable.
+    expect(MEDIA_GATE_SELECT.listing.select.layerClearances.select).toMatchObject({
+      basis: true,
+      basisEvidence: true,
+    });
+  });
+});
+
+describe("layerClearanceProblem: every reason layerIsCleared refuses a row (ugcportal-hx2)", () => {
+  /*
+    The curation register words a not-counted row from this function, and
+    `layerIsCleared` answers `layerClearanceProblem(row) === null`. Each row
+    below is the counted MUSIC row with ONE thing broken, so each refusal is
+    reached on its own, and the table asserts both the problem returned and
+    that `layerIsCleared` refuses the same row — the two cannot part.
+  */
+  const counted: GateLayerClearance = {
+    layer: RightsLayer.MUSIC,
+    reason: "Licence purchased, ref 4412.",
+    basis: ClearanceBasis.LICENCE,
+    basisEvidence: "rights-evidence/owner-1/music-licence.pdf",
+    clearedByUserId: "admin-1",
+    clearedBy: { role: "ADMIN" },
+  };
+
+  const cases: ReadonlyArray<
+    [LayerClearanceProblem, Partial<GateLayerClearance>]
+  > = [
+    ["missing", { basis: null, basisEvidence: null }],
+    [
+      "unrecognised",
+      { basis: "TRUST_ME" as GateLayerClearance["basis"] },
+    ],
+    [
+      "muted_delivery",
+      { basis: ClearanceBasis.MUTED_DELIVERY, basisEvidence: null },
+    ],
+    ["evidence_blank", { basisEvidence: "   " }],
+    [
+      "evidence_unexpected",
+      { basis: ClearanceBasis.ORIGINAL_SCORE, basisEvidence: "x.pdf" },
+    ],
+    ["reason_blank", { reason: "  " }],
+    ["no_signer", { clearedByUserId: null, clearedBy: null }],
+    ["signer_account_gone", { clearedBy: null }],
+    ["signer_not_admin", { clearedBy: { role: "USER" } }],
+  ];
+
+  it("names every problem exactly once", () => {
+    const named = cases.map(([problem]) => problem);
+    expect(new Set(named).size).toBe(named.length);
+    expect(named).toHaveLength(9);
+  });
+
+  for (const [problem, broken] of cases) {
+    it(`returns ${problem}, and layerIsCleared refuses the same row`, () => {
+      const row = { ...counted, ...broken };
+      expect(layerClearanceProblem(row)).toBe(problem);
+      expect(layerIsCleared({ layerClearances: [row] }, row.layer)).toBe(false);
+    });
+  }
+
+  it("returns null for a counted row, which layerIsCleared counts", () => {
+    expect(layerClearanceProblem(counted)).toBeNull();
+    expect(layerIsCleared({ layerClearances: [counted] }, RightsLayer.MUSIC)).toBe(
+      true,
+    );
+  });
+
+  it("does not apply the basis rule off MUSIC: a PEOPLE row with no basis counts", () => {
+    const people: GateLayerClearance = {
+      ...counted,
+      layer: RightsLayer.PEOPLE,
+      basis: null,
+      basisEvidence: null,
+    };
+    expect(layerClearanceProblem(people)).toBeNull();
+    expect(layerIsCleared({ layerClearances: [people] }, RightsLayer.PEOPLE)).toBe(
+      true,
+    );
+  });
+
+  it("reports the signer's demotion on a non-MUSIC row too", () => {
+    const people: GateLayerClearance = {
+      ...counted,
+      layer: RightsLayer.PEOPLE,
+      basis: null,
+      basisEvidence: null,
+      clearedBy: { role: "USER" },
+    };
+    expect(layerClearanceProblem(people)).toBe("signer_not_admin");
   });
 });

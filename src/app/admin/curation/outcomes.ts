@@ -48,6 +48,18 @@ const OUTCOME_MESSAGES: Record<TriageOutcomeCode, string> = {
     "That upload has not been triaged yet, so there is no record to attach a clearance to. Record the triage first; the layers a “yes” needs are the ones you can then clear.",
   clearance_already_recorded:
     "That layer already has a clearance, and nothing was changed. One layer carries one justification, so a second would leave the gate choosing between two answers to the same question — revising one is a separate, deliberate act that does not exist yet.",
+  clearance_basis_missing:
+    "A music clearance needs a basis: a licence for the track, or the uploader’s own original score. Nothing was recorded — a written reason on its own is not a stated ground, and the gate does not count a music clearance without one.",
+  clearance_basis_unrecognised:
+    "That is not a basis a music clearance can rest on. Nothing was recorded — choose a licence for the track or the uploader’s own original score.",
+  clearance_basis_muted_delivery:
+    "Delivering the video muted is not a clearance for its music, so nothing was recorded. The file a buyer receives is the uploaded original with its sound intact — nothing here strips the audio — so a muted delivery is a promise nothing keeps. Clear the music with a licence or as the uploader’s original score, or leave it blocked.",
+  clearance_basis_evidence_blank:
+    "A licence basis needs its evidence: where the licence is (a file key or a document reference). Nothing was recorded — a licence nobody can produce is not one the platform can stand behind.",
+  clearance_basis_evidence_unexpected:
+    "Licence evidence only goes with a licence basis. Nothing was recorded — either choose the licence basis, or clear the evidence box for an original score.",
+  clearance_basis_not_applicable:
+    "Only the music layer takes a basis, so nothing was recorded. Every other layer is cleared by its written justification alone — leave the basis and evidence empty.",
   price_media_not_found:
     "That upload has no triage record, so there is nothing to attach a price to. Record the triage first — a price is an offer to sell, and an untriaged upload is one nobody has looked at.",
   price_no_preview:

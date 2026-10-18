@@ -1,5 +1,6 @@
-import type { RightsLayer } from "@/generated/prisma/enums";
+import { ClearanceBasis, type RightsLayer } from "@/generated/prisma/enums";
 import { Button } from "@/components/ui/button";
+import { BASIS_LAYER } from "@/lib/resale-rights";
 
 /**
  * The per-layer clearance form (ugcportal-qfy9).
@@ -22,7 +23,34 @@ import { Button } from "@/components/ui/button";
  * reason to round-trip: the write refuses a second row for a layer that
  * already has one, and a box pre-filled with the existing reason would
  * invite an overwrite that cannot happen.
+ *
+ * THE MUSIC FORM ALSO ASKS FOR A BASIS (ugcportal-hx2), and offers only the
+ * two the write accepts: a licence (with a pointer to its evidence) or the
+ * uploader's own original score. "Deliver it muted" is not an option, and
+ * the help text says why — the file a buyer receives is the raw original, so
+ * muting is a promise nothing in this product keeps. The write refuses it by
+ * name anyway (`clearance_basis_muted_delivery`), because this action is
+ * reachable by POSTing its id with no form at all.
+ *
+ * The evidence box is rendered beside the select rather than revealed when
+ * LICENCE is picked: this is a server component with no client script, and a
+ * box hidden by CSS could keep a value the admin can no longer see, which the
+ * write would then refuse for an original score with no visible cause. Its
+ * label says it is for a licence only.
  */
+
+/**
+ * The bases the MUSIC form offers, in order. MUTED_DELIVERY is a member of
+ * the enum and is deliberately absent: it exists so the gate can be tested
+ * against a row carrying it, not so an admin can choose it.
+ */
+const OFFERED_BASES: readonly { value: ClearanceBasis; label: string }[] = [
+  { value: ClearanceBasis.LICENCE, label: "Licence for the track" },
+  {
+    value: ClearanceBasis.ORIGINAL_SCORE,
+    label: "Uploader’s own original score",
+  },
+];
 
 const TEXTAREA_CLASS =
   "mt-1 block w-full rounded-md border border-input bg-surface-3 p-2 text-sm text-ink";
@@ -51,6 +79,8 @@ export function CurationClearanceForm({
   action: (formData: FormData) => void | Promise<void>;
 }) {
   const reasonId = `clearance-reason-${layer}`;
+  const basisId = `clearance-basis-${layer}`;
+  const evidenceId = `clearance-basis-evidence-${layer}`;
   return (
     <form action={action} className="mt-2 space-y-2">
       <input type="hidden" name="mediaId" value={mediaId} />
@@ -82,6 +112,57 @@ export function CurationClearanceForm({
         required
         className={TEXTAREA_CLASS}
       />
+      {layer === BASIS_LAYER ? (
+        <>
+          {/*
+            The help sentence below is kept on ONE source line on purpose:
+            `grep -n -i muted` on this file is how ugcportal-hx2 K3 is
+            checked, and it should return the whole sentence.
+          */}
+          <label className="block text-xs font-medium" htmlFor={basisId}>
+            What does the music clearance rest on?
+            <span className="mt-1 block font-normal text-muted-foreground">
+              Delivering the video muted is not a clearance basis: the file a buyer receives is the raw original with its sound intact, so a licence or the uploader’s own score is the only way music is cleared.
+            </span>
+          </label>
+          {/*
+            `required` is a convenience here too: the write refuses a
+            missing basis itself (`clearance_basis_missing`). The empty
+            first option is what makes "nothing chosen" a state the browser
+            can see, rather than the first basis being submitted by default
+            for an admin who never looked at the box.
+          */}
+          <select
+            id={basisId}
+            name="basis"
+            required
+            defaultValue=""
+            className={TEXTAREA_CLASS}
+          >
+            <option value="" disabled>
+              Choose a basis
+            </option>
+            {OFFERED_BASES.map(({ value, label }) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+          <label className="block text-xs font-medium" htmlFor={evidenceId}>
+            Licence evidence
+            <span className="mt-1 block font-normal text-muted-foreground">
+              For a licence only: where the licence is — a file key or a
+              document reference. Leave it empty for an original score.
+            </span>
+          </label>
+          <input
+            id={evidenceId}
+            name="basisEvidence"
+            type="text"
+            className={TEXTAREA_CLASS}
+          />
+        </>
+      ) : null}
       <Button type="submit" size="sm">
         Clear {layer}
       </Button>
