@@ -15,9 +15,11 @@
  * PR, exactly the dedicated-PR-for-human-review shape CLAUDE.md's own policy
  * demands -- was red on this check by construction. A sensitive-file-only PR
  * passing this CI guard does not make it eligible for pr-review-merge's
- * auto-merge: that skill's own sensitive-path step (see
- * .claude/skills/pr-review-merge/SKILL.md) independently routes any
- * `.claude/**` or `CLAUDE.md` diff to a human, regardless of what CI says.
+ * auto-merge: that skill's own sensitive-path step (step 2 of
+ * .claude/skills/pr-review-merge/SKILL.md) decides what routes to a human,
+ * with its own list, regardless of what CI says. That list is the authority;
+ * it is not restated here. This script's pattern matches only the two
+ * `.claude/settings*.json` files and `CLAUDE.md`.
  *
  * Sensitive paths are matched exactly (not as a substring) against each
  * changed file, mirroring the original step's `grep -Ex`: a changed file
@@ -31,15 +33,6 @@ import { isMainModule } from "./lib/is-main.mjs";
 
 export const SENSITIVE_PATTERN = /^(?:\.claude\/settings(?:\.local)?\.json|CLAUDE\.md)$/;
 
-/**
- * @param {string[]} changedFiles repo-root-relative paths of every file the
- *   PR (or push) changed
- * @returns {{ ok: boolean, sensitive: string[], nonSensitive: string[] }}
- *   `ok` is true when there is nothing to split out: no sensitive file
- *   changed at all, or every changed file is sensitive. `ok` is false only
- *   when at least one sensitive file is changed alongside at least one
- *   non-sensitive file.
- */
 /**
  * Splits `CHANGED_FILES` into paths, and classifies the two ways it can
  * arrive carrying nothing (ugcportal-kssp, mitigation 1).
@@ -75,6 +68,15 @@ export function classifyChangedFilesInput(raw) {
   return { files, verdict: files.length === 0 ? "empty" : "ok" };
 }
 
+/**
+ * @param {string[]} changedFiles repo-root-relative paths of every file the
+ *   PR (or push) changed
+ * @returns {{ ok: boolean, sensitive: string[], nonSensitive: string[] }}
+ *   `ok` is true when there is nothing to split out: no sensitive file
+ *   changed at all, or every changed file is sensitive. `ok` is false only
+ *   when at least one sensitive file is changed alongside at least one
+ *   non-sensitive file.
+ */
 export function checkSensitiveFiles(changedFiles) {
   const sensitive = changedFiles.filter((f) => SENSITIVE_PATTERN.test(f));
   const nonSensitive = changedFiles.filter((f) => !SENSITIVE_PATTERN.test(f));
