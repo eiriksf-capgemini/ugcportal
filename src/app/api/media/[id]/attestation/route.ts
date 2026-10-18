@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { type AttestationParseResult, parseAttestation } from "@/lib/attestation";
 import { requireOwnedMedia } from "@/lib/media-access";
+import { isSameOriginRequest } from "@/lib/origin";
 import { prisma } from "@/lib/prisma";
 import { PRISMA_UNIQUE_VIOLATION, prismaErrorCode } from "@/lib/prisma-errors";
 import { readJsonBody } from "@/lib/request-body";
@@ -37,6 +38,10 @@ type RouteContext = { params: Promise<{ id: string }> };
  *    answers it. AN ADMIN IS NOT AN EXCEPTION: that gate has no role branch,
  *    so an admin attesting somebody else's upload is the same 403 as anybody
  *    else — which is §4 item 7's rule, not an accident of the gate.
+ *  - a cross-origin request: 403 with the body `{"error":"Forbidden"}`,
+ *    from `isSameOriginRequest` (src/lib/origin.ts). It sits after the auth
+ *    gate and before the body is read, so a cross-site POST never has its
+ *    body parsed.
  *  - a file that already has a row: 409. One row per file, created once.
  *    Re-attesting, or editing an attestation, is not this route.
  *  - an incomplete or stale set of answers: 400, by `parseAttestation`
@@ -108,8 +113,9 @@ function alreadyAttested() {
  * user and the URL's file rather than whatever a client sends.
  * src/lib/attestation-write-paths.test.ts holds this file to that shape:
  * `POST` reads `body.value` only as this function's argument and `request`
- * only through `readJsonBody`, and in here the object is read only inside
- * the reader handed to `parseAttestation`.
+ * only through `readJsonBody` (for its body) and `isSameOriginRequest` (for
+ * two headers, Origin and Sec-Fetch-Site), and in here the object is read
+ * only inside the reader handed to `parseAttestation`.
  */
 function attestationFromBody(value: unknown): AttestationParseResult | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -127,6 +133,14 @@ export async function POST(request: Request, { params }: RouteContext) {
   const access = await requireOwnedMedia(id);
   if (!access.ok) {
     return NextResponse.json({ error: access.error }, { status: access.status });
+  }
+
+  // Second lock, after the auth gate so an anonymous caller still gets 401:
+  // the session cookie is SameSite=Lax and that is the only thing between a
+  // cross-site request and this write today. See src/lib/origin.ts and
+  // ugcportal-qf9v. Route handlers get no framework Origin check.
+  if (!isSameOriginRequest(request)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
   /*
    * THE ACTOR. `session.user.id`, as `requireOwnedMedia` read it from the one

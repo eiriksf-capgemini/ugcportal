@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 
 import { validateOriginalName } from "@/lib/media";
 import { requireOwnedMedia, toOwnerMedia } from "@/lib/media-access";
+import { isSameOriginRequest } from "@/lib/origin";
 import { prisma } from "@/lib/prisma";
 import { readJsonBody } from "@/lib/request-body";
 import {
@@ -122,6 +123,14 @@ export async function PATCH(request: Request, { params }: RouteContext) {
     return NextResponse.json({ error: access.error }, { status: access.status });
   }
 
+  // Second lock, after the auth gate so an anonymous caller still gets 401:
+  // the session cookie is SameSite=Lax and that is the only thing between a
+  // cross-site request and this write today. See src/lib/origin.ts and
+  // ugcportal-qf9v. Route handlers get no framework Origin check.
+  if (!isSameOriginRequest(request)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
   const body = await readJsonBody(request, MAX_PATCH_BODY_BYTES);
   if (!body.ok) {
     return NextResponse.json({ error: body.error }, { status: body.status });
@@ -168,6 +177,14 @@ export async function DELETE(request: Request, { params }: RouteContext) {
   const access = await requireOwnedMedia(id);
   if (!access.ok) {
     return NextResponse.json({ error: access.error }, { status: access.status });
+  }
+
+  // Second lock, after the auth gate so an anonymous caller still gets 401:
+  // the session cookie is SameSite=Lax and that is the only thing between a
+  // cross-site request and this write today. See src/lib/origin.ts and
+  // ugcportal-qf9v. Route handlers get no framework Origin check.
+  if (!isSameOriginRequest(request)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   // Same reasoning as PATCH: the `userId` in the where clause is what makes
