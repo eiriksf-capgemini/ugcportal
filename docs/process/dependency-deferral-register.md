@@ -17,6 +17,7 @@ Measured at origin/main 3aa6508 from a clean `npm ci`, with npm 11 on Node 24.20
 | vitest | 3.2.7 | 5.0.5 | upgrade, two majors | Carries the 2 critical advisories (tinypool, vitest) and the @vitest/mocker one. Two majors across the whole test suite; handled as its own bead, not folded into a dependency sweep. | 2026-10-17 | ugcportal-gdi0 |
 | eslint | 9.39.5 | 10.13.0 | upgrade | `eslint-config-next@16.4.0` is the installed config; its peer range for 16.4.2 is `eslint >=9.0.0`, so 10 is permitted but is not required by any advisory, and was not trialled. Not taken for lack of a reason to; not evidence that it breaks. | 2026-10-17 | none |
 | @types/node | 20.19.43 | 26.6.5 | upgrade | Typings should track the Node runtime CI and the image use (Node 20, see the jsdom row); types for a newer Node than the runtime would describe APIs that are absent. | 2026-10-17 | none |
+| prisma family (prisma, @prisma/*) | 7.10.0 | 7.10.1 | patch, in range | NOT deferred: taken. The advisories deepmerge-ts GHSA-ggr8-5vv4-36mx (7.1.5 pinned in `@prisma/config`) and mysql2 GHSA-3f6p-5ww8-9rcr and GHSA-rgwj-5xj2-c3m3 (3.15.3 pinned in `prisma`) are fixed by `npm audit fix` (no `--force`), which moves the prisma family to 7.10.1 inside the existing `^7.10.0` ranges, deepmerge-ts to 8.0.2 and mysql2 to 3.24.4. `npm audit` after: high 5, the braces chain only. | 2026-10-18 | ugcportal-90i5 |
 
 ## Evidence
 
@@ -31,7 +32,8 @@ Measured at origin/main 3aa6508 from a clean `npm ci`, with npm 11 on Node 24.20
 - eslint peers: `npm view eslint-config-next@14.2.35 peerDependencies` ->
   `eslint: '^7.23.0 || ^8.0.0'`.
 - Prisma 6 exists: `npm view prisma@6 version` -> 6.19.3. Whether prisma 7.10.1 clears the
-  `mysql2` / `deepmerge-ts` advisories was NOT checked here; that is ugcportal-fuv2's job.
+  `mysql2` / `deepmerge-ts` advisories was not checked here and fuv2 closed without checking;
+  ugcportal-90i5 checked it on 2026-10-18: it does (see the prisma 7.10.1 row above).
 
 ## shadcn after ugcportal-pc7s
 
