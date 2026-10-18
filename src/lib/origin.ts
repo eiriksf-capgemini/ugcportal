@@ -51,8 +51,8 @@ export function expectedOrigin(env: NodeJS.ProcessEnv = process.env): string | n
  * `AUTH_URL=http://localhost:3000`): a crawler-facing route is not optional
  * the way an auth redirect is, so `npm run dev`/`next build` without
  * AUTH_URL configured still produces a working sitemap/canonical link to
- * inspect, with no Origin/Host header to fall back to the way
- * `isSameOriginRequest` does above.
+ * inspect, with no request Origin to compare against, unlike
+ * `isSameOriginRequest`.
  *
  * IN PRODUCTION, THE FALLBACK IS REFUSED. A real deployment that is missing
  * or has a broken AUTH_URL must not silently publish `http://localhost:3000`
