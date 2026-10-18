@@ -4,7 +4,7 @@
  * Server actions get this from the framework; route handlers do not. It is a
  * second lock rather than the only one — the session cookie is SameSite=Lax,
  * so a cross-site POST arrives with no credentials and the first gate
- * already refuses it: `requireAdmin` on the admin routes, `requireOwnedMedia`
+ * already refuses it: `requireAdmin` or `requireAdminAccess` on the admin routes, `requireOwnedMedia`
  * or `auth()` on the owner-facing media handlers. This exists for the day
  * that cookie policy changes, a subdomain appears, or a handler is reached
  * some way nobody predicted.
