@@ -131,10 +131,16 @@ describe("bindingsNamed", () => {
 
 /**
  * ugcportal-y1tn, folded into ugcportal-2k2q: `parameterCallSites` against
- * one temp-file fixture per behaviour. Each fixture is the same shape as
+ * one temp-file fixture per behaviour. Each fixture starts from the shape of
  * POST /api/media — a handler binding `userId` from the session and passing
- * it to a non-exported helper whose parameter carries it — changed in one
- * way, and each case asserts the whole result with `toEqual`.
+ * it to a non-exported helper whose parameter carries it — and changes it
+ * as far as its behaviour needs (the "ways a function can be called" case
+ * changes it seven ways). Five cases assert the whole result with `toEqual`
+ * (the first, the no-call case, the default initialiser, `this`, and the
+ * shadowing case). The other five assert one field of it: `[0].calls` in
+ * three (a different identifier, every call, unresolved arguments),
+ * `problems` in the "ways a function can be called" case, and `parameter` in
+ * the last.
  */
 describe("parameterCallSites", () => {
   const helper = `function handle(request: unknown, userId: string) { return userId; }`;

@@ -655,7 +655,9 @@ describe("ugcportal-15r K3: only the named places write an attestation", () => {
      * parameter must be neither a rest parameter nor carry a default
      * initialiser (which would supply the value whenever a call passes
      * `undefined`, ugcportal-pm4t), and every call must pass at that
-     * position an identifier whose own `const` binding is the session's.
+     * position an identifier whose own `const` binding has an initialiser
+     * matching `sessionUserId` below, an unanchored regex that also accepts
+     * `session?.user?.id ?? something` (anchoring it is ugcportal-xxb7).
      * Each call is checked by name and line, so a call passing anything
      * else fails naming that line. A parameter this loop never got to the
      * end of is not in `linked`, and falls through to the strict check

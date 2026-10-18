@@ -829,7 +829,9 @@ async function handleUpload(
        * two: it follows the parameter to every call of handleUpload in this
        * file (`parameterCallSites`, src/lib/test-support/prisma-write-scan.ts)
        * and fails, naming the call's line, if any call passes anything but a
-       * session-bound const there. NOT a value from the request body,
+       * const whose initialiser matches the session regex there (an
+       * unanchored match, so `session?.user?.id ?? x` also passes; anchoring
+       * it is ugcportal-xxb7). NOT a value from the request body,
        * which is the mistake this guards: the whole worth of the row is that
        * it names the person who uploaded the file, and a client-supplied
        * actor would let anyone attest on anyone's behalf. The gate re-checks
