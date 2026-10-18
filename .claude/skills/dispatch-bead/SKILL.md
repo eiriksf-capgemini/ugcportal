@@ -330,8 +330,11 @@ which the workers' machine section does not bind, runs `git fetch origin
 commit is present locally, and puts the branch name and the head sha in the
 brief. The fresh agent then adds its OWN detached worktree on that branch,
 from the shared checkout: `git worktree add --detach /tmp/wt-<bead-id>-fix<N>
-origin/<branch>` (`<N>` is the fix round; the head sha in the brief lets it
-check `git rev-parse HEAD`). That is the existing-branch form in the machine
+origin/<branch>` (`<N>` is the fix round). Its first step is `git rev-parse HEAD` in that
+worktree, compared with the head sha in the brief: on a mismatch the branch
+has moved since the brief was written, so the agent stops and reports both
+shas (the orchestrator re-briefs) and does not proceed on a head the brief
+did not describe. That is the existing-branch form in the machine
 section of `.claude/agents/worker-implementer.md`, which applies to a
 worker-implementer fix agent (the agent type fix rounds are spawned as); it
 names no `-b`, and the agent runs no `git fetch` of its own. It pushes with
@@ -347,7 +350,9 @@ path, which the machine section forbids borrowing. A fresh, agent-named path
 also sidesteps `git worktree add` refusing with "missing but already
 registered worktree" when an earlier directory was deleted without `git
 worktree remove` (the machine section permits neither `git worktree prune` nor
-`-f`). If git still refuses on the path, stop and report that; do not force it. Do not
+`-f`); for that missing-but-registered refusal the agent uses a new path with
+a fresh suffix, as the machine section says. For any other refusal on the
+path it stops and reports; it does not force it. Do not
 forward the old agent's history.
 
 Case K1, quoted from the bead: an implementer whose last context was 300k
@@ -407,8 +412,10 @@ subtract that `endTs` from it. The **record** reading, which is what the
 dispatch time, which for a fresh agent is its first call (`startTs`). Do not
 take either from the orchestrator's clock at an earlier moment (when it noticed
 the review comment, or when it began composing the brief): the idle figures
-recorded on 2026-10-16 did that, and their errors ran both ways, some too high
-and some too low (for example 25 min recorded against 13.3 min measured for
+recorded on 2026-10-16 are not shown to have done that: their errors ran both
+ways, some too high and some too low, and an earlier clock reading can only
+make idle too low, so the records do not establish what caused the too-high
+rows (for example 25 min recorded against 13.3 min measured for
 ugcportal-8r06 round 2, but 14 recorded against 19.2 measured for its round 3).
 
 **Correcting a wrong line.** Do not edit or re-use the `Fix round` prefix.
