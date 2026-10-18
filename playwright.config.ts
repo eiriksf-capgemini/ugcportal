@@ -2,16 +2,18 @@ import { defineConfig, devices } from "@playwright/test";
 
 import { E2E_SIGNED_IN_EMAIL } from "./scripts/lib/e2e-session-seeding.mjs";
 
+const E2E_PORT = process.env["UGCPORTAL_E2E_PORT"] ? parseInt(process.env["UGCPORTAL_E2E_PORT"], 10) : 3000;
+
 /**
  * Browser verification for the petrol palette (ugcportal-rw9j), K1/K2.
  *
  * Not wired into the `quality` CI job in this PR: that job runs lint/test/
  * build/typecheck against no running server and no database, and this suite
  * needs both (`npm run dev` against a real `prisma db push`'d SQLite file,
- * per the bead's own verification plan: "npm run dev mot localhost:3000").
- * It is a locally (and manually, for now) run check, same as the bead
- * describes — a CI job for it is a reasonable fase-2-or-later follow-up, not
- * something this phase's scope requires.
+ * served on the port the UGCPORTAL_E2E_PORT env var selects, default 3000).
+ * It is a locally (and manually, for now)
+ * run check, same as the bead describes — a CI job for it is a reasonable
+ * fase-2-or-later follow-up, not something this phase's scope requires.
  */
 export default defineConfig({
   testDir: "./e2e",
@@ -37,12 +39,12 @@ export default defineConfig({
   retries: 0,
   reporter: [["list"]],
   use: {
-    baseURL: "http://localhost:3000",
+    baseURL: `http://localhost:${E2E_PORT}`,
     trace: "retain-on-failure",
   },
   webServer: {
     command: "npm run dev",
-    url: "http://localhost:3000",
+    url: `http://localhost:${E2E_PORT}`,
     /**
      * ugcportal-6uxr K3: `true` unconditionally (as this shipped originally)
      * means Playwright never checks whose server is already answering at
@@ -71,9 +73,10 @@ export default defineConfig({
      * files for this one spawned server and no other process. A REUSED server
      * (above) does not get it, which is the safe direction to be wrong in:
      * signed-in specs then fail rather than pass. playwright.config.test.ts
-     * asserts the value.
+     * asserts the value. ugcportal-wds4: PORT is set so next dev starts on
+     * the port from UGCPORTAL_E2E_PORT (default 3000).
      */
-    env: { ALLOWED_SIGNIN_EMAILS: E2E_SIGNED_IN_EMAIL },
+    env: { ALLOWED_SIGNIN_EMAILS: E2E_SIGNED_IN_EMAIL, PORT: E2E_PORT.toString() },
   },
   projects: [
     { name: "chromium", use: { ...devices["Desktop Chrome"] } },
