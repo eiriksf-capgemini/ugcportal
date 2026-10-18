@@ -8,6 +8,9 @@ or rewritten, not left standing.
 
 Measured at origin/main 3aa6508 from a clean `npm ci`, with npm 11 on Node 24.20.
 
+Stale since this snapshot: the vitest row's Installed cell (3.2.7) predates #295 (ugcportal-gdi0), which
+moved vitest to `^4.1.12` (package.json). The row's other cells were not re-measured.
+
 | Package | Installed | Candidate | Direction | Reason not taken | Date | Owner bead |
 |---|---|---|---|---|---|---|
 | prisma (and @prisma/client) | 7.10.0 | 6.19.3 | **downgrade** | `npm audit` once proposed it as a fix for the `prisma` / `@prisma/config` / `mysql2` / `deepmerge-ts` chain. It is a major downgrade of the ORM and its libsql adapter for an advisory chain that, as of this date, reports `fixAvailable: true` (a non-breaking fix), so the downgrade is not needed. The newest major, 8.0.0-rc.23, is a release candidate and is not taken either. | 2026-10-17 | ugcportal-fuv2 (closed without checking whether 7.10.1 clears the advisories); ugcportal-90i5 checked it and took the 7.10.1 bump (see Patch moves taken) |
@@ -58,8 +61,11 @@ after: `{"info":0,"low":0,"moderate":0,"high":5,"critical":0,"total":5}` (the br
 - **prisma CLI family 7.10.0 -> 7.10.1**, inside the existing `^7.10.0` ranges. Moved:
   `prisma`, `@prisma/config`, `@prisma/engines`, `@prisma/fetch-engine`, and
   `@prisma/get-platform` (two nested copies); two nested `@prisma/debug` copies are new at 7.10.1.
-  **Stayed at 7.10.0:** `@prisma/client`, `@prisma/adapter-libsql` and the top-level
-  `@prisma/debug`. So the CLI/generator (7.10.1) and the runtime client (7.10.0) are now on
+  **Stayed at 7.10.0:** `@prisma/client`, `@prisma/adapter-libsql`, `@prisma/client-runtime-utils`
+  (pinned exactly by `@prisma/client`), `@prisma/driver-adapter-utils` (pinned exactly by
+  `@prisma/adapter-libsql`) and the top-level `@prisma/debug`. The top-level
+  `@prisma/get-platform` is 7.2.0 on both sides (required by `@prisma/dev`) and did not move.
+  So the CLI/generator (7.10.1) and the runtime client (7.10.0) are now on
   different patch versions. `@prisma/engines-version` went from `7.10.0-4.0edf323e...` to
   `8.1.0-1.d1b3f377...`: a newer schema engine, while the query engine used at runtime comes
   from the unchanged 7.10.0 client.
