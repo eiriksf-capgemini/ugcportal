@@ -8,6 +8,7 @@ import {
   fetchInstagramProfile,
 } from "@/lib/instagram";
 import { STATE_COOKIE, STATE_COOKIE_PATH } from "@/lib/instagram-oauth-state";
+import { expectedOrigin } from "@/lib/origin";
 import { prisma } from "@/lib/prisma";
 import { INSTAGRAM_SETTINGS_PATH } from "@/lib/routes";
 
@@ -22,7 +23,7 @@ type Outcome =
   | "exchange_failed";
 
 function settingsRedirect(request: Request, outcome: Outcome) {
-  const url = new URL(INSTAGRAM_SETTINGS_PATH, request.url);
+  const url = new URL(INSTAGRAM_SETTINGS_PATH, expectedOrigin() ?? request.url);
   url.searchParams.set(outcome === "connected" ? "connected" : "error", outcome);
   const response = NextResponse.redirect(url);
   // One-shot value: clear it whichever way the flow ended, so a stale state

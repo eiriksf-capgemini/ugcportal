@@ -213,5 +213,98 @@ describe("GET /api/admin/instagram/callback", () => {
       expect(upsertMock).not.toHaveBeenCalled();
       consoleError.mockRestore();
     });
+
+    // K1: Redirect origin matches AUTH_URL when set and request host differs
+    describe("redirect origin with AUTH_URL configured", () => {
+      beforeEach(() => {
+        process.env.AUTH_URL = "https://example.test";
+        authMock.mockResolvedValue({ user: { id: "admin-1", role: "ADMIN" } });
+      });
+
+      function internalCallback(
+        overrides: {
+          state?: string | null;
+          cookieState?: string | null;
+          code?: string | null;
+          error?: string;
+        } = {},
+      ) {
+        const url = new URL("http://internal:3000/api/admin/instagram/callback");
+        const state = overrides.state ?? STATE;
+        const cookieState = overrides.cookieState ?? STATE;
+        const { code = "the-code", error } = overrides;
+
+        if (state !== null) url.searchParams.set("state", state);
+        if (code !== null) url.searchParams.set("code", code);
+        if (error) url.searchParams.set("error", error);
+
+        return new Request(url, {
+          headers:
+            cookieState === null ? {} : { cookie: `${STATE_COOKIE}=${cookieState}` },
+        });
+      }
+
+      it("redirects to AUTH_URL on successful connection", async () => {
+        const response = await GET(internalCallback());
+        const location = response.headers.get("location")!;
+
+        expect(location).toMatch(/^https:\/\/example\.test\/admin\/settings\/instagram/);
+      });
+
+      it("redirects to AUTH_URL when access is denied", async () => {
+        const response = await GET(internalCallback({ error: "access_denied" }));
+        const location = response.headers.get("location")!;
+
+        expect(location).toMatch(/^https:\/\/example\.test\/admin\/settings\/instagram/);
+      });
+
+      it("redirects to AUTH_URL on invalid state", async () => {
+        const response = await GET(internalCallback({ state: "forged" }));
+        const location = response.headers.get("location")!;
+
+        expect(location).toMatch(/^https:\/\/example\.test\/admin\/settings\/instagram/);
+      });
+
+      it("redirects to AUTH_URL when code is missing", async () => {
+        const response = await GET(internalCallback({ code: null }));
+        const location = response.headers.get("location")!;
+
+        expect(location).toMatch(/^https:\/\/example\.test\/admin\/settings\/instagram/);
+      });
+
+      it("redirects to AUTH_URL when exchange fails", async () => {
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+        exchangeLongLivedMock.mockRejectedValue(new Error("Exchange failed"));
+
+        const response = await GET(internalCallback());
+        const location = response.headers.get("location")!;
+
+        expect(location).toMatch(/^https:\/\/example\.test\/admin\/settings\/instagram/);
+        consoleError.mockRestore();
+      });
+    });
+
+    // K2: Redirect origin falls back to request.url when AUTH_URL unset
+    describe("redirect origin without AUTH_URL (dev default)", () => {
+      beforeEach(() => {
+        delete process.env.AUTH_URL;
+        authMock.mockResolvedValue({ user: { id: "admin-1", role: "ADMIN" } });
+      });
+
+      it("redirects to request's own origin when AUTH_URL is unset", async () => {
+        const url = new URL("http://dev-host:8080/api/admin/instagram/callback");
+        url.searchParams.set("state", STATE);
+        url.searchParams.set("code", "the-code");
+
+        const request_ = new Request(url, {
+          headers: { cookie: `${STATE_COOKIE}=${STATE}` },
+        });
+
+        const response = await GET(request_);
+        const location = response.headers.get("location")!;
+
+        expect(location).toMatch(/^http:\/\/dev-host:8080\/admin\/settings\/instagram/);
+      });
+    });
   });
 });
