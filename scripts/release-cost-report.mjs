@@ -605,7 +605,7 @@ const NONE_RE =
 /**
  * A line whose no-findings phrase is not the round's verdict: a sub-heading
  * ("Verified, no finding:", "Family 3 -- checked, nothing found:": the line
- * ends with a colon, or opens with `#`) or a tool-output line (the line opens
+ * ends with a colon) or a tool-output line (the line opens
  * with the name of a script or command whose output it quotes, as in
  * "claims-audit --pr 285: zero findings"). Markdown emphasis is already
  * stripped from the text it reads.
@@ -1062,12 +1062,17 @@ export function parseFindingsKey(value) {
  * flagged. A bare findings count does not make a round inconsistent only when
  * the verdict line itself (the first non-empty line, as classifySeverity
  * reads `clean`) is approval-shaped: it opens with Approved / Auto-approved /
- * Clean / No findings / Zero findings / Verified clean, says the round found
- * nothing, states no findings count, and carries none of "Blocking:", "Not
- * merged", "block(s)", "left for a human". Gate prose such as "merge requires
- * zero findings" on a blocking line does not count, and neither does a
+ * Clean / No findings / Zero findings / Verified clean, contains one of
+ * NONE_RE's no-findings phrases, states no findings count, and carries none of
+ * "Blocking:", "Not merged", "block(s)", "left for a human" (the `clean` rule
+ * of classifySeverity, which that docstring and comment state in full). A
+ * quote of the band rule ("merge requires zero findings") after a
+ * non-approval opening word does not read clean, and neither does a
  * "Verified, no finding:" sub-heading in a blocking round (M1, #285 round 4:
- * #157 r3, #207 r2, #209 r4; P1, round 3: #277 r1, #258 r1). And
+ * #157 r3, #207 r2, #209 r4; P1, round 3: #277 r1, #258 r1); but a blocking
+ * line that opens with an approval word and carries none of the blocking
+ * words does read clean (peom), so an all-zero key on such a round is not
+ * flagged. And
  * "round-2 findings" is a back-reference, not a count (N1, #285 round 2).
  *
  * A finding recorded as `unstated:<n>` counts as medium-or-above in the
