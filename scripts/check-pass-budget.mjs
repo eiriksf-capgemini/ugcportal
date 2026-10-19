@@ -38,8 +38,11 @@
  *    pass it.)
  *
  * "Clean round" means a `findings_r<N>` key (pr-review-merge step 4a item 5)
- * whose value is exactly CLEAN_FINDINGS, all counts zero. A value that does
- * not parse is not clean: the failure direction is the stricter one.
+ * whose value is exactly CLEAN_FINDINGS, all counts zero, or a round that
+ * ended by the gate with its lows filed as beads (ugcportal-kwxh; merged, or labelled `needs-human-merge`): MERGED_LOWS_FILED,
+ * `med:0`, at least one low, no `unstated` field, and the trailing
+ * ` merged:lows-filed`. A value that does not parse is not clean: the
+ * failure direction is the stricter one.
  * `findings_unstamped` is never clean; it adds one to the rounds recorded.
  *
  * Every run prints how many metadata keys it examined and how many of them
@@ -60,6 +63,18 @@ import { isMainModule } from "./lib/is-main.mjs";
 
 export const PASS_LIMIT = 3;
 export const CLEAN_FINDINGS = "f1:0 f2:0 f3:0 f4:0 med:0 low:0";
+/**
+ * A round ended by the gate with its lows filed (ugcportal-kwxh; merged, or labelled `needs-human-merge`): `med` 0, `low` at least 1, no `unstated`
+ * field. Read only through isMergedLowsFiled, on the whitespace-normalised value selectRounds builds;
+ * release-cost-report's parseFindingsKey accepts a value with `mergedLowsFiled` on exactly the same
+ * values (check-pass-budget.test.mjs iterates the whitespace and field variants against both).
+ */
+export const MERGED_LOWS_FILED = /^f1:\d+ f2:\d+ f3:\d+ f4:\d+ med:(\d+) low:(\d+) merged:lows-filed$/;
+/** @param {string} value already trimmed and collapsed to single spaces */
+function isMergedLowsFiled(value) {
+  const m = MERGED_LOWS_FILED.exec(value);
+  return m !== null && Number(m[1]) === 0 && Number(m[2]) > 0;
+}
 /** Any findings key, bare or per-PR; only the bare form is counted. */
 export const FINDINGS_KEY = /^findings_(?:pr(\d+)_)?r(\d+)$/;
 const BARE_FINDINGS_KEY = /^findings_r(\d+)$/;
@@ -110,7 +125,7 @@ export function selectRounds(metadata) {
     if (!any) continue;
     const value = String(metadata[key]).trim().replace(/\s+/g, " ");
     const bare = BARE_FINDINGS_KEY.exec(key);
-    rounds.push({ key, n: Number(any[2]), value, clean: value === CLEAN_FINDINGS, counted: Boolean(bare) });
+    rounds.push({ key, n: Number(any[2]), value, clean: value === CLEAN_FINDINGS || isMergedLowsFiled(value), counted: Boolean(bare) });
   }
   const counted = rounds.filter((r) => r.counted);
   const unstamped = metadata.findings_unstamped !== undefined && metadata.findings_unstamped !== null && String(metadata.findings_unstamped).trim() !== "";

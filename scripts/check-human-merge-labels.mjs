@@ -54,7 +54,9 @@
  *   D  PR carries the label and its latest round comment has the verdict
  *      marker, but the PR head is not the head that round reviewed: a push
  *      after the clean round left the label on unreviewed commits. The
- *      reviewed head is the `at=<sha>` of the round comment's
+ *      reviewed head is the `<sha>` of a line reading exactly
+ *      `inline-fix head=<sha>` (the round's own inline-fix commit,
+ *      ugcportal-kwxh), else the `at=<sha>` of the round comment's
  *      `ugcportal-measured` line, else the `head <sha>` of its
  *      `Review round N (chain X, head <sha>)` line; a head that cannot be read counts as not reviewed. Step 2 says
  *      the next round removes or re-applies the label.
@@ -109,11 +111,18 @@ export function isSensitivePath(path) {
 const lines = (body) => body.split("\n").map((l) => l.replace(/\r$/, ""));
 
 /**
- * The head a round comment says it reviewed, or null.
+ * The head a round comment says it reviewed, or null. A line that is exactly
+ * `inline-fix head=<sha>` wins (ugcportal-kwxh): the reviewer's own text-only
+ * fix commit, pushed inside the round under review-standards section 3, is the
+ * head the label is meant for, while `at=` keeps the head the round measured.
  * @param {string} body
  * @returns {string|null}
  */
 export function reviewedHead(body) {
+  for (const l of lines(body)) {
+    const m = /^inline-fix head=([0-9a-f]{7,40})$/.exec(l);
+    if (m) return m[1];
+  }
   for (const l of lines(body)) {
     const m = /^<!-- ugcportal-measured: .*\bat=([0-9a-f]{7,40})\b/.exec(l);
     if (m) return m[1];
