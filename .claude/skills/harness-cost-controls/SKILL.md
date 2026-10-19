@@ -68,6 +68,25 @@ diverging as more time passes.
    definition declaring its own `model:`) over bare `general-purpose` when one
    exists, since a named type does not depend on anyone remembering the
    argument.
+
+   **For a review round, the model comes from a written rule
+   (ugcportal-1mhn).** Before spawning the `worker-reviewer`, run
+   `node scripts/reviewer-model.mjs <pr-number>` from the main checkout and
+   pass the `model` it prints (and its `effort`). It prints `opus` when any
+   changed path is on its risk list (`RISK_PATHS` in the script: attestation,
+   resale rights, origin, test-support, API route handlers, auth, prisma,
+   workflows, `scripts/check-*.mjs`, and the secret/credential/env paths;
+   sourced from the `pr-review-merge` step 2 sensitive-path list and
+   `CLAUDE.md`'s model-fit table), otherwise the bead's `model` tier with a
+   floor of `sonnet` (never haiku for review); `.claude/**` and `CLAUDE.md`
+   are process prose and take the bead's tier. Exit 2 (no bead id in the PR
+   title, or no `model` on the bead) means the orchestrator decides by hand
+   and records why; `opus`, the agent file's own `model:`, is the fallback.
+   Measured basis (v0.9.0 cost review): 71 opus review rounds averaged 883k
+   ITE against 335k for 36 sonnet rounds; beads tiered sonnet drew 45 opus
+   rounds carrying 53% of review cost; every medium was found by an opus
+   round, on the larger and riskier PRs (an association, not causation, which
+   is why risk paths stay on opus).
 2. **Set a default subagent model, so an omitted argument has a safe
    landing instead of inheriting Opus.** Claude Code (confirmed on the
    installed CLI, v2.1.267, against
