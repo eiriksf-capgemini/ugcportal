@@ -162,7 +162,7 @@ Real instances from this repo:
 
 "Round" means a review pass **that actually reviewed the diff** — a run that stopped at red CI or an unmergeable branch reviewed nothing and is not a round. `pr-review-merge` step 4b counts them from round markers the skill stamps on every comment that ends such a round, checks the resulting chain for forgery, edits, gaps and implausible round numbers, and covers the bootstrap for PRs whose history predates this rule. Step 1a serialises overlapping runs on a per-PR lock, so two of them cannot both stamp the same round and break the chain.
 
-Exactly one row matches any given round. The any-finding row covered rounds 1-3 until `ugcportal-kwxh` (2026-10-19) narrowed it to round 1: on the v0.9.0 review measured in that bead, 64 of 107 rounds found only lows and cost 58.3M ITE (69% of the release's review cost), and all 16 rounds that found a medium-or-above were rounds 1-3, none at round 4 or later. The rows from 2 on still block on every medium-or-above, so the round-2 and round-3 mediums of that measurement block exactly as before.
+Exactly one row matches any given round. The any-finding row covered rounds 1-3 until `ugcportal-kwxh` (2026-10-19) narrowed it to round 1: on the v0.9.0 review measured in that bead, 64 of 107 rounds found only lows and cost 58.3M ITE (69% of the cost of the 107 measured rounds), and all 16 rounds that found a medium-or-above were rounds 1-3, none at round 4 or later. The rows from 2 on still block on every medium-or-above, so the round-2 and round-3 mediums of that measurement block exactly as before.
 
 | Round | What blocks the merge |
 |---|---|
