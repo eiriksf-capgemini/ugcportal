@@ -1,0 +1,12 @@
+{
+  "_comment": "Accepted high or critical npm advisories, keyed by GHSA id, never by package name (ugcportal-1j4j). scripts/check-npm-audit.mjs fails CI on a high or critical advisory missing from this file, on an entry below that is not a high or critical advisory in `npm audit --json` (the gate collects high and critical only: an entry whose id is gone from the report, or whose id is still there at a lower severity, fails, so remove it in both cases), on an entry with no owner bead, a malformed date or a missing reason, and on an entry whose re-check date has passed. Who may accept an advisory is ugcportal-pg85's rule; ownerBead is the hook it refines.",
+  "advisories": {
+    "GHSA-vfj7-8cjw-p6xm": {
+      "package": "braces",
+      "ownerBead": "ugcportal-pg85",
+      "recorded": "2026-10-18",
+      "recheck": "2027-01-18",
+      "reason": "braces <=3.0.3 stack exhaustion via deeply nested patterns; reaches us only through eslint-config-next -> @next/eslint-plugin-next -> fast-glob -> micromatch (dev-time linting, no runtime path). The fix is the semver-major eslint-config-next move that docs/process/dependency-deferral-register.md defers."
+    }
+  }
+}

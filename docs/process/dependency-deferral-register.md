@@ -78,3 +78,16 @@ after: `{"info":0,"low":0,"moderate":0,"high":5,"critical":0,"total":5}` (the br
   opportunistically, and the bead's K2 was amended to allow it as a named in-range patch bump.
 
 Owner: ugcportal-90i5. Re-check with `npm audit --json` before relying on the counts.
+
+## Advisory allowlist (CI gate)
+
+The guards job runs `node scripts/check-npm-audit.mjs` (ugcportal-1j4j). It fails on any
+high or critical advisory whose GHSA id is not in `scripts/npm-audit-allowlist.json`, and on
+an allowlisted id that no longer appears in `npm audit --json`. Entries are keyed by GHSA id,
+not package name, and carry the package, an owner bead, the date recorded, a re-check date
+(CI fails once it has passed) and a reason. The gate collects high and critical advisories only. A deferral in the
+table above that leaves a high or critical advisory in the tree needs a matching entry there,
+owned by the bead that defers it; an entry for an advisory at a lower severity fails the gate
+(it is present, but below what the gate collects) until the entry is removed. The
+braces chain (`GHSA-vfj7-8cjw-p6xm`) is listed under ugcportal-pg85. Who may accept an
+advisory is ugcportal-pg85's rule, not this gate's.
