@@ -75,21 +75,25 @@ diverging as more time passes.
    pass the `model` it prints as the spawn's model. The spawn takes a model
    only: effort comes from the agent definition, so the `effort` it prints is
    for the record (the round comment's `Model:` line) and for a future
-   harness that accepts one. It prints `opus` when any changed path is on its
-   risk list (`RISK_PATHS` in the script: attestation, resale rights, origin,
-   test-support, API route handlers, auth, prisma, workflows,
-   `scripts/check-*.mjs`, the `.claude/settings*.json` permission files, the
-   secret/credential/env paths, the process-guard scripts — itself,
-   `sweep-merged-branches.mjs`, `check-human-merge-labels.mjs`,
-   `gh-app-token.mjs` — and any `src/lib/**` or `src/app/**` path whose name
-   says session, sign-in, auth, roles, admin, oauth, sellability, publishing,
-   rights, licence, pricing, payment, crypto, encryption, attestation, origin,
-   disclosure or evidence; sourced from the `pr-review-merge` step 2
-   sensitive-path list and `CLAUDE.md`'s model-fit table), and also `opus`
-   when gh's 100-file window truncated the file list; otherwise the bead's
-   `model` tier with a floor of `sonnet` (never haiku for review);
-   `.claude/skills/**`, `.claude/agents/**` and `CLAUDE.md` are process prose
-   and take the bead's tier. Exit 2 (no bead id in the PR title, or no
+   harness that accepts one. The classification fails closed: a path takes
+   the bead's `model` tier (floored at `sonnet`, never haiku for review) only
+   when it is process prose (`PROCESS_PROSE` in the script: markdown anywhere,
+   including `.claude/skills/**`, `.claude/agents/**`, `CLAUDE.md` and
+   `CHANGELOG.md`, and everything under `docs/`) or on the pinned
+   `PRESENTATION_ALLOWLIST` (styling, static assets and render-only files,
+   each entry with the reason a defect in it cannot reach sellability,
+   rights, auth, money, data or the review and merge process). Every other
+   path is code or configuration and routes `opus` (`code default`), and the
+   non-prose `pr-review-merge` step 2 sensitive paths route `opus` ahead of
+   both lists (`GUARD_PATHS`); so does a file list gh's 100-file window
+   truncated. The cost consequence: most code PRs review on `opus`; docs,
+   process and allowlisted presentation PRs review at the bead's tier, which
+   is where recommendation 4 of that cost review (section 7 of the document
+   named below) applies, and a later
+   measurement decides whether the allowlist should widen. The reason it
+   prints names the rule that fired (`truncated`, `guard`, `code default`,
+   `floor`, or the bead tier with its process-prose and allowlist counts).
+   Exit 2 (no bead id in the PR title, or no
    `model` on the bead) means the orchestrator decides by hand and records
    why; `opus`, the agent file's own `model:`, is the fallback.
    Measured basis (`docs/process/release-cost-v0.8.1-vs-v0.9.0.md` section
@@ -97,7 +101,7 @@ diverging as more time passes.
    passes), against 36 sonnet rounds at a mean of 335k; the 61 rounds on
    sonnet-tiered beads (45 opus, 16 sonnet) carry 45.1M of 85.3M review ITE,
    53%; every medium was found by an opus round, on the larger PRs, an
-   association only (which is why risk paths stay on opus).
+   association only (which is why code defaults to opus).
 2. **Set a default subagent model, so an omitted argument has a safe
    landing instead of inheriting Opus.** Claude Code (confirmed on the
    installed CLI, v2.1.267, against

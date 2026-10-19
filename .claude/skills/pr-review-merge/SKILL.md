@@ -101,7 +101,7 @@ If the changed files (`gh pr view --json files`) touch any of the following, thi
 - Anything that looks like infra/secrets config: `docker-compose.yml`, `**/*secret*`, `**/*credential*`, `.env*`, `**/*.pem`, `**/*.key`
 - Auth code: `src/lib/auth.ts`, anything under `src/app/api/auth/`
 
-This list is the authority for what routes to a human. `scripts/check-human-merge-labels.mjs` (`SENSITIVE_PATH_RES`, used by `isSensitivePath`) mirrors it in code to classify labels after the fact (it routes nothing) and `scripts/check-sensitive-files.mjs` only points here; when this list changes, change the mirror and its test rows in the same PR, and classify the new entry in `scripts/reviewer-model.mjs` (`RISK_PATHS`, or `PROCESS_PROSE` with its reason), whose test fails on a step-2 regex it does not classify.
+This list is the authority for what routes to a human. `scripts/check-human-merge-labels.mjs` (`SENSITIVE_PATH_RES`, used by `isSensitivePath`) mirrors it in code to classify labels after the fact (it routes nothing) and `scripts/check-sensitive-files.mjs` only points here; when this list changes, change the mirror and its test rows in the same PR, and classify the new entry in `scripts/reviewer-model.mjs` (`GUARD_PATHS`, or `PROCESS_PROSE` with its reason), whose test fails on a step-2 regex it does not classify.
 
 If any of these are touched, still run the review (step 4) and post it as a normal comment, but explicitly state in the comment that this PR requires human approval/merge because it touches a sensitive path, and do not call `gh pr review --approve` or `gh pr merge`.
 

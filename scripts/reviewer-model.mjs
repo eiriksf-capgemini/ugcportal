@@ -10,91 +10,105 @@
  *   exit 1 when `gh` or `bd` itself fails, or gh's output has no numeric
  *   `changedFiles` to check the file list against.
  *
- * Rule:
- *   - opus when gh's file list is truncated: `gh pr view --json files` stops
- *     at 100 files (gh 2.102.0 on cli/cli#14354 prints files=100 against
- *     changedFiles=150; the same window as FILE_WINDOW in
- *     scripts/check-human-merge-labels.mjs), so when files.length is below
- *     the PR's `changedFiles` a risk path past the window would go unseen;
- *     this fails closed rather than routing on the part it read;
- *   - opus when any changed path matches RISK_PATHS;
- *   - otherwise the bead's `model` tier, floored at sonnet (haiku is never a
- *     review tier);
- *   - PROCESS_PROSE paths (.claude/skills/**, .claude/agents/**, CLAUDE.md)
- *     take the bead's tier (floored). They route to a human merge anyway
- *     (pr-review-merge step 2); this script only picks the model that
- *     reviews them;
- *   - effort is the bead's `model_effort` when it is one of EFFORTS
- *     (CLAUDE.md "Model-fit metadata", lower case, not case-folded), else
- *     `high`, and the reason names an illegal value.
+ * Rule (fails closed; each path takes the first of these that matches):
+ *   1. GUARD_PATHS -> opus. The non-prose entries of the sensitive-path
+ *      list in .claude/skills/pr-review-merge/SKILL.md step 2 (line 104
+ *      names it the authority; mirrored in scripts/check-human-merge-labels.mjs
+ *      SENSITIVE_PATH_RES): the .claude/settings*.json permission files,
+ *      auth, workflows, docker-compose.yml and the secret, credential, .env,
+ *      .pem and .key paths. They come first so that no prose or allowlist
+ *      entry can cover them (a credential file under docs/ routes opus; the
+ *      test "a guard path beats prose and the allowlist" pins it).
+ *   2. PROCESS_PROSE -> the bead's tier: markdown anywhere (skills, agent
+ *      prompts, CLAUDE.md, CHANGELOG.md, READMEs) and everything under docs/.
+ *      The skill and agent prose routes to a human merge anyway (step 2);
+ *      this script only picks the model that reviews it. A non-markdown file
+ *      under .claude/skills/ (a script) is code, not prose.
+ *   3. PRESENTATION_ALLOWLIST -> the bead's tier: exact paths and narrow
+ *      globs, each with the reason a defect in it cannot reach sellability,
+ *      rights, auth, money, data or the review and merge process.
+ *   4. Code default -> opus: every other path, which is code or
+ *      configuration (src/**, prisma/**, scripts/**, .github/**, .beads/**,
+ *      e2e/**, public/**, package*.json, Dockerfile, *.config.*, vitest*,
+ *      and any file nobody has classified yet).
+ * A PR routes opus when any one changed path does (rule 1 or 4), and also
+ * when gh's file list is truncated: `gh pr view --json files` stops at 100
+ * files (gh 2.102.0 on cli/cli#14354 prints files=100 against
+ * changedFiles=150; the same window as FILE_WINDOW in
+ * scripts/check-human-merge-labels.mjs), so when files.length is below the
+ * PR's `changedFiles` this routes opus rather than on the part it read.
+ * Otherwise it takes the bead's `model` tier floored at sonnet (haiku is
+ * never a review tier). Effort is the bead's `model_effort` when it is one
+ * of EFFORTS (CLAUDE.md "Model-fit metadata", lower case, not case-folded),
+ * else `high`, and the reason names an illegal value.
  *
- * The risk list has four sources, named per entry in RISK_PATHS:
- *   guard  = the sensitive-path list in .claude/skills/pr-review-merge/SKILL.md
- *            step 2 (line 104 names it the authority; mirrored in
- *            scripts/check-human-merge-labels.mjs SENSITIVE_PATH_RES).
- *            .claude/settings.json has no path list (it carries permission
- *            allow/deny rules and a SessionStart hook), so that skill list is
- *            the guard read here. Every step-2 regex is either a guard entry
- *            here or a PROCESS_PROSE entry with its reason; the test fails on
- *            a step-2 regex that is neither. .claude/settings*.json are
- *            permission config, not prose, so they are guard entries.
- *   model-fit = CLAUDE.md's model-fit table, "opus: security/money
- *            correctness, ... wide blast radius": attestation, resale rights,
- *            origin, test-support, API route handlers, prisma, check scripts.
- *   name-pattern = the same model-fit row made enumerable for src/lib/** and
- *            src/app/**: any path there whose part below src/lib/ or src/app/
- *            names session, sign-in, auth, roles, admin, oauth, sellability,
- *            publishing, rights, licences, pricing, payment, crypto,
- *            encryption, attestation, origin, disclosure or evidence. It
- *            matches by name, so it errs towards opus (src/app/admin/** all
- *            matches).
- *   process-guard = scripts whose defect reaches every review or every merge:
- *            this script (it picks every review's model),
- *            sweep-merged-branches.mjs (deletes branches and worktrees),
- *            check-human-merge-labels.mjs and gh-app-token.mjs (the PR
- *            author identity the review chain reads), with their tests.
+ * Why the default is opus rather than a list of risky names: auth,
+ * sellability, rights and legal code often carries a file name no pattern
+ * lists (src/config/users.ts, curation-clearance-write.ts, media-access.ts,
+ * consent.ts, ...), and a list of names lets every new file fall open the
+ * same way. CLAUDE.md's model-fit table puts "security/money correctness, ...
+ * wide blast radius" on opus, and most of src/ is one of those. The cost
+ * consequence: most code PRs review on opus; docs, process prose and
+ * allowlisted presentation files review at the bead's tier. A later
+ * measurement decides whether the allowlist should widen.
  *
- * The decision is pure (decide); gh and bd run only in main(), so the tests
- * need no network. Same shape as scripts/check-npm-audit.mjs.
+ * The reason names the rule that fired: `truncated:`, `guard:`,
+ * `code default:`, `floor:`, or `bead <id> tier <t>;` followed by the
+ * process-prose and allowlist counts with each allowlist reason.
+ *
+ * The decision is pure (decide, classify); gh and bd run only in main(), so
+ * the tests need no network. Same shape as scripts/check-npm-audit.mjs.
  */
 import { spawnSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-/** @type {{re: RegExp, example: string, source: "guard"|"model-fit"|"name-pattern"|"process-guard"}[]} */
-export const RISK_PATHS = [
-  { re: /^src\/lib\/attestation/, example: "src/lib/attestation.ts", source: "model-fit" },
-  { re: /^src\/lib\/resale-rights/, example: "src/lib/resale-rights.ts", source: "model-fit" },
-  { re: /^src\/lib\/origin/, example: "src/lib/origin.ts", source: "model-fit" },
-  { re: /^src\/lib\/test-support\//, example: "src/lib/test-support/db.ts", source: "model-fit" },
-  { re: /^src\/app\/api\//, example: "src/app/api/media/route.ts", source: "model-fit" },
-  { re: /^prisma\//, example: "prisma/schema.prisma", source: "model-fit" },
-  { re: /^scripts\/check-[^/]*\.mjs$/, example: "scripts/check-npm-audit.mjs", source: "model-fit" },
-  {
-    re: /^src\/(?:lib|app)\/.*(?:session|sign-in|auth|role|admin|oauth|sellab|publish|rights|licen[cs]e|pricing|price|payment|crypto|encrypt|attest|origin|disclos|evidence)/i,
-    example: "src/lib/sellable-media.ts",
-    source: "name-pattern",
-  },
-  {
-    re: /^scripts\/(?:reviewer-model|sweep-merged-branches|check-human-merge-labels|gh-app-token)(?:\.test)?\.mjs$/,
-    example: "scripts/sweep-merged-branches.mjs",
-    source: "process-guard",
-  },
-  { re: /^\.claude\/settings(\.local)?\.json$/, example: ".claude/settings.json", source: "guard" },
-  { re: /^src\/lib\/auth/, example: "src/lib/auth.ts", source: "guard" },
-  { re: /^src\/app\/api\/auth\//, example: "src/app/api/auth/[...nextauth]/route.ts", source: "guard" },
-  { re: /^\.github\/workflows\//, example: ".github/workflows/ci.yml", source: "guard" },
-  { re: /(^|\/)docker-compose\.yml$/, example: "docker-compose.yml", source: "guard" },
-  { re: /(^|\/)[^/]*(secret|credential)[^/]*$/, example: "src/lib/secret-store.ts", source: "guard" },
-  { re: /(^|\/)\.env[^/]*$/, example: ".env.production", source: "guard" },
-  { re: /\.(pem|key)$/, example: "hal9000.pem", source: "guard" },
+/** Step-2 sensitive paths that are not prose: always opus, ahead of prose and the allowlist. */
+export const GUARD_PATHS = [
+  { re: /^\.claude\/settings(\.local)?\.json$/, reason: "permission config (step 2)" },
+  { re: /^src\/lib\/auth/, reason: "sign-in configuration (step 2)" },
+  { re: /^src\/app\/api\/auth\//, reason: "auth route handlers (step 2)" },
+  { re: /^\.github\/workflows\//, reason: "CI workflows (step 2)" },
+  { re: /(^|\/)docker-compose\.yml$/, reason: "deployment config (step 2)" },
+  { re: /(^|\/)[^/]*(secret|credential)[^/]*$/, reason: "secret or credential path (step 2)" },
+  { re: /(^|\/)\.env[^/]*$/, reason: "environment file (step 2)" },
+  { re: /\.(pem|key)$/, reason: "key material (step 2)" },
 ];
 
-/** Step-2 sensitive paths that are deliberately not risk, each with its reason. */
+/** Prose: takes the bead's tier. Disjoint, so a path matches at most one entry. */
 export const PROCESS_PROSE = [
-  { re: /^\.claude\/skills\//, reason: "skill prose: review and process rules, routed to a human merge by step 2" },
-  { re: /^\.claude\/agents\//, reason: "agent system prompts: process prose, routed to a human merge by step 2" },
+  { re: /^\.claude\/skills\/.*\.md$/, reason: "skill prose: review and process rules, routed to a human merge by step 2" },
+  { re: /^\.claude\/agents\/.*\.md$/, reason: "agent system prompts: process prose, routed to a human merge by step 2" },
   { re: /^CLAUDE\.md$/, reason: "project instructions: process prose, routed to a human merge by step 2" },
+  { re: /^CHANGELOG\.md$/, reason: "release notes: prose cut-release writes from bead metadata" },
+  { re: /^docs\//, reason: "documentation tree: process records, design mockups and screenshots no build reads" },
+  {
+    re: /^(?!docs\/|\.claude\/(?:skills|agents)\/|CLAUDE\.md$|CHANGELOG\.md$).*\.md$/,
+    reason: "markdown elsewhere (AGENTS.md, READMEs, vendored skill prose): read by people and agents, not executed",
+  },
+];
+
+/**
+ * Presentation files that take the bead's tier. Each entry says why a defect
+ * in it cannot reach sellability, rights, auth, money, data or the review and
+ * merge process. When in doubt a file stays off this list and routes opus.
+ * The tests fail on an entry that matches no tracked file, on one that covers
+ * a step-2 sensitive path or a risk-named path, and on any edit to the list.
+ */
+export const PRESENTATION_ALLOWLIST = [
+  { re: /^src\/components\/ui\//, reason: "UI primitives (button, focus ring, link and input class strings): styling, no data access, auth or money" },
+  { re: /^src\/app\/vendor\//, reason: "vendored shadcn Tailwind stylesheet: CSS only, no logic" },
+  { re: /^src\/app\/globals\.css$/, reason: "global stylesheet: CSS only, no logic" },
+  { re: /^src\/app\/favicon\.ico$/, reason: "favicon: a static icon, no logic" },
+  { re: /^src\/lib\/design\//, reason: "design tokens, colour maths and the source scans that police them: a defect weakens a visual-design check only" },
+  { re: /^src\/components\/type-scale(?:\.test)?\.tsx?$/, reason: "typography class constants: styling only" },
+  { re: /^src\/components\/page-title\.tsx$/, reason: "renders a heading from its children: no data access" },
+  { re: /^src\/components\/site\/section-heading\.ts$/, reason: "section heading class string: styling only" },
+  { re: /^src\/lib\/breakpoints\.ts$/, reason: "responsive breakpoint constants: layout only" },
+  { re: /^src\/lib\/utils\.ts$/, reason: "re-exports the cn class-name joiner: styling only" },
+  { re: /^src\/app\/about\/page(?:\.test)?\.tsx$/, reason: "about page: composes static site sections, reads no data and gates nothing" },
+  { re: /^src\/app\/upload\/alt-text(?:\.test)?\.ts$/, reason: "client-side alt-text form helper: the server re-validates through media-rules.ts" },
+  { re: /^src\/app\/upload\/tag-selection(?:\.test)?\.ts$/, reason: "client-side tag picker state: the tag cap comes from media-rules.ts and the server enforces it" },
 ];
 
 const TIERS = ["haiku", "sonnet", "opus", "fable"];
@@ -112,9 +126,19 @@ export function beadIdFromTitle(title) {
   return m ? m[1] : null;
 }
 
-/** @param {string} path */
-export function riskMatch(path) {
-  return RISK_PATHS.find((r) => r.re.test(path)) ?? null;
+/**
+ * Which rule classifies one path.
+ * @param {string} path
+ * @returns {{rule: "guard"|"process prose"|"allowlist"|"code default", reason: string}}
+ */
+export function classify(path) {
+  const guard = GUARD_PATHS.find((r) => r.re.test(path));
+  if (guard) return { rule: "guard", reason: guard.reason };
+  const prose = PROCESS_PROSE.find((r) => r.re.test(path));
+  if (prose) return { rule: "process prose", reason: prose.reason };
+  const allow = PRESENTATION_ALLOWLIST.find((r) => r.re.test(path));
+  if (allow) return { rule: "allowlist", reason: allow.reason };
+  return { rule: "code default", reason: "code or configuration on no allowlist" };
 }
 
 /**
@@ -134,14 +158,22 @@ export function decide({ title, paths, changedFiles = paths.length, bead }) {
   const effort = legal ? /** @type {string} */ (raw) : "high";
   const effortNote = legal || raw == null || raw === "" ? "" : `; model_effort ${JSON.stringify(raw)} is not one of ${EFFORTS.join("|")}; effort high`;
   if (paths.length < changedFiles) {
-    return { ok: true, model: "opus", effort, reason: `file list truncated (${paths.length} of ${changedFiles}); routed opus${effortNote}` };
+    return { ok: true, model: "opus", effort, reason: `truncated: file list has ${paths.length} of ${changedFiles} changed files; routed opus${effortNote}` };
   }
+  let prose = 0;
+  const allowed = new Map();
   for (const p of paths) {
-    const hit = riskMatch(p);
-    if (hit) return { ok: true, model: "opus", effort, reason: `risk path ${p} (${hit.source} list)${effortNote}` };
+    const c = classify(p);
+    if (c.rule === "guard") return { ok: true, model: "opus", effort, reason: `guard: ${p} (${c.reason}); routed opus${effortNote}` };
+    if (c.rule === "code default") return { ok: true, model: "opus", effort, reason: `code default: ${p} is ${c.reason}; routed opus${effortNote}` };
+    if (c.rule === "process prose") prose += 1;
+    else allowed.set(c.reason, (allowed.get(c.reason) ?? 0) + 1);
   }
-  const process = paths.filter((p) => PROCESS_PROSE.some((x) => x.re.test(p))).length;
-  const note = `${paths.length} changed path(s) checked, none on the risk list${process ? `, ${process} process-prose path(s) take the bead's tier` : ""}${effortNote}`;
+  const parts = [];
+  if (prose) parts.push(`${prose} process prose`);
+  const nAllowed = [...allowed.values()].reduce((a, b) => a + b, 0);
+  if (nAllowed) parts.push(`${nAllowed} allowlist (${[...allowed.keys()].map((r) => `allowlist: ${r}`).join("; ")})`);
+  const note = `${paths.length} changed path(s), none code by default${parts.length ? `: ${parts.join(", ")}` : ""}${effortNote}`;
   if (tier === "haiku") {
     return { ok: true, model: "sonnet", effort, reason: `floor: bead ${id} is tiered haiku, never haiku for review; ${note}` };
   }
