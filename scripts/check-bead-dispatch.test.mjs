@@ -2466,7 +2466,7 @@ describe("the skill file's own invocation does not discard the exit status", { t
   }
 });
 
-// --- ugcportal-zoee (ze80, jtyl): merge commits and mid-sentence premise mentions -
+// --- ugcportal-zoee (ze80, jtyl K2): merge commits and the names-no-commit excerpt -
 
 /**
  * A scratch repo with a --no-ff merge on main (ugcportal-ze80).
@@ -2646,7 +2646,7 @@ describe("ugcportal-zoee ze80 (round 1 M1): a merge whose result differs from th
   }
 });
 
-describe("ugcportal-zoee jtyl: a mention of the premise form is not a statement, and the excerpt starts at the label", { timeout: 60_000 }, () => {
+describe("ugcportal-zoee jtyl K2: the excerpt starts at the label, and a statement saying `line` is read", { timeout: 60_000 }, () => {
   let pr;
   let c;
   beforeAll(() => {
@@ -2663,16 +2663,6 @@ describe("ugcportal-zoee jtyl: a mention of the premise form is not a statement,
     const res = runCliAllowFail(["--beads", file, "--repo", pr, "--head", c[6]]);
     return { res, line: res.stdout.split("\n").find((l) => /^\s+(ok|FAIL)\s+premise-fresh\b/.test(l)) || "" };
   };
-
-  it("K1: the cupf shape (the form mentioned mid-sentence in the description) leaves the notes' sound statement to be judged", () => {
-    const base = completeBead();
-    const description = `${base.description}\n\nIn scope: the bead form a guardrail K, Premise verified line, metadata, and nothing else.`;
-    const notes = `Premise verified 2026-10-19 at origin/main ${c[6]} by reading the code.\nPremise depends on: src/lib/a.ts`;
-    const { res, line } = run({ ...base, description, notes });
-    expect(res.status).toBe(0);
-    expect(line).not.toContain("the description's last premise statement");
-    expect(line).toContain(`premise verified at ${c[6].slice(0, 7)}`);
-  });
 
   it("K2: a description statement naming no commit is quoted from its label, not from the paragraph's first words", () => {
     const base = completeBead();
@@ -2706,65 +2696,6 @@ describe("ugcportal-zoee jtyl: a mention of the premise form is not a statement,
     expect(res.status).toBe(1);
     expect(line).toContain("touched");
     expect(line).toContain(`premise verified at ${c[1].slice(0, 7)}`);
-  });
-
-  it("round 1 L1: the backtick and colon spellings of the mention are not statements", () => {
-    for (const text of [
-      "In scope: user story, a guardrail K, `Premise verified:` line, metadata.",
-      "In scope: user story, a guardrail K, `Premise verified` line, metadata.",
-      "In scope: user story, a guardrail K, Premise verified: line, metadata.",
-      "In scope: user story, a guardrail K, Premise verified line, metadata.",
-    ]) {
-      expect(findPremiseLines("", text).length, text).toBe(0);
-    }
-  });
-  // --- fix round 2 (PR #324 review round 2): the mention test reads the whole wrapped statement ---
-
-  /** an older statement at c0 declaring README.md (fresh), then a newer one at c1 declaring src/lib/c.ts (touched by c6) */
-  const twoStatements = (newer) => `Premise verified 2026-10-19 at origin/main ${c[0]} by reading the code.\nPremise depends on: README.md\n${newer}\nPremise depends on: src/lib/c.ts`;
-
-  it("round 2 M1: a statement whose commit a hard wrap moved later on the next line is still read, so the older one is never judged in its place", () => {
-    for (const newer of [
-      `Premise verified lines\n10-20 of src/lib/c.ts at origin/main ${c[1]} by reading them.`,
-      `Premise checked line\nby line at origin/main ${c[1]}.`,
-      `Premise verified lines of src/lib/c.ts by reading them at\norigin/main ${c[1]}.`,
-    ]) {
-      expect(findPremiseLines(twoStatements(newer), "").length, newer).toBe(2);
-      const { res, line } = run({ ...completeBead(), notes: twoStatements(newer) });
-      expect(res.status, newer).toBe(1);
-      expect(line, newer).toContain("the notes' last premise statement names no commit");
-      expect(line, newer).not.toContain(`premise verified at ${c[0].slice(0, 7)}`);
-    }
-  });
-
-  it("round 2 M2: a newer statement naming no commit but saying line by line / line-by-line / a line number fails closed, on one line or wrapped", () => {
-    for (const newer of [
-      "Premise verified line by line on 2026-10-18 against the current code.",
-      "Premise verified line-by-line on 2026-10-18 against the current code.",
-      "Premise verified line 12 on 2026-10-18 against the current code.",
-      "Premise verified line #12 on 2026-10-18 against the current code.",
-      "Premise verified line L12 on 2026-10-18 against the current code.",
-      "Premise checked line\nby line on 2026-10-18 against the current code.",
-      "Premise verified lines\n10-20 on 2026-10-18 against the current code.",
-    ]) {
-      expect(findPremiseLines(twoStatements(newer), "").length, newer).toBe(2);
-      const { res, line } = run({ ...completeBead(), notes: twoStatements(newer) });
-      expect(res.status, newer).toBe(1);
-      expect(line, newer).toContain("the notes' last premise statement names no commit");
-    }
-  });
-
-  it("round 2: a wrapped mention of the form that names no commit anywhere is still not a statement", () => {
-    for (const text of [
-      "In scope: user story, a guardrail K, Premise verified line,\nmetadata, and nothing else.",
-      "In scope: user story, a guardrail K, `Premise verified:` line, metadata, and\nnothing else at all.",
-    ]) {
-      expect(findPremiseLines("", text).length, text).toBe(0);
-    }
-    // the exclusion never widens past the label line: a label whose `line` a wrap moved down stays a statement (and names no commit)
-    expect(findPremiseLines("", "In scope: a guardrail K, `Premise verified:`\nline, metadata.").map((st) => st.shas)).toEqual([[]]);
-    // a blank line ends the wrapped statement: a commit in the next paragraph is not the mention's
-    expect(findPremiseLines("", `a guardrail K, Premise verified line, metadata.\n\nPremise verified 2026-10-19 at ${c[0]}.`).map((st) => st.shas)).toEqual([[c[0]]]);
   });
 });
 

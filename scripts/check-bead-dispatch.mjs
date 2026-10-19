@@ -344,10 +344,10 @@ export function findPremiseLines(notes, description = "") {
   for (const [field, text] of [["description", String(description || "")], ["notes", String(notes || "")]]) {
     const lines = text.split("\n");
     for (let i = 0; i < lines.length; i++) {
-      if (!isPremiseStatementStart(lines, i)) continue;
+      if (!isPremiseStatementStart(lines[i])) continue;
       const own = shasIn(lines[i]);
       const next = lines[i + 1] || "";
-      const wrapped = own.length === 0 && !isPremiseStatementStart(lines, i + 1) && !DEPENDS_LINE_RE.test(next) ? LEADING_SHA_RE.exec(next) : null;
+      const wrapped = own.length === 0 && !isPremiseStatementStart(next) && !DEPENDS_LINE_RE.test(next) ? LEADING_SHA_RE.exec(next) : null;
       const statement = wrapped ? `${lines[i].trim()} ${next.trim()}` : lines[i].trim();
       out.push({ field, line: statement, shas: wrapped ? [wrapped[1]] : own, depends: findDeclaration(lines, i) });
     }
@@ -370,80 +370,13 @@ const DEPENDS_LINE_RE = /^[\s*_>`#-]*premise depends on\s*:/i;
  * follow a clause boundary (`.`, `:`, `;`, `!`, `?`, `,`, `(`, `[`), with only
  * whitespace or markup between, so "on the premise: the gate at <sha> was
  * green" is not a statement but "2026-10-06 audit: premise re-verified" is.
- * Nor is a mention of the bead form itself ("a guardrail K, Premise verified
- * line, metadata"; also the quoted spellings "`Premise verified:` line" and
- * "Premise verified: line"): see isFormMention (ugcportal-jtyl).
  */
 const PREMISE_LABEL_RE = /(?:^|[.:;!?,(\[])[\s`*_>#(\[-]*premise(?![\w-])[\s,(]*(?:(?:re-?)?(?:verified|checked|measured|confirmed)\b|corrected\b|:)/i;
 /** A line that OPENS with a commit token, after any quoting or list markup: the hard-wrap continuation. */
 const LEADING_SHA_RE = /^[\s`*_>(\[-]*([0-9a-f]{7,40})\b/;
 
-/**
- * Anchored at the word `premise`: the verb, then (through quote/colon
- * markup) the word `line`/`lines`, NOT followed by `by` or `-by`
- * (`line by line`, `line-by-line`) or by a number (`line 12`, `line #12`,
- * `line L12`, `lines 10-20`). Tested twice, and both must match: against
- * the label line alone (so the word `line` itself is on the label line --
- * a label whose `line` a wrap moved to the next line is not excluded by
- * this), and against the statement's wrapped text joined with spaces (so a
- * `by` or a number that a hard wrap moved to the next line still keeps the
- * statement).
- */
-const FORM_MENTION_RE = /^premise[\s,(]*(?:re-?)?(?:verified|checked|measured|confirmed)[\s`*_:)]*lines?\b(?!\s*-\s*by\b|\s+by\b|\s+#?L?\d)/i;
-/** a commit-shaped token anywhere (not global, so `.test` keeps no state) */
-const ANY_SHA_RE = /\b[0-9a-f]{7,40}\b/;
-
-/**
- * The text a statement starting at `lines[i]` could run over: that line from
- * its label onwards, then each following line up to (not including) a blank
- * line, a line carrying a premise label (a statement or a mention: either
- * starts a new note, and a commit on or after it is that note's) or a
- * `Premise depends on:` line. Stopping at every labelled line, not only at
- * the next statement, keeps the test below from needing to know whether
- * that later line is a mention itself.
- */
-function wrappedStatement(lines, i) {
-  const line = lines[i] || "";
-  const label = PREMISE_LABEL_RE.exec(line);
-  const parts = [line.slice(label ? label.index : 0)];
-  for (let k = i + 1; k < lines.length; k++) {
-    const l = lines[k];
-    if (l.trim() === "" || PREMISE_LABEL_RE.test(l) || DEPENDS_LINE_RE.test(l)) break;
-    parts.push(l);
-  }
-  return parts.map((p) => p.trim()).join(" ");
-}
-
-/**
- * Whether the labelled line `lines[i]` names the bead form ("Premise verified
- * line, metadata") rather than making a verification. It is a mention only
- * when the label is followed, on its own line, by `line`/`lines` that --
- * read over its whole wrapped statement (`wrappedStatement`) -- is not
- * `line by line`, `line-by-line` or a line number, AND no commit-shaped token appears
- * anywhere in that text -- not on the label line, not at the start of the
- * next, not later in any wrapped line. A statement that names a commit
- * anywhere in its wrapped lines is therefore never excluded; one that names
- * none is excluded only when it says `line` the way the form does, and every
- * other one is kept and fails as naming no commit (ugcportal-jtyl; PR #324
- * review rounds 1 and 2). Keeping a statement does not make a commit later in
- * its wrapped lines its own: `findPremiseLines` still reads only a commit on
- * the label line or opening the next, so a statement whose commit sits later
- * than that names no commit and fails closed, as it does on main.
- */
-function isFormMention(lines, i) {
-  const line = lines[i] || "";
-  const label = PREMISE_LABEL_RE.exec(line);
-  if (!label) return false;
-  const fromWord = (t) => t.slice(Math.max(0, t.toLowerCase().indexOf("premise")));
-  if (!FORM_MENTION_RE.test(fromWord(line.slice(label.index)))) return false;
-  const text = wrappedStatement(lines, i);
-  if (!FORM_MENTION_RE.test(fromWord(text))) return false;
-  return !ANY_SHA_RE.test(text);
-}
-
-function isPremiseStatementStart(lines, i) {
-  const line = lines[i] || "";
-  return PREMISE_LABEL_RE.test(line) && !DEPENDS_LINE_RE.test(line) && !isFormMention(lines, i);
+function isPremiseStatementStart(line) {
+  return PREMISE_LABEL_RE.test(line) && !DEPENDS_LINE_RE.test(line);
 }
 
 /**
@@ -490,7 +423,7 @@ function shasIn(line) {
  */
 export function findDeclaration(lines, start) {
   for (let j = start; j < lines.length; j++) {
-    if (j > start && (lines[j].trim() === "" || isPremiseStatementStart(lines, j))) break;
+    if (j > start && (lines[j].trim() === "" || isPremiseStatementStart(lines[j]))) break;
     const m = DEPENDS_RE.exec(lines[j]);
     if (!m) continue;
     let raw = lines[j].slice(m.index + m[0].length).trim();
