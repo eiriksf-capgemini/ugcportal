@@ -1029,20 +1029,27 @@ export function analysePr(data, reviewer) {
 /**
  * Parses one `findings_rN` value, the per-round record pr-review-merge step
  * 4a has the orchestrator write: `f1:<n> f2:<n> f3:<n> f4:<n> med:<n>
- * low:<n>` with an optional trailing `unstated:<n>`, then an optional
+ * low:<n>` with an optional trailing `unstated:<n>`, or else an optional
  * trailing `merged:lows-filed` (ugcportal-kwxh: the round merged with its lows
- * filed as beads; read as `mergedLowsFiled`). Returns null for anything else
- * (absent, extra or missing fields, a non-integer), so a malformed value is
- * never read as zeros.
+ * filed as beads; read as `mergedLowsFiled`). The tag is accepted only where
+ * such a round can exist: `med` is 0, `low` is at least 1 and there is no
+ * `unstated` field. Whitespace is normalised the way check-pass-budget's
+ * selectRounds normalises it (trimmed, every run collapsed to one space), so
+ * the two agree on every value (its test iterates the variants). Returns null
+ * for anything else (absent, extra or missing fields, a non-integer, the tag
+ * on a round that could not have merged), so a malformed value is never read
+ * as zeros.
  *
  * @param {unknown} value
  */
 export function parseFindingsKey(value) {
   if (typeof value !== "string") return null;
-  const m = /^f1:(\d+) f2:(\d+) f3:(\d+) f4:(\d+) med:(\d+) low:(\d+)(?: unstated:(\d+))?( merged:lows-filed)?$/.exec(value.trim());
+  const m = /^f1:(\d+) f2:(\d+) f3:(\d+) f4:(\d+) med:(\d+) low:(\d+)(?: unstated:(\d+))?( merged:lows-filed)?$/.exec(value.trim().replace(/\s+/g, " "));
   if (!m) return null;
   const [f1, f2, f3, f4, med, low, unstated] = m.slice(1, 8).map((x) => (x === undefined ? 0 : Number(x)));
-  return { f1, f2, f3, f4, med, low, unstated, mergedLowsFiled: m[8] !== undefined };
+  const mergedLowsFiled = m[8] !== undefined;
+  if (mergedLowsFiled && (m[7] !== undefined || med !== 0 || low === 0)) return null;
+  return { f1, f2, f3, f4, med, low, unstated, mergedLowsFiled };
 }
 
 /**
@@ -1543,10 +1550,14 @@ export function buildRows(release, beadsById, prAnalysesByNumber) {
       // Keyed severity and family counts per round, for the --json export
       // (the raw `prs` export is the prose parse only).
       roundDetail: prAnalyses.flatMap((p) =>
-        p.rounds.map((r) => ({ pr: p.number, n: r.n, source: r.source, medium: r.medium, low: r.low, stated: r.stated, fallbackReason: r.fallbackReason ?? null, families: r.keyed ? { f1: r.keyed.f1, f2: r.keyed.f2, f3: r.keyed.f3, f4: r.keyed.f4 } : null, unstated: r.keyed?.unstated ?? 0 })),
+        p.rounds.map((r) => ({ pr: p.number, n: r.n, source: r.source, medium: r.medium, low: r.low, stated: r.stated, fallbackReason: r.fallbackReason ?? null, families: r.keyed ? { f1: r.keyed.f1, f2: r.keyed.f2, f3: r.keyed.f3, f4: r.keyed.f4 } : null, unstated: r.keyed?.unstated ?? 0, mergedLowsFiled: r.keyed?.mergedLowsFiled === true })),
       ),
       families: allRounds.reduce((a, r) => (r.keyed ? { f1: a.f1 + r.keyed.f1, f2: a.f2 + r.keyed.f2, f3: a.f3 + r.keyed.f3, f4: a.f4 + r.keyed.f4 } : a), { f1: 0, f2: 0, f3: 0, f4: 0 }),
       tail: markerRounds.length ? tailRounds(allRounds) : null,
+      // Rounds whose key carries `merged:lows-filed` (ugcportal-kwxh): the PR
+      // merged on that round with its lows filed, so it is the PR's terminal
+      // round, not a blocked lows round. Counted inside `tail` all the same.
+      mergedLowsFiled: prAnalyses.flatMap((p) => p.rounds.filter((r) => r.keyed?.mergedLowsFiled).map((r) => `#${p.number} r${r.n}`)),
       inline: prAnalyses.reduce((a, p) => a + p.inlineCount, 0),
       inlineLabelled: prAnalyses.reduce(
         (a, p) => ({ medium: a.medium + p.inlineLabelled.medium, low: a.low + p.inlineLabelled.low, unstated: a.unstated + p.inlineLabelled.unstated }),
@@ -1808,7 +1819,7 @@ function renderTopTable(rows, k = 5) {
     fmtTokens(r.qa, r.qaEstimated),
     r.rounds === null ? "—" : String(r.rounds),
     r.mediumsByRound,
-    r.tail === null ? "—" : String(r.tail),
+    r.tail === null ? "—" : `${r.tail}${r.mergedLowsFiled?.length ? ` (${r.mergedLowsFiled.join(", ")} merged, lows filed)` : ""}`,
     r.perRound === null ? "—" : fmtTokens(r.perRound, true),
     r.perRound === null ? "—" : fmtTokens(r.perRound, true),
     r.perRound === null || r.tail === null ? "—" : fmtTokens(r.perRound * r.tail, true),

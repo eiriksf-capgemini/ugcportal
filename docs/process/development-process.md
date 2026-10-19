@@ -324,12 +324,12 @@ PR. Each pass stamps a round marker comment. A pass that stopped at red CI
 reviewed nothing and does not count as a round. The any-finding row covered
 rounds 1–3 until `ugcportal-kwxh` (2026-10-19) narrowed it to round 1; the
 measurement behind that, and the rule that a text-only low may be fixed by the
-reviewer inside the round, are in `.claude/skills/review-standards/SKILL.md`
+reviewer inside any round on an `exact` chain, are in `.claude/skills/review-standards/SKILL.md`
 section 3.
 
 | Round | What blocks the merge |
 |---|---|
-| 1 | **Any** finding, CONFIRMED or PLAUSIBLE, at any severity. Fix everything. |
+| 1 | **Any** finding, CONFIRMED or PLAUSIBLE, at any severity. Fix everything. A low the reviewer fixed inline in this round on an `exact` chain counts as fixed. |
 | 2–5 | Any **medium-or-above**, confirmed or unsettled. Lows are filed as beads and the PR merges. |
 | 6 (cap) | The same — but a blocker here goes to a **human**, not a seventh round. |
 | 7+ | Only on an **exact** marker chain, anchored to the latest stop comment at or above 6, with evidence someone acted since it. See `pr-review-merge` step 5b, which is operative — `CLAUDE.md`'s phrasing of this row is stale relative to it. |

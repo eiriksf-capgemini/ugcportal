@@ -213,7 +213,7 @@ describe("review-standards section 3 inline-fix exclusions (ugcportal-kwxh K5)",
   const HEADING = "### A text-only low may be fixed by the reviewer inside the round";
   const PINNED_EXCLUSIONS = [
     "**A medium-or-above finding is never fixed inline and never deferred as a bead in place of blocking:** in every round it blocks, and at the cap it goes to a human, exactly as the table above says.",
-    "**A code change or a test change is never applied by the reviewer as an inline fix, and neither is any fix the reviewer cannot state exactly in the finding.** Those go through the table above: a fix pass by the implementer where the finding blocks (any finding at round 1, a medium-or-above at every round), a bead where it is a low from round 2 on.",
+    "**A code change or a test change is never applied by the reviewer as an inline fix, and neither is any fix the reviewer cannot state exactly in the finding.** Those go through the table above: a fix pass by the implementer where the finding blocks (any finding at round 1, a medium-or-above at every round), a bead where it is a low from round 2 on an `exact` chain.",
   ];
   const pinnedFile = pin("review-standards-inline-fix.md", PINNED_EXCLUSIONS.join("\n\n") + "\n");
   const exclusions = (text) => ({

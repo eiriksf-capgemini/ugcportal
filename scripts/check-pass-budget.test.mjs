@@ -151,9 +151,29 @@ describe("checkPassBudget", () => {
     }
   });
 
-  it("K3 (kwxh): every value the budget reads as a merged round parses in release-cost-report", () => {
-    const k = parseFindingsKey(MERGED_LOWS);
-    expect(k).toMatchObject({ med: 0, low: 1, unstated: 0, mergedLowsFiled: true });
+  // The budget and release-cost-report's parseFindingsKey must agree on which values are a merged
+  // round: the budget accepts a value as one iff the parser reads it with mergedLowsFiled. Whitespace
+  // variants are where they disagreed in round 1 of PR #331 (a double space or a tab: PROCEED, null).
+  it("K3 (kwxh): the budget reads a value as a merged round iff release-cost-report parses it as one", () => {
+    const variants = [
+      ["single space", MERGED_LOWS, true],
+      ["double space", MERGED_LOWS.replace(" f2:", "  f2:"), true],
+      ["tab before the tag", MERGED_LOWS.replace(" merged:", "\tmerged:"), true],
+      ["trailing space", `${MERGED_LOWS} `, true],
+      ["leading space", ` ${MERGED_LOWS}`, true],
+      ["a medium", "f1:1 f2:0 f3:0 f4:0 med:1 low:1 merged:lows-filed", false],
+      ["med:00, numerically zero", "f1:1 f2:0 f3:0 f4:0 med:00 low:1 merged:lows-filed", true],
+      ["no low", "f1:0 f2:0 f3:0 f4:0 med:0 low:0 merged:lows-filed", false],
+      ["an unstated field", "f1:1 f2:0 f3:0 f4:0 med:0 low:1 unstated:1 merged:lows-filed", false],
+      ["unstated:0", "f1:1 f2:0 f3:0 f4:0 med:0 low:1 unstated:0 merged:lows-filed", false],
+      ["no tag", "f1:1 f2:0 f3:0 f4:0 med:0 low:1", false],
+    ];
+    for (const [name, v, expected] of variants) {
+      const budget = checkPassBudget(bead({ tokens_impl_passes: 3, findings_r1: v })).verdict === "PROCEED";
+      const parsed = parseFindingsKey(v)?.mergedLowsFiled === true;
+      expect([name, budget], `budget on ${JSON.stringify(v)}`).toEqual([name, expected]);
+      expect([name, parsed], `parser on ${JSON.stringify(v)}`).toEqual([name, budget]);
+    }
   });
 
   it("tolerates extra whitespace in a clean string", () => {

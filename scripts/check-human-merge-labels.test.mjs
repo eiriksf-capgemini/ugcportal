@@ -260,6 +260,19 @@ describe("D: the label on a head the clean round did not review (R3-5)", () => {
     expect(reviewedHead("nothing")).toBeNull();
   });
 
+  it("kwxh: an `inline-fix head=<sha>` line is the reviewed head, ahead of the measured marker, so a label after an inline fix is not D", () => {
+    const fixed = { author: REVIEWER, body: `${ROUND}\n${measured(HEAD)}\n${VERDICT_MARKER}\ninline-fix head=${OTHER_HEAD}\nReviewed clean; a human must merge` };
+    expect(reviewedHead(fixed.body)).toBe(OTHER_HEAD);
+    // the live head is the fix commit: the label is current
+    expect(classifyPrs([pr(49, label, [fixed], plain, OTHER_HEAD)]).staleHead).toEqual([]);
+    // the live head went back to (or stayed at) the pre-fix head: the label is not on the fixed head
+    expect(classifyPrs([pr(50, label, [fixed], plain, HEAD)]).staleHead).toEqual([50]);
+    // only a line that is exactly the field is read: a quote or a mid-sentence mention is not
+    for (const text of [`> inline-fix head=${OTHER_HEAD}`, `see inline-fix head=${OTHER_HEAD}`, `inline-fix head=${OTHER_HEAD} and more`]) {
+      expect(reviewedHead(`${ROUND}\n${measured(HEAD)}\n${text}`), text).toBe(HEAD);
+    }
+  });
+
   it("reads the sha on the ugcportal-measured line, not an earlier at=<sha> in prose (ugcportal-rix6)", () => {
     const quoted = `${ROUND}\nPrevious round reviewed at=${OTHER_HEAD}\n${measured(HEAD)}\n${VERDICT_MARKER}`;
     expect(reviewedHead(quoted)).toBe(HEAD);
