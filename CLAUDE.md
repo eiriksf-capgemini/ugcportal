@@ -124,7 +124,7 @@ If a task genuinely needs a change here:
 Review rounds on a PR are bounded. Rationale and the measurement behind it:
 `ugcportal-2yj`. The any-finding row covers round 1 alone, not rounds 1-3,
 since `ugcportal-kwxh`, on the v0.9.0 review measured in that bead: 64 of 107
-rounds found only lows and cost 58.3M ITE, 69% of the release's review cost,
+rounds found only lows and cost 58.3M ITE, 69% of the cost of the 107 measured rounds,
 and all 16 rounds that found a medium-or-above were rounds 1-3 (none at round
 4 or later). Operative detail: `.claude/skills/review-standards/SKILL.md`
 and `.claude/skills/pr-review-merge/SKILL.md` (steps 4, 4.1, 4b, 5, 5a, 5b).
