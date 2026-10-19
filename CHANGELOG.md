@@ -58,7 +58,7 @@
 - **release-cost-report Data gaps sibling line says "the bead that carries the keys" on PRs where no bead carries keys** (`ugcportal-zu69`, scope: review) — [#322](https://github.com/eiriksf-capgemini/ugcportal/pull/322)
 - **release-cost-report clean verdict line: comment says the summary regex reads the first line and SKILL.md says the line after the marker** (`ugcportal-tw9x`, scope: review) — [#285](https://github.com/eiriksf-capgemini/ugcportal/pull/285)
 - **bd-guard.test.mjs header says every case runs the real CLI, but the five fixture-loader cases do not** (`ugcportal-2xmq`, scope: process) — [#320](https://github.com/eiriksf-capgemini/ugcportal/pull/320)
-- **dispatch-bead section 5 tells a fix agent to push with git push origin HEAD:<branch>, which bypasses the bot HTTPS push and the pre-push skip that section 2 and worker-implementer.md require** (`ugcportal-8570`, scope: process) — [#315](https://github.com/eiriksf-capgemini/ugcportal/pull/315)
+- **dispatch-bead section 5 tells a fix agent to push with `git push origin HEAD:<branch>`, which bypasses the bot HTTPS push and the pre-push skip that section 2 and worker-implementer.md require** (`ugcportal-8570`, scope: process) — [#315](https://github.com/eiriksf-capgemini/ugcportal/pull/315)
 - **pr-review-merge BEHIND recovery poll treats a failed gh pr view as a changed head and stops as sha not fetched** (`ugcportal-7998`, scope: process) — [#312](https://github.com/eiriksf-capgemini/ugcportal/pull/312)
 - **pr-review-merge step 6 report list and merge-failure paragraph omit the new CLEAN head-mismatch and match-head-commit refusal stops** (`ugcportal-s1t7`, scope: process) — [#312](https://github.com/eiriksf-capgemini/ugcportal/pull/312)
 - **pr-review-merge BEHIND rationale says a kept file makes step 4.2 take its fail-safe branch, which is not what 4.2 does** (`ugcportal-r8oq`, scope: process) — [#312](https://github.com/eiriksf-capgemini/ugcportal/pull/312)
@@ -106,7 +106,7 @@
 ### 🧪 Tests
 
 - **Attestation guard's leak message still says the request may be read only by readJsonBody after #305 also permitted isSameOriginRequest** (`ugcportal-p5ep`, scope: api) — [#325](https://github.com/eiriksf-capgemini/ugcportal/pull/325)
-- **next.config.test.ts pins the header entries but not the /:path* rule object: a has/missing condition leaves every response bare while the test stays green (PR #304 round 3 L1)** (`ugcportal-5o8q`, scope: security) — [#304](https://github.com/eiriksf-capgemini/ugcportal/pull/304)
+- **next.config.test.ts pins the header entries but not the `/:path*` rule object: a has/missing condition leaves every response bare while the test stays green (PR #304 round 3 L1)** (`ugcportal-5o8q`, scope: security) — [#304](https://github.com/eiriksf-capgemini/ugcportal/pull/304)
 - **playwright.config.ts hardcodes localhost:3000; take the e2e dev-server port from UGCPORTAL_E2E_PORT** (`ugcportal-wds4`, scope: e2e) — [#308](https://github.com/eiriksf-capgemini/ugcportal/pull/308)
 - **Stale count comments in page.test.tsx and resale-rights.test.ts (five codes, three ways) and actions.ts's "three form fields", left when ugcportal-hx2 hit its pass budget** (`ugcportal-0fue`, scope: rights) — [#301](https://github.com/eiriksf-capgemini/ugcportal/pull/301)
 - **release-cost-report test file: stale header and SHAPES comments, plus PR #300's title type and body wording, left when ugcportal-s4eb hit its pass budget** (`ugcportal-omyh`, scope: review) — [#300](https://github.com/eiriksf-capgemini/ugcportal/pull/300)
@@ -136,6 +136,7 @@
 - **Curation UI: triage an owner-uploaded original and set its price and licence** (`ugcportal-74w`, scope: curation, resolution: none)
 - **Attestation route and origin.ts comments still describe the pre-#305 lock: 'request read only by readJsonBody' twice, no cross-origin 403 in the refusal list, origin.ts names requireAdmin alone (PR #305 round 3 F1-F3)** (`ugcportal-zn42`, scope: api, resolution: none)
 - **Playwright e2e suite is flaky at full parallelism against the shared dev-server SQLite database** (`ugcportal-uwh1`, scope: e2e, resolution: none)
+
 ## v0.8.1 - 2026-10-16
 
 ### 💰 Cost Summary
