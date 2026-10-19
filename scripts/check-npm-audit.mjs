@@ -6,8 +6,12 @@
  * GHSA id is not in scripts/npm-audit-allowlist.json. The allowlist is keyed
  * by GHSA id, so a new advisory in an already-allowlisted package still
  * fails. Also fails, loudly, when:
- *   - npm audit printed nothing, malformed JSON, or a registry error: a run
- *     that audited nothing must not read as "no advisories";
+ *   - npm audit printed nothing, malformed JSON, or a registry error, or a
+ *     report whose `metadata.dependencies.total` is missing, not an integer
+ *     or 0 (this repository has dependencies, so a report over none audited
+ *     the wrong tree): a run that audited nothing must not read as "no
+ *     advisories". Every run that parses prints the dependency count it
+ *     examined beside the advisory counts, pass or fail;
  *   - an allowlist entry has no owner bead, no valid recorded/re-check date
  *     or no reason, or its re-check date has passed;
  *   - an allowlisted id no longer appears (a stale entry nobody removed);
@@ -22,6 +26,14 @@
  * names every package the chain reaches (braces -> micromatch -> fast-glob
  * -> @next/eslint-plugin-next -> eslint-config-next).
  *
+ * Cycles. A package is attributed every advisory carried by any package it
+ * can reach through `via` strings, itself included. So a package in a `via`
+ * cycle with an advisory-carrying package inherits that package's advisories,
+ * and the result does not depend on the order of the `vulnerabilities` keys:
+ * each package's reachable set is walked whole, never assembled from a
+ * partial result cut short by a cycle (tested with both key orders in
+ * check-npm-audit.test.mjs, "a cycle through an advisory-carrying package").
+ *
  * Usage:
  *   node scripts/check-npm-audit.mjs                   runs `npm audit --json` itself
  *   node scripts/check-npm-audit.mjs --json-file <p>   reads a saved report (tests)
@@ -30,7 +42,7 @@
  * verdict: the verdict is whether stdout parses as an audit report.
  */
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -42,7 +54,12 @@ const BEAD = /^ugcportal-[a-z0-9]+$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 const canonicalId = (s) => `GHSA-${s.slice(5).toLowerCase()}`;
-const validDate = (s) => typeof s === "string" && DATE.test(s) && !Number.isNaN(Date.parse(`${s}T00:00:00Z`));
+// round-trip, so a date Date.parse rolls over (2027-02-30 -> March 2) is rejected
+const validDate = (s) => {
+  if (typeof s !== "string" || !DATE.test(s)) return false;
+  const t = Date.parse(`${s}T00:00:00Z`);
+  return !Number.isNaN(t) && new Date(t).toISOString().slice(0, 10) === s;
+};
 
 /** Parse npm audit stdout. Throws a message naming what was wrong. */
 export function parseAudit(text) {
@@ -62,6 +79,10 @@ export function parseAudit(text) {
     throw new Error("npm audit JSON has no `vulnerabilities` object, so it is not an audit report");
   if (report.metadata === null || typeof report.metadata !== "object" || typeof report.metadata.vulnerabilities !== "object" || report.metadata.vulnerabilities === null)
     throw new Error("npm audit JSON has no `metadata.vulnerabilities` object, so it is not an audit report");
+  const deps = report.metadata.dependencies?.total;
+  if (!Number.isInteger(deps) || deps < 0)
+    throw new Error(`npm audit JSON has no integer \`metadata.dependencies.total\` (got ${JSON.stringify(deps)}), so what it examined is unknown`);
+  if (deps === 0) throw new Error("npm audit examined 0 dependencies; this repository has dependencies, so the wrong tree (or none) was audited");
   return report;
 }
 
@@ -71,22 +92,33 @@ export function parseAudit(text) {
  */
 export function collectAdvisories(report) {
   const vulns = report.vulnerabilities;
-  const memo = new Map();
-  const advisoriesOf = (name, seen = new Set()) => {
-    if (memo.has(name)) return memo.get(name);
-    if (seen.has(name)) return new Set();
-    seen.add(name);
-    const out = new Set();
+  // the high/critical ids a package carries itself, as `via` objects
+  const ownIds = (name) => {
+    const out = [];
     for (const via of vulns[name]?.via ?? []) {
-      if (typeof via === "string") {
-        for (const id of advisoriesOf(via, seen)) out.add(id);
-      } else if (via && BLOCKING.has(via.severity)) {
-        const id = GHSA.exec(String(via.url ?? ""))?.[0];
-        if (id) out.add(canonicalId(id));
-        else out.add(`NO-GHSA:${via.source ?? via.title ?? "unknown"}`);
-      }
+      if (typeof via === "string" || !via || !BLOCKING.has(via.severity)) continue;
+      const id = GHSA.exec(String(via.url ?? ""))?.[0];
+      out.push(id ? canonicalId(id) : `NO-GHSA:${via.source ?? via.title ?? "unknown"}`);
     }
-    memo.set(name, out);
+    return out;
+  };
+  // Union of ownIds over every package reachable from `name` through `via`
+  // strings, itself included. Each call walks its whole reachable set (no
+  // memo shared between start points), so a cycle cannot leave a partial
+  // result behind for a later start point to reuse: see "Cycles" above.
+  const advisoriesOf = (name) => {
+    const out = new Set();
+    const seen = new Set([name]);
+    const queue = [name];
+    while (queue.length) {
+      const cur = queue.shift();
+      for (const id of ownIds(cur)) out.add(id);
+      for (const via of vulns[cur]?.via ?? [])
+        if (typeof via === "string" && !seen.has(via)) {
+          seen.add(via);
+          queue.push(via);
+        }
+    }
     return out;
   };
   const advisories = new Map();
@@ -176,7 +208,7 @@ export function main(argv = process.argv.slice(2), { audit = runNpmAudit, now = 
     const allowlist = JSON.parse(readFileSync(opt("--allowlist") ?? DEFAULT_ALLOWLIST, "utf8"));
     const report = parseAudit(text);
     const v = report.metadata.vulnerabilities;
-    out(`npm audit: ${JSON.stringify(v)}`);
+    out(`npm audit: examined ${report.metadata.dependencies.total} dependencies; advisories ${JSON.stringify(v)}`);
     const verdict = evaluate(report, allowlist, now);
     for (const l of verdict.lines) out(l);
     for (const e of verdict.errors) err(`::error::${e}`);
@@ -192,4 +224,16 @@ export function main(argv = process.argv.slice(2), { audit = runNpmAudit, now = 
   }
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) process.exit(main());
+// Compare realpaths on both sides: import.meta.url is already symlink-resolved,
+// process.argv[1] is not (/tmp -> /private/tmp on macOS). The same shape as
+// scripts/gh-app-token.mjs and scripts/check-compose-images.mjs.
+function invokedDirectly() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (invokedDirectly()) process.exit(main());

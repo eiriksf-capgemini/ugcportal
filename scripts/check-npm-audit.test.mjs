@@ -2,7 +2,11 @@
  * Tests for scripts/check-npm-audit.mjs (ugcportal-1j4j, K1/K3/K4).
  * Fixtures only; no network and no real `npm audit`.
  */
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { collectAdvisories, evaluate, main, parseAudit, runNpmAudit, validateAllowlist } from "./check-npm-audit.mjs";
@@ -23,7 +27,10 @@ const advisory = (name, ghsa, severity = "high") => ({
 const node = (name, via, severity = "high") => ({ name, severity, isDirect: false, via, effects: [], range: "*", nodes: [] });
 const report = (vulnerabilities) => ({
   vulnerabilities,
-  metadata: { vulnerabilities: { info: 0, low: 0, moderate: 0, high: Object.keys(vulnerabilities).length, critical: 0, total: Object.keys(vulnerabilities).length } },
+  metadata: {
+    vulnerabilities: { info: 0, low: 0, moderate: 0, high: Object.keys(vulnerabilities).length, critical: 0, total: Object.keys(vulnerabilities).length },
+    dependencies: { prod: 224, dev: 467, optional: 127, peer: 0, peerOptional: 0, total: 734 },
+  },
 });
 // the shape npm prints for the real braces chain: only braces carries the advisory object
 const chain = () =>
@@ -66,6 +73,27 @@ describe("attribution of `via package` entries", () => {
     const r = report({ a: node("a", ["b"]), b: node("b", ["a", advisory("b", SECOND)]) });
     expect(collectAdvisories(r).advisories.has(SECOND)).toBe(true);
   });
+
+  // the verdict over a cycle must not depend on the order of the
+  // `vulnerabilities` keys. `a` carries the advisory, `b` reaches it through `a`.
+  const cyclic = (aFirst) => {
+    const a = node("a", ["b", advisory("a", BRACES)]);
+    const b = node("b", ["a"]);
+    return report(aFirst ? { a, b } : { b, a });
+  };
+  it.each([
+    ["a listed first", true],
+    ["b listed first", false],
+  ])("a cycle through an advisory-carrying package gives the same verdict with %s", (_label, aFirst) => {
+    const r = cyclic(aFirst);
+    const { advisories, unattributed } = collectAdvisories(r);
+    expect(unattributed).toEqual([]);
+    expect(advisories.get(BRACES).package).toBe("a");
+    expect(advisories.get(BRACES).affected.sort()).toEqual(["a", "b"]);
+    const v = evaluate(r, allow({ [BRACES]: entry({ package: "a" }) }), NOW);
+    expect(v.errors).toEqual([]);
+    expect(v.ok).toBe(true);
+  });
 });
 
 describe("K2 shape: an unlisted high or critical advisory fails naming id and package", () => {
@@ -93,6 +121,21 @@ describe("K3: the gate never passes because it found nothing to audit", () => {
     ["a registry error", JSON.stringify({ error: { code: "ENOTFOUND", summary: "audit endpoint unreachable" } }), /ENOTFOUND/],
     ["JSON that is not an audit report", JSON.stringify({ hello: "world" }), /not an audit report/],
     ["JSON with no metadata", JSON.stringify({ vulnerabilities: {} }), /metadata/],
+    [
+      "a report with no metadata.dependencies",
+      JSON.stringify({ vulnerabilities: {}, metadata: { vulnerabilities: { total: 0 } } }),
+      /metadata\.dependencies\.total/,
+    ],
+    [
+      "a report over zero dependencies",
+      JSON.stringify({ vulnerabilities: {}, metadata: { vulnerabilities: { total: 0 }, dependencies: { total: 0 } } }),
+      /zero dependencies|0 dependencies/,
+    ],
+    [
+      "a report whose dependency total is not an integer",
+      JSON.stringify({ vulnerabilities: {}, metadata: { vulnerabilities: { total: 0 }, dependencies: { total: "734" } } }),
+      /metadata\.dependencies\.total/,
+    ],
     ["JSON array", "[]", /not an object/],
   ])("fails on %s", (_label, text, why) => {
     // the message is asserted so a guard removed in favour of a downstream throw is still seen
@@ -113,6 +156,27 @@ describe("K3: the gate never passes because it found nothing to audit", () => {
     expect(validateAllowlist(allow({ [BRACES]: entry({ recheck: "next spring" }) }), NOW).join()).toContain("recheck");
     expect(validateAllowlist(allow({ [BRACES]: entry({ recheck: "2026-10-17" }) }), NOW).join()).toContain("has passed");
     expect(validateAllowlist(allow({ [BRACES]: entry({ recheck: "2026-10-18" }) }), NOW)).toEqual([]);
+  });
+
+  it("rejects a date that matches YYYY-MM-DD but is not a calendar date, and accepts a leap day", () => {
+    const errs = (recheck) => validateAllowlist(allow({ [BRACES]: entry({ recheck }) }), NOW);
+    expect(errs("2027-02-30")).toEqual([`allowlist entry ${BRACES}: missing or malformed recheck date (want YYYY-MM-DD)`]);
+    expect(errs("2027-13-40")).toEqual([`allowlist entry ${BRACES}: missing or malformed recheck date (want YYYY-MM-DD)`]);
+    expect(errs("2028-02-29")).toEqual([]);
+    expect(validateAllowlist(allow({ [BRACES]: entry({ recorded: "2026-02-29" }) }), NOW)).toEqual([
+      `allowlist entry ${BRACES}: missing or malformed recorded date (want YYYY-MM-DD)`,
+    ]);
+  });
+
+  it("prints the dependency count examined and the advisory counts on a pass and on a verdict failure", () => {
+    const pass = run(() => JSON.stringify(chain()));
+    expect(pass.code).toBe(0);
+    expect(pass.out).toContain("examined 734 dependencies");
+    expect(pass.out).toContain('"high":5');
+    const fail = run(() => JSON.stringify(report({})));
+    expect(fail.code).toBe(1);
+    expect(fail.out).toContain("examined 734 dependencies");
+    expect(fail.out).toContain('"total":0');
   });
 
   it("fails on an entry with no reason, a malformed bead id, or a non-canonical key", () => {
@@ -162,6 +226,24 @@ describe("K3: the gate never passes because it found nothing to audit", () => {
     for (const l of lines) {
       expect(l.trim()).toMatch(/^run: node scripts\/check-npm-audit\.mjs$/);
     }
+  });
+});
+
+describe("entry guard: the script runs when invoked by a symlinked path", () => {
+  it("runs main when invoked through a symlinked directory", { timeout: 30_000 }, () => {
+    const tmp = mkdtempSync(join(tmpdir(), "check-npm-audit-"));
+    const link = join(mkdtempSync(join(tmpdir(), "check-npm-audit-link-")), "scripts");
+    symlinkSync(dirname(fileURLToPath(import.meta.url)), link);
+    const jsonFile = join(tmp, "error.json");
+    writeFileSync(jsonFile, JSON.stringify({ error: { code: "ENOLOCK", summary: "no lockfile" } }));
+    const allowlist = join(tmp, "empty-allowlist.json");
+    writeFileSync(allowlist, JSON.stringify({ advisories: {} }));
+    const res = spawnSync(process.execPath, [join(link, "check-npm-audit.mjs"), "--json-file", jsonFile, "--allowlist", allowlist], {
+      encoding: "utf8",
+      timeout: 20_000,
+    });
+    expect(res.stderr).toContain("::error::npm audit gate FAILED: npm audit reported an error: ENOLOCK");
+    expect(res.status).toBe(1);
   });
 });
 
