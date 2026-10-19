@@ -328,3 +328,51 @@ describe("an allowlisted id the gate does not collect (ugcportal-1aw4 L5, K2)", 
     expect(evaluate(r, allow({}), NOW).ok).toBe(true);
   });
 });
+
+describe("one advisory at two severities prints one report-wide severity, whatever the key order (ugcportal-eylm)", () => {
+  const G = "GHSA-gggg-gggg-gggg";
+  const NODES = {
+    x: () => node("x", [advisory("x", G, "high")], "high"),
+    y: () => node("y", [advisory("y", G, "critical")], "critical"),
+    z: () => node("z", [advisory("z", G, "high")], "high"),
+  };
+  const build = (order) => report(Object.fromEntries(order.map((n) => [n, NODES[n]()])));
+  const output = (order, entries = {}) => {
+    const v = evaluate(build(order), allow(entries), NOW);
+    return [...v.errors, ...v.lines].join("\n");
+  };
+  const permutations = (xs) => (xs.length <= 1 ? [xs] : xs.flatMap((h, i) => permutations([...xs.slice(0, i), ...xs.slice(i + 1)]).map((p) => [h, ...p])));
+
+  it("K1/K2: both key orders print byte-identical output naming critical and the package that carries it", () => {
+    const xy = output(["x", "y"]);
+    const yx = output(["y", "x"]);
+    expect(yx).toBe(xy);
+    expect(xy).toContain(`${G} (y, critical) is not in the allowlist`);
+  });
+
+  it("K1/K2: the same holds for an allowlisted advisory (the allowlist entry names the carrying package)", () => {
+    const entries = { [G]: entry({ package: "y" }) };
+    const xy = output(["x", "y"], entries);
+    expect(output(["y", "x"], entries)).toBe(xy);
+    expect(xy).toContain(`allowlisted ${G} (y, critical)`);
+  });
+
+  it("K3: three packages in all six key orders give exactly one distinct output", () => {
+    const orders = permutations(["x", "y", "z"]);
+    expect(orders).toHaveLength(6);
+    const outputs = new Set(orders.map((o) => output(o)));
+    expect([...outputs]).toHaveLength(1);
+    expect([...outputs][0]).toContain(`${G} (y, critical)`);
+  });
+
+  it("K2: when two packages carry the worst severity both are listed, in every order", () => {
+    const both = (order) => {
+      const nodes = { x: NODES.x, y: NODES.y, z: () => node("z", [advisory("z", G, "critical")], "critical") };
+      const v = evaluate(report(Object.fromEntries(order.map((n) => [n, nodes[n]()]))), allow({}), NOW);
+      return v.errors.join("\n");
+    };
+    const outputs = new Set(permutations(["x", "y", "z"]).map(both));
+    expect([...outputs]).toHaveLength(1);
+    expect([...outputs][0]).toContain(`${G} (y, z, critical) is not in the allowlist; affects: x, y, z`);
+  });
+});

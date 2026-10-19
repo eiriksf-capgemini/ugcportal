@@ -38,6 +38,12 @@
  * partial result cut short by a cycle (tested with both key orders in
  * check-npm-audit.test.mjs, "a cycle through an advisory-carrying package").
  *
+ * Severity and order. One advisory id prints one severity: the worst any via
+ * object in the whole report carries for it, beside every package whose via
+ * object carries that severity; the affected packages and the advisories are
+ * sorted, so the output is identical for any order of the `vulnerabilities`
+ * keys (tested over all six orders of three packages).
+ *
  * Usage:
  *   node scripts/check-npm-audit.mjs                   runs `npm audit --json` itself
  *   node scripts/check-npm-audit.mjs --json-file <p>   reads a saved report (tests)
@@ -94,21 +100,24 @@ const RANK = { info: 0, low: 1, moderate: 2, high: 3, critical: 4 };
 const worst = (a, b) => (a === undefined || (RANK[b] ?? -1) > (RANK[a] ?? -1) ? b : a);
 
 /**
- * Map each high or critical GHSA id to { package, severity, affected[] };
- * severity is the advisory's own. `unattributed` lists high/critical packages
- * no such GHSA id reaches. `present` maps every GHSA id in the report, at any
+ * Map each high or critical GHSA id to { package, packages[], severity,
+ * affected[] }. severity is the worst severity any via object in the whole
+ * report carries for that id (one value per id, whatever the key order);
+ * packages are those whose via object carries it (package joins them).
+ * `unattributed` lists high/critical packages no such GHSA id reaches. `present` maps every GHSA id in the report, at any
  * severity, to its own (worst) severity; it never changes what blocks.
  */
 export function collectAdvisories(report) {
   const vulns = report.vulnerabilities;
   // the high/critical ids a package carries itself, as `via` objects
+  const ownViaId = (via) => {
+    const id = GHSA.exec(String(via.url ?? ""))?.[0];
+    return id ? canonicalId(id) : `NO-GHSA:${via.source ?? via.title ?? "unknown"}`;
+  };
   const ownIds = (name) => {
     const out = [];
-    for (const via of vulns[name]?.via ?? []) {
-      if (typeof via === "string" || !via || !BLOCKING.has(via.severity)) continue;
-      const id = GHSA.exec(String(via.url ?? ""))?.[0];
-      out.push({ id: id ? canonicalId(id) : `NO-GHSA:${via.source ?? via.title ?? "unknown"}`, severity: via.severity });
-    }
+    for (const via of vulns[name]?.via ?? [])
+      if (typeof via !== "string" && via && BLOCKING.has(via.severity)) out.push({ id: ownViaId(via), severity: via.severity });
     return out;
   };
   // Union of ownIds over every package reachable from `name` through `via`
@@ -140,25 +149,38 @@ export function collectAdvisories(report) {
       const raw = typeof via === "string" || !via ? undefined : GHSA.exec(String(via.url ?? ""))?.[0];
       if (raw) present.set(canonicalId(raw), worst(present.get(canonicalId(raw)), via.severity));
     }
+  // Report-wide, over every package's own `via` objects: the worst high/critical
+  // severity each id carries, and the packages carrying a via object at exactly
+  // that severity. Neither depends on the order of the `vulnerabilities` keys.
+  const worstOf = new Map();
+  for (const name of Object.keys(vulns))
+    for (const { id, severity } of ownIds(name)) worstOf.set(id, worst(worstOf.get(id), severity));
+  const carriers = new Map();
+  for (const [name, v] of Object.entries(vulns))
+    for (const via of v?.via ?? []) {
+      if (typeof via === "string" || !via || !BLOCKING.has(via.severity)) continue;
+      const id = ownViaId(via);
+      if (via.severity === worstOf.get(id)) carriers.set(id, new Set([...(carriers.get(id) ?? []), via.name ?? name]));
+    }
+  const affectedBy = new Map();
   for (const [name, v] of Object.entries(vulns)) {
     if (!BLOCKING.has(v?.severity)) continue;
     const ids = advisoriesOf(name);
     if (ids.size === 0) unattributed.push(name);
-    for (const [id, severity] of ids) {
-      // the severity is the advisory's own, never the affected package's: a
-      // package's severity is the worst of all its advisories
-      if (!advisories.has(id)) advisories.set(id, { id, package: null, severity, affected: [] });
-      advisories.get(id).affected.push(name);
+    for (const id of ids.keys()) {
+      if (!affectedBy.has(id)) affectedBy.set(id, []);
+      affectedBy.get(id).push(name);
     }
   }
-  // the owner package is the one carrying the advisory as a `via` object
-  for (const [name, v] of Object.entries(vulns))
-    for (const via of v?.via ?? []) {
-      if (typeof via === "string" || !via) continue;
-      const raw = GHSA.exec(String(via.url ?? ""))?.[0];
-      const id = raw && canonicalId(raw);
-      if (id && advisories.has(id)) advisories.get(id).package = via.name ?? name;
-    }
+  // Printed severity: the worst over the whole report, never the first package
+  // walked. Printed package: every package whose via object carries that
+  // severity. Lists are sorted so the output is independent of key order.
+  for (const id of [...affectedBy.keys()].sort()) {
+    const severity = worstOf.get(id);
+    const pkgs = [...(carriers.get(id) ?? [])].sort();
+    advisories.set(id, { id, package: pkgs.length ? pkgs.join(", ") : null, packages: pkgs, severity, affected: affectedBy.get(id).sort() });
+  }
+  unattributed.sort();
   return { advisories, unattributed, present };
 }
 
@@ -199,7 +221,7 @@ export function evaluate(report, allowlist, now = new Date()) {
     const chain = a.affected.join(", ");
     if (!entry) {
       errors.push(`${a.id} (${a.package ?? "unknown package"}, ${a.severity}) is not in the allowlist; affects: ${chain}`);
-    } else if (a.package && entry.package && entry.package !== a.package) {
+    } else if (a.packages.length && entry.package && !a.packages.includes(entry.package)) {
       errors.push(`${a.id}: allowlist says package ${entry.package} but npm audit says ${a.package}; affects: ${chain}`);
     } else {
       lines.push(`allowlisted ${a.id} (${a.package}, ${a.severity}) owner ${entry.ownerBead} recheck ${entry.recheck}; affects: ${chain}`);
