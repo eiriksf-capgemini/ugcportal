@@ -2,7 +2,7 @@
 
 This document is the cost review of the v0.9.0 release (tag `v0.9.0` = `4dd2ef9`), measured on 2026-10-19 by a read-only analyst agent from bead metadata, `scripts/agent-pass-cost.mjs` and `scripts/release-cost-report.mjs`. The analyst report below is committed verbatim; section 7 and the appendix were added afterwards.
 
-The inputs named under "Inputs" live only under `/tmp` on the orchestrator's machine and are not reproducible from the repo. Each measured table below names the command or script that produced it, or the input file it was derived from (a few derived tables cite only the script directory `/tmp/rr-work/`).
+The inputs named under "Inputs" live only under `/tmp` on the orchestrator's machine and are not reproducible from the repo. Each table below names the command, script or input file it came from, except the per-round tables of section 2a and the outcome table of section 2b, which `/tmp/rr-work/tables.mjs` (sections R2a and R2b) derives from `/tmp/rr-analysis.json`; the Inputs table records both files.
 
 ---
 
