@@ -254,7 +254,7 @@ describe("D: the label on a head the clean round did not review (R3-5)", () => {
     expect(classifyPrs([pr(47, label, [prose], plain, OTHER_HEAD)]).staleHead).toEqual([47]);
   });
 
-  it("reviewedHead reads the measured marker first, else the prose head, else null", () => {
+  it("reviewedHead reads the inline-fix head marker first, else the measured marker, else the prose head, else null", () => {
     expect(reviewedHead(clean.body)).toBe(HEAD);
     expect(reviewedHead(`${measured(OTHER_HEAD)}\nReview round 1 (chain exact, head ${HEAD})`)).toBe(OTHER_HEAD);
     expect(reviewedHead("nothing")).toBeNull();

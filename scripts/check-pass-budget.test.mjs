@@ -128,7 +128,7 @@ describe("checkPassBudget", () => {
   // filed as beads; pr-review-merge step 4a item 5 records it with a trailing ` merged:lows-filed`.
   const MERGED_LOWS = "f1:1 f2:0 f3:0 f4:0 med:0 low:1 merged:lows-filed";
 
-  it("K3 (kwxh): three passes and a round that merged with its lows filed print PROCEED, naming that round clean", () => {
+  it("K3 (kwxh): three passes and a round ended by the gate with its lows filed print PROCEED, naming that round clean", () => {
     const r = checkPassBudget(bead({ tokens_impl_passes: 3, findings_r1: DIRTY, findings_r2: MERGED_LOWS }));
     expect([r.verdict, r.exit]).toEqual(["PROCEED", 0]);
     expect(r.message).toContain("clean round was recorded (findings_r2)");
@@ -154,7 +154,7 @@ describe("checkPassBudget", () => {
   // The budget and release-cost-report's parseFindingsKey must agree on which values are a merged
   // round: the budget accepts a value as one iff the parser reads it with mergedLowsFiled. Whitespace
   // variants are where they disagreed in round 1 of PR #331 (a double space or a tab: PROCEED, null).
-  it("K3 (kwxh): the budget reads a value as a merged round iff release-cost-report parses it as one", () => {
+  it("K3 (kwxh): the budget reads a value as a gate-ended lows-filed round iff release-cost-report parses it as one", () => {
     const variants = [
       ["single space", MERGED_LOWS, true],
       ["double space", MERGED_LOWS.replace(" f2:", "  f2:"), true],

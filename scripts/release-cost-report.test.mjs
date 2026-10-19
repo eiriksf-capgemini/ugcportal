@@ -1269,7 +1269,7 @@ describe("findings_rN keys (ugcportal-2jvh)", () => {
     expect(shared.get(901).rounds[0].source).toBeUndefined();
   });
 
-  it("K3 (kwxh): a round that merged with its lows filed is parsed from its key, not listed as malformed", () => {
+  it("K3 (kwxh): a round ended by the gate with its lows filed is parsed from its key, not listed as malformed", () => {
     expect(parseFindingsKey("f1:1 f2:0 f3:0 f4:0 med:0 low:2 merged:lows-filed")).toEqual({ f1: 1, f2: 0, f3: 0, f4: 0, med: 0, low: 2, unstated: 0, mergedLowsFiled: true });
     const out = withFindingsKeys(pr(1, [round(1, 0, 2)]), { findings_r1: "f1:1 f2:0 f3:0 f4:0 med:0 low:2 merged:lows-filed" });
     expect(out.rounds[0]).toMatchObject({ source: "keys", medium: 0, low: 2, stated: true });
@@ -1289,7 +1289,7 @@ describe("findings_rN keys (ugcportal-2jvh)", () => {
     }
   });
 
-  it("kwxh round 1, observation 2: a round that merged with its lows filed is reported as the PR's terminal merged round, not as a blocked lows round", () => {
+  it("kwxh round 1, observation 2: a round ended by the gate with its lows filed is reported as the PR's gate-ended round, not as a blocked lows round", () => {
     const b = { id: "ugcportal-mlf1", title: "merged lows", metadata: { cc_type: "fix", prs: "gh-903", tokens_impl: 1000, tokens_qa: 2000, findings_r1: "f1:1 f2:0 f3:0 f4:0 med:1 low:0", findings_r2: "f1:1 f2:0 f3:0 f4:0 med:0 low:1 merged:lows-filed" } };
     const blocked = { id: "ugcportal-mlf2", title: "blocked lows", metadata: { cc_type: "fix", prs: "gh-904", tokens_impl: 1000, tokens_qa: 1000, findings_r1: "f1:1 f2:0 f3:0 f4:0 med:1 low:0", findings_r2: "f1:1 f2:0 f3:0 f4:0 med:0 low:1" } };
     const rel = { version: "v9.9.8", ids: [b.id, blocked.id], entries: new Map([b, blocked].map((x) => [x.id, { title: x.title, type: "Bug Fixes" }])) };
@@ -1302,8 +1302,8 @@ describe("findings_rN keys (ugcportal-2jvh)", () => {
     expect(merged.roundDetail.map((d) => d.mergedLowsFiled)).toEqual([false, true]);
     expect([merged.tail, notMerged.tail]).toEqual([1, 1]);
     const report = renderReport({ releases: ["v9.9.8"], rowsByRelease: new Map([["v9.9.8", rs]]), membershipChecks: [], unmerged: [], generatedAt: "2026-10-19", reviewer: "x", prCount: 0 });
-    expect(report).toContain("| 1 (#903 r2 merged, lows filed) |");
-    expect(report).not.toContain("#904 r2 merged");
+    expect(report).toContain("| 1 (#903 r2 ended by the gate, lows filed) |");
+    expect(report).not.toContain("#904 r2 ended by the gate");
   });
 
   it("a malformed key falls back to the prose figure and is listed, never read as zeros", () => {

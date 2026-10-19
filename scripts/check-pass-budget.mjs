@@ -39,7 +39,7 @@
  *
  * "Clean round" means a `findings_r<N>` key (pr-review-merge step 4a item 5)
  * whose value is exactly CLEAN_FINDINGS, all counts zero, or a round that
- * merged with its lows filed as beads (ugcportal-kwxh): MERGED_LOWS_FILED,
+ * ended by the gate with its lows filed as beads (ugcportal-kwxh; merged, or labelled `needs-human-merge`): MERGED_LOWS_FILED,
  * `med:0`, at least one low, no `unstated` field, and the trailing
  * ` merged:lows-filed`. A value that does not parse is not clean: the
  * failure direction is the stricter one.
@@ -64,7 +64,7 @@ import { isMainModule } from "./lib/is-main.mjs";
 export const PASS_LIMIT = 3;
 export const CLEAN_FINDINGS = "f1:0 f2:0 f3:0 f4:0 med:0 low:0";
 /**
- * A round that merged with its lows filed (ugcportal-kwxh): `med` 0, `low` at least 1, no `unstated`
+ * A round ended by the gate with its lows filed (ugcportal-kwxh; merged, or labelled `needs-human-merge`): `med` 0, `low` at least 1, no `unstated`
  * field. Read only through isMergedLowsFiled, on the whitespace-normalised value selectRounds builds;
  * release-cost-report's parseFindingsKey accepts a value with `mergedLowsFiled` on exactly the same
  * values (check-pass-budget.test.mjs iterates the whitespace and field variants against both).

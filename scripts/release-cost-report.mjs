@@ -1030,8 +1030,8 @@ export function analysePr(data, reviewer) {
  * Parses one `findings_rN` value, the per-round record pr-review-merge step
  * 4a has the orchestrator write: `f1:<n> f2:<n> f3:<n> f4:<n> med:<n>
  * low:<n>` with an optional trailing `unstated:<n>`, or else an optional
- * trailing `merged:lows-filed` (ugcportal-kwxh: the round merged with its lows
- * filed as beads; read as `mergedLowsFiled`). The tag is accepted only where
+ * trailing `merged:lows-filed` (ugcportal-kwxh: the round ended by the gate with its lows
+ * filed as beads, merged or labelled `needs-human-merge`; read as `mergedLowsFiled`). The tag is accepted only where
  * such a round can exist: `med` is 0, `low` is at least 1 and there is no
  * `unstated` field. Whitespace is normalised the way check-pass-budget's
  * selectRounds normalises it (trimmed, every run collapsed to one space), so
@@ -1554,9 +1554,9 @@ export function buildRows(release, beadsById, prAnalysesByNumber) {
       ),
       families: allRounds.reduce((a, r) => (r.keyed ? { f1: a.f1 + r.keyed.f1, f2: a.f2 + r.keyed.f2, f3: a.f3 + r.keyed.f3, f4: a.f4 + r.keyed.f4 } : a), { f1: 0, f2: 0, f3: 0, f4: 0 }),
       tail: markerRounds.length ? tailRounds(allRounds) : null,
-      // Rounds whose key carries `merged:lows-filed` (ugcportal-kwxh): the PR
-      // merged on that round with its lows filed, so it is the PR's terminal
-      // round, not a blocked lows round. Counted inside `tail` all the same.
+      // Rounds whose key carries `merged:lows-filed` (ugcportal-kwxh): the round
+      // ended by the gate with its lows filed (the PR merged, or carries
+      // `needs-human-merge` for a human to merge), not a blocked lows round. Counted inside `tail` all the same.
       mergedLowsFiled: prAnalyses.flatMap((p) => p.rounds.filter((r) => r.keyed?.mergedLowsFiled).map((r) => `#${p.number} r${r.n}`)),
       inline: prAnalyses.reduce((a, p) => a + p.inlineCount, 0),
       inlineLabelled: prAnalyses.reduce(
@@ -1819,7 +1819,7 @@ function renderTopTable(rows, k = 5) {
     fmtTokens(r.qa, r.qaEstimated),
     r.rounds === null ? "—" : String(r.rounds),
     r.mediumsByRound,
-    r.tail === null ? "—" : `${r.tail}${r.mergedLowsFiled?.length ? ` (${r.mergedLowsFiled.join(", ")} merged, lows filed)` : ""}`,
+    r.tail === null ? "—" : `${r.tail}${r.mergedLowsFiled?.length ? ` (${r.mergedLowsFiled.join(", ")} ended by the gate, lows filed)` : ""}`,
     r.perRound === null ? "—" : fmtTokens(r.perRound, true),
     r.perRound === null ? "—" : fmtTokens(r.perRound, true),
     r.perRound === null || r.tail === null ? "—" : fmtTokens(r.perRound * r.tail, true),
