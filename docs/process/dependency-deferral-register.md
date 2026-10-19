@@ -9,11 +9,12 @@ or rewritten, not left standing.
 Measured at origin/main 3aa6508 from a clean `npm ci`, with npm 11 on Node 24.20.
 
 Stale since this snapshot: the vitest row's Installed cell (3.2.7) predates #295 (ugcportal-gdi0), which
-moved vitest to `^4.1.12` (package.json). The row's other cells were not re-measured.
+moved vitest to `^4.1.12` (package.json). The prisma row's Installed cell was updated after #303 (ugcportal-90i5)
+moved prisma to 7.10.1. In both rows the other cells were not re-measured.
 
 | Package | Installed | Candidate | Direction | Reason not taken | Date | Owner bead |
 |---|---|---|---|---|---|---|
-| prisma (and @prisma/client) | 7.10.0 | 6.19.3 | **downgrade** | `npm audit` once proposed it as a fix for the `prisma` / `@prisma/config` / `mysql2` / `deepmerge-ts` chain. It is a major downgrade of the ORM and its libsql adapter for an advisory chain that, as of this date, reports `fixAvailable: true` (a non-breaking fix), so the downgrade is not needed. The newest major, 8.0.0-rc.23, is a release candidate and is not taken either. | 2026-10-17 | ugcportal-fuv2 (closed without checking whether 7.10.1 clears the advisories); ugcportal-90i5 checked it and took the 7.10.1 bump (see Patch moves taken) |
+| prisma (and @prisma/client) | 7.10.1 (client 7.10.0) | 6.19.3 | **downgrade** | `npm audit` once proposed it as a fix for the `prisma` / `@prisma/config` / `mysql2` / `deepmerge-ts` chain. It is a major downgrade of the ORM and its libsql adapter for an advisory chain that, as of this date, reports `fixAvailable: true` (a non-breaking fix), so the downgrade is not needed. The newest major, 8.0.0-rc.23, is a release candidate and is not taken either. | 2026-10-17 | ugcportal-fuv2 (closed without checking whether 7.10.1 clears the advisories); ugcportal-90i5 checked it and took the 7.10.1 bump (see Patch moves taken) |
 | shadcn | 4.21.0 (now removed) | 1.0.0 | **downgrade** | `npm audit` proposed shadcn@1.0.0 for the ts-morph / fast-glob / micromatch / braces chain. Three majors back, for a package whose only runtime use here was one stylesheet. Handled a different way: the stylesheet is vendored and the package dropped (ugcportal-pc7s). The CLI is still run on demand with `npx shadcn@latest add ...` (components.json). | 2026-10-17 | ugcportal-pc7s |
 | eslint-config-next | 16.4.0 | 14.2.35 | **downgrade** | `npm audit` proposes it for fast-glob / micromatch / braces via @next/eslint-plugin-next. 14.2.35 peers on `eslint ^7 \|\| ^8`; this repo is on eslint 9, and next is 16.4.0 with the config pinned to match. Those advisories stay open until a non-downgrade fix exists. | 2026-10-17 | ugcportal-pg85 (standing rule for accepting such an advisory) |
 | jsdom | 26.1.0 | 30.1.3 | upgrade | jsdom 30 needs Node `^22.22.2 \|\| ^24.15.0 \|\| >=26.0.0`; CI runs Node 20. Taking it means a CI Node bump first, and `.github/workflows/` is a sensitive path. | 2026-10-17 | none yet |
