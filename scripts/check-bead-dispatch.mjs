@@ -21,8 +21,12 @@
  * from the other's (on a shared commit, the union of both declarations)
  * has had a declared path touched by a
  * commit on `main` since; or a path it declares does not exist at
- * origin/main's HEAD (ugcportal-ul2j). `PREMISE_FRESHNESS_COST`'s comment
- * gives the rules in the order the check applies them.
+ * origin/main's HEAD (ugcportal-ul2j). Any git failure while asking
+ * (`git rev-list` for the counts, `git log` for the touching commits, `git
+ * diff` for a merge's result against the premise, `git merge-base` for the
+ * ordering) fails the bead closed, as not measured.
+ * `PREMISE_FRESHNESS_COST`'s comment gives the rules in the order the check
+ * applies them.
  *
  * Why this exists: `~/.claude/skills/bead-template/SKILL.md` has defined the
  * required form -- user story, In/Out of scope, K-numbered Given/When/Then
@@ -179,7 +183,8 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
  *      that can still differ -- ordering them by count judged the lower one
  *      with its own narrower declaration and passed a stale premise (round
  *      6, M1). Ordering by ancestry does not depend on main being linear.
- *      A git failure while asking fails closed, as not measured. The cost is deliberate: a bead whose
+ *      Any git failure (`git rev-list`, `git log`, `git diff`, `git
+ *      merge-base`) fails the bead closed, as not measured. The cost is deliberate: a bead whose
  *      description still carries an old typo'd, pruned or off-main premise
  *      fails until that line is re-verified, even when its notes hold a
  *      sound, fresh one -- re-verifying those lines across the backlog is
@@ -916,10 +921,12 @@ export const CHECKS = [
       return { ok: true, detail: `${where} declares \`Premise depends on: none\`${decl.reason ? ` ${decl.reason}` : ""}; no merge makes it stale${judgedNote ? `.${judgedNote}` : ""}` };
     }
     const touching = behind === 0 ? [] : ctx.git.commitsTouching(full, decl.paths);
-    if (touching === null) {
+    if (!Array.isArray(touching)) {
+      // `{failed}` from makeGitContext names the command; anything else that is not a list is a failure too
+      const what = touching && typeof touching.failed === "string" ? touching.failed : `\`git log\`/\`git diff\` over ${full.slice(0, 7)}..${ctx.headShort}`;
       return {
         ok: false,
-        detail: `${where}: \`git log\` over ${full.slice(0, 7)}..${ctx.headShort} failed, so whether it touched ${decl.paths.join(", ")} was not measured.${judgedNote} ${PREMISE_FRESHNESS_COST}`,
+        detail: `${where}: ${what} failed, so whether it touched ${decl.paths.join(", ")} was not measured.${judgedNote} ${PREMISE_FRESHNESS_COST}`,
       };
     }
     if (touching.length > 0) {
@@ -1033,7 +1040,11 @@ function candidateProblem(cand, ctx) {
   const who = `the ${possessive(field)} last premise statement`;
   const at = resolveStatement(st, ctx);
   if (at.kind === "none") {
-    return { dating: true, detail: `${who} names no commit (${JSON.stringify(st.line.length > 80 ? `${st.line.slice(0, 80)}...` : st.line)}), so its freshness cannot be checked.` };
+    // quote from the label, not from the head of a paragraph that may sit well before it
+    const label = PREMISE_LABEL_RE.exec(st.line);
+    const from = label ? Math.max(0, st.line.toLowerCase().indexOf("premise", label.index)) : 0;
+    const excerpt = st.line.slice(from);
+    return { dating: true, detail: `${who} names no commit (${JSON.stringify(excerpt.length > 80 ? `${excerpt.slice(0, 80)}...` : excerpt)}), so its freshness cannot be checked.` };
   }
   if (at.kind === "unresolved") {
     return { dating: true, detail: `${who} names ${at.token}, which does not resolve in this repo (a typo, or a branch commit pruned after its PR was squash-merged), so its freshness cannot be checked.` };
@@ -1182,13 +1193,14 @@ function git(args, repoDir) {
 /**
  * The git questions this script asks, behind an interface so the tests can
  * answer them from a fixture instead of needing a repo with a particular
- * history.
+ * history. `run` is the git runner, injectable so a test can fail one git
+ * command and leave the others real.
  */
-export function makeGitContext(headOverride, repoDir = REPO_ROOT) {
+export function makeGitContext(headOverride, repoDir = REPO_ROOT, run = git) {
   let head = headOverride;
   if (!head) {
     try {
-      head = git(["rev-parse", "origin/main"], repoDir);
+      head = run(["rev-parse", "origin/main"], repoDir);
     } catch {
       throw new Error(
         `git could not resolve origin/main in ${repoDir}. Run \`git fetch origin main\` first, or pass --head <sha>. ` +
@@ -1205,7 +1217,7 @@ export function makeGitContext(headOverride, repoDir = REPO_ROOT) {
       if (cache.has(sha)) return cache.get(sha);
       let full = null;
       try {
-        full = git(["rev-parse", "--verify", "--quiet", `${sha}^{commit}`], repoDir) || null;
+        full = run(["rev-parse", "--verify", "--quiet", `${sha}^{commit}`], repoDir) || null;
       } catch {
         full = null;
       }
@@ -1216,7 +1228,7 @@ export function makeGitContext(headOverride, repoDir = REPO_ROOT) {
     commitsAhead(full) {
       if (full === head) return 0;
       try {
-        return Number(git(["rev-list", "--count", `${full}..${head}`], repoDir));
+        return Number(run(["rev-list", "--count", `${full}..${head}`], repoDir));
       } catch {
         return Infinity;
       }
@@ -1229,7 +1241,7 @@ export function makeGitContext(headOverride, repoDir = REPO_ROOT) {
      */
     isAncestor(a, b) {
       try {
-        git(["merge-base", "--is-ancestor", a, b], repoDir);
+        run(["merge-base", "--is-ancestor", a, b], repoDir);
         return true;
       } catch (e) {
         return e && e.status === 1 ? false : null;
@@ -1243,16 +1255,27 @@ export function makeGitContext(headOverride, repoDir = REPO_ROOT) {
     commitsNotOnMain(full) {
       if (full === head) return 0;
       try {
-        return Number(git(["rev-list", "--count", `${head}..${full}`], repoDir));
+        return Number(run(["rev-list", "--count", `${head}..${full}`], repoDir));
       } catch {
         return Infinity;
       }
     },
     /**
      * The commits in `full..HEAD` that touched any of `paths`, oldest first,
-     * each with the files under those paths it touched; null when git
-     * failed, so an error fails closed instead of reading as "touched
-     * nothing". `--literal-pathspecs`, because declared paths in this repo
+     * each with the files under those paths it touched; when git failed,
+     * `{failed}` naming the command that did (`git log` over the range, or
+     * `git diff` of the premise against a merge), so an error fails closed
+     * instead of reading as "touched nothing" and the bead's detail names
+     * the command that actually failed. A merge commit is diffed against its first parent
+     * (`--diff-merges=first-parent`; `--name-only` alone prints no files for
+     * a merge). One that shows no declared file there is dropped only when
+     * its RESULT does not differ from the premise commit on a declared path
+     * beyond what the other listed commits already name: a merge that
+     * restores a path to its premise text (`-s ours`, an octopus result, a
+     * conflict resolution that keeps the old side) changes nothing against
+     * its first parent yet makes HEAD differ from the premise, so it is
+     * listed with the files that differ (ugcportal-ze80).
+     * `--literal-pathspecs`, because declared paths in this repo
      * carry glob characters (`src/app/api/media/[id]/`) that would otherwise
      * match a different path or none. `--no-renames`, so a rename counts as
      * touching both its old and its new name. A directory pathspec covers
@@ -1261,24 +1284,46 @@ export function makeGitContext(headOverride, repoDir = REPO_ROOT) {
      */
     commitsTouching(full, paths) {
       if (paths.length === 0) return [];
+      let failed = `\`git log\` over ${full.slice(0, 7)}..${head.slice(0, 7)}`;
       try {
-        const out = git(
-          ["--literal-pathspecs", "log", "--reverse", "--full-history", "--no-renames", "--format=%x00%H", "--name-only", `${full}..${head}`, "--", ...paths],
+        const out = run(
+          ["--literal-pathspecs", "log", "--reverse", "--full-history", "--no-renames", "--diff-merges=first-parent", "--format=%x00%H", "--name-only", `${full}..${head}`, "--", ...paths],
           repoDir,
         );
-        return out
+        const commits = out
           .split("\0")
           .map((chunk) => chunk.split("\n").map((l) => l.trim()).filter(Boolean))
           .filter((rows) => rows.length > 0)
           .map(([sha, ...files]) => ({ sha, files }));
+        // A merge can be listed yet show no declared file against its first
+        // parent. Dropping it is safe only when HEAD's difference from the
+        // premise on the declared paths is already named by the other listed
+        // commits; otherwise the merge itself made HEAD differ (it restored
+        // the premise's text, or kept a side's older one), so it is listed
+        // with the files its result differs on.
+        const named = new Set(commits.flatMap((c) => c.files));
+        const kept = [];
+        for (const c of commits) {
+          if (c.files.length > 0) {
+            kept.push(c);
+            continue;
+          }
+          failed = `\`git diff\` of ${full.slice(0, 7)} against merge ${c.sha.slice(0, 7)}`;
+          const differs = run(["--literal-pathspecs", "diff", "--name-only", "--no-renames", full, c.sha, "--", ...paths], repoDir)
+            .split("\n")
+            .map((l) => l.trim())
+            .filter((f) => f && !named.has(f));
+          if (differs.length > 0) kept.push({ sha: c.sha, files: differs });
+        }
+        return kept;
       } catch {
-        return null;
+        return { failed };
       }
     },
     /** whether `p` names a file or directory in HEAD's tree */
     pathExists(p) {
       try {
-        git(["cat-file", "-e", `${head}:${p}`], repoDir);
+        run(["cat-file", "-e", `${head}:${p}`], repoDir);
         return true;
       } catch {
         return false;

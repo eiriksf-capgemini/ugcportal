@@ -10,11 +10,11 @@ import {
  * What the alt-text and caption fields draw, and what counts as blocking
  * (ugcportal-gwr).
  *
- * Its own module for the reason `tag-selection.ts` is one: the repo's vitest
- * runs in a node environment with no DOM, so anything reachable only through
- * a React event handler is, in practice, untested. `upload-form.tsx` holds
- * state wiring; the decision of what counts as a blocking error lives here,
- * where a test can drive it directly.
+ * Its own module for the reason `tag-selection.ts` is one: this repo's vitest
+ * runs in a node environment by default (jsdom is opt-in per test file), so
+ * anything reachable only through a React event handler is, in practice,
+ * untested. `upload-form.tsx` holds state wiring; the decision of what counts
+ * as a blocking error lives here, where a test can drive it directly.
  *
  * BATCH-LEVEL, NOT PER-FILE, FOR NOW. Like the subject-tag picker, these two
  * fields apply to "files you add next" rather than to one file at a time —

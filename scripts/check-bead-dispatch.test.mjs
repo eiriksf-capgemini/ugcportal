@@ -996,7 +996,7 @@ describe("ul2j: premise freshness is scoped by the paths the premise declares", 
       resolveCommit: (sha) => sha.padEnd(40, "0"),
       commitsAhead: () => 3,
       commitsNotOnMain: () => 0,
-      commitsTouching: () => null,
+      commitsTouching: () => ({ failed: "`git log` over abcdefa..fffffff" }),
       pathExists: () => true,
     };
     const result = validateBead(completeBead({ notes: premise(0, "src/lib/a.ts") }), { git, headShort: "fffffff" });
@@ -1006,9 +1006,11 @@ describe("ul2j: premise freshness is scoped by the paths the premise declares", 
     expect(fresh.detail).toContain("was not measured");
   });
 
-  it("makeGitContext.commitsTouching returns null, not an empty list, when git fails", () => {
+  it("makeGitContext.commitsTouching returns {failed} naming `git log`, not an empty list, when git fails", () => {
     const ctx = makeGitContext(c[6], pr);
-    expect(ctx.commitsTouching("deadbeef".repeat(5), ["src/lib/a.ts"])).toBeNull();
+    const failed = ctx.commitsTouching("deadbeef".repeat(5), ["src/lib/a.ts"]);
+    expect(Array.isArray(failed)).toBe(false);
+    expect(failed.failed).toBe(`\`git log\` over deadbee..${c[6].slice(0, 7)}`);
     expect(ctx.commitsTouching(c[0], ["src/lib/a.ts"])).toEqual([{ sha: c[1], files: ["src/lib/a.ts"] }]);
     expect(ctx.pathExists("src/app/[id]")).toBe(true);
     expect(ctx.pathExists("src/lib/b.ts")).toBe(false);
@@ -1881,7 +1883,7 @@ describe("findPremiseLines", { timeout: 30_000 }, () => {
   it("reads a statement's commits from its label on, in order, so the first one is the verified-at commit", () => {
     // a commit named before the label belongs to another note on the same line
     expect(findPremiseLines("2026-10-15 merged def5678. Premise verified at abc1234.")[0].shas).toEqual(["abc1234"]);
-    // order is kept: premiseCommits dates the statement by the first one, resolving or not
+    // order is kept: resolveStatement dates the statement by the first one, resolving or not
     expect(findPremiseLines("Premise verified at abc1234. Dispatched from origin/main def5678.")[0].shas).toEqual(["abc1234", "def5678"]);
   });
 
@@ -2462,4 +2464,296 @@ describe("the skill file's own invocation does not discard the exit status", { t
       return { status: err.status };
     }
   }
+});
+
+// --- ugcportal-zoee (ze80, jtyl K2): merge commits and the names-no-commit excerpt -
+
+/**
+ * A scratch repo with a --no-ff merge on main (ugcportal-ze80).
+ *
+ *   c0  src/a.ts, src/b.ts, README.md
+ *   s1  side branch off c0: touches `sideFile` (side.txt, or src/a.ts)
+ *   c1  mainline: touches `mainFile` (src/b.ts, or README.md)
+ *   c2  mainline: README.md
+ *   m   `git merge --no-ff side`  (HEAD)
+ */
+function makeMergeRepo({ sideFile, mainFile }) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "zoee-merge-"));
+  const run = (args) => execFileSync("git", args, { cwd: dir, encoding: "utf8" }).trim();
+  const write = (rel, text) => {
+    fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+    fs.writeFileSync(path.join(dir, rel), text);
+  };
+  const commit = (msg) => {
+    run(["add", "-A"]);
+    run(["commit", "-q", "-m", msg]);
+    return run(["rev-parse", "HEAD"]);
+  };
+  run(["init", "-q", "-b", "main"]);
+  run(["config", "user.email", "test@example.com"]);
+  run(["config", "user.name", "Test"]);
+  write("src/a.ts", "a v0\n");
+  write("src/b.ts", "b v0\n");
+  write("README.md", "r0\n");
+  const c0 = commit("c0");
+  run(["checkout", "-q", "-b", "side"]);
+  write(sideFile, "side v1\n");
+  const s1 = commit("s1 side branch");
+  run(["checkout", "-q", "main"]);
+  write(mainFile, "main v1\n");
+  const c1 = commit("c1 mainline");
+  write("README.md", "r2\n");
+  const c2 = commit("c2 README");
+  run(["merge", "-q", "--no-ff", "-m", "m merge side", "side"]);
+  const m = run(["rev-parse", "HEAD"]);
+  return { dir, c0, s1, c1, c2, m };
+}
+
+describe("ugcportal-zoee ze80: a merge commit on main is not listed as touching nothing", { timeout: 60_000 }, () => {
+  const repos = [];
+  afterAll(() => {
+    for (const r of repos) fs.rmSync(r.dir, { recursive: true, force: true });
+  });
+  const build = (opts) => {
+    const r = makeMergeRepo(opts);
+    repos.push(r);
+    return r;
+  };
+  const freshLineOf = (r, premiseSha, decl) => {
+    const file = path.join(r.dir, `beads-${Math.random().toString(36).slice(2)}.json`);
+    const notes = `Premise verified 2026-10-19 at origin/main ${premiseSha} by reading the code.\nPremise depends on: ${decl}`;
+    fs.writeFileSync(file, JSON.stringify([completeBead({ notes })]));
+    const res = runCliAllowFail(["--beads", file, "--repo", r.dir, "--head", r.m]);
+    return { res, line: res.stdout.split("\n").find((l) => /^\s+(ok|FAIL)\s+premise-fresh\b/.test(l)) || "" };
+  };
+
+  it("K1: every commit listed names a declared file, and the count equals the commits listed", () => {
+    const r = build({ sideFile: "side.txt", mainFile: "src/b.ts" });
+    const { res, line } = freshLineOf(r, r.s1, "src/a.ts, src/b.ts");
+    expect(res.status).toBe(1);
+    expect(failedChecks(res.stdout)).toEqual(["premise-fresh"]);
+    expect(line).not.toContain("touched .");
+    expect(line).not.toContain("touched ;");
+    // the merge brought in side.txt only, which is not declared: only c1 touched a declared path
+    expect(line).toContain(`1 of those commit(s) touched a declared path -- ${r.c1.slice(0, 7)} touched src/b.ts.`);
+    expect(line).not.toContain(`${r.m.slice(0, 7)} touched`);
+  });
+
+  it("K2: a declared path changed only on a merged side branch still fails, naming the side-branch commit", () => {
+    const r = build({ sideFile: "src/a.ts", mainFile: "README.md" });
+    const { res, line } = freshLineOf(r, r.c0, "src/a.ts");
+    expect(res.status).toBe(1);
+    expect(failedChecks(res.stdout)).toEqual(["premise-fresh"]);
+    expect(line).toContain(`${r.s1.slice(0, 7)} touched src/a.ts`);
+    expect(line).not.toContain("touched .");
+    expect(line).not.toContain("touched ;");
+    // the count equals the commits listed: s1, and the merge that brought it in, with its file
+    const listed = line.match(/\b[0-9a-f]{7} touched /g) || [];
+    expect(line).toContain(`${listed.length} of those commit(s) touched a declared path`);
+  });
+});
+
+/**
+ * Scratch repos where the merge ITSELF makes HEAD differ from the premise on
+ * x.ts while its first-parent diff shows no declared file (ugcportal-ze80,
+ * review round 1). Each returns { dir, premise, m, ... } with HEAD at `m`.
+ */
+function makeResultMergeRepo(shape) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "zoee-result-"));
+  const run = (args) => execFileSync("git", args, { cwd: dir, encoding: "utf8" }).trim();
+  const write = (rel, text) => fs.writeFileSync(path.join(dir, rel), text);
+  const commit = (msg) => {
+    run(["add", "-A"]);
+    run(["commit", "-q", "-m", msg]);
+    return run(["rev-parse", "HEAD"]);
+  };
+  run(["init", "-q", "-b", "main"]);
+  run(["config", "user.email", "test@example.com"]);
+  run(["config", "user.name", "Test"]);
+  write("x.ts", "x v0\n");
+  write("o.txt", "o0\n");
+  const c0 = commit("c0");
+  const out = { dir, c0 };
+  if (shape === "d1") {
+    // side commit s1 changes x.ts (the premise); mainline touches o.txt; `-s ours` keeps v0
+    run(["checkout", "-q", "-b", "side"]);
+    write("x.ts", "x v1\n");
+    out.premise = commit("s1 side x.ts");
+    run(["checkout", "-q", "main"]);
+    write("o.txt", "o1\n");
+    out.c1 = commit("c1 o.txt");
+    run(["merge", "-q", "-s", "ours", "-m", "m ours", "side"]);
+  } else if (shape === "d2") {
+    // main commit p fixes x.ts (the premise); feat merges main and keeps its old x.ts; main fast-forwards
+    run(["checkout", "-q", "-b", "feat"]);
+    write("o.txt", "o1\n");
+    out.f1 = commit("f1 o.txt");
+    run(["checkout", "-q", "main"]);
+    write("x.ts", "x v1\n");
+    out.premise = commit("p fixes x.ts");
+    run(["checkout", "-q", "feat"]);
+    run(["merge", "-q", "--no-commit", "--no-ff", "main"]);
+    run(["checkout", c0, "--", "x.ts"]);
+    run(["commit", "-q", "-m", "m keeps the old x.ts"]);
+    run(["checkout", "-q", "main"]);
+    run(["merge", "-q", "--ff-only", "feat"]);
+  } else {
+    // octopus of s (changes x.ts: the premise) and t (adds t.txt), result restoring x.ts to v0
+    run(["checkout", "-q", "-b", "s"]);
+    write("x.ts", "x v1\n");
+    out.premise = commit("s1 x.ts");
+    run(["checkout", "-q", "main"]);
+    run(["checkout", "-q", "-b", "t"]);
+    write("t.txt", "t\n");
+    commit("t1 t.txt");
+    run(["checkout", "-q", "main"]);
+    run(["merge", "-q", "--no-commit", "--no-ff", "s", "t"]);
+    run(["checkout", c0, "--", "x.ts"]);
+    run(["commit", "-q", "-m", "m octopus restores x.ts"]);
+  }
+  out.m = run(["rev-parse", "HEAD"]);
+  return out;
+}
+
+describe("ugcportal-zoee ze80 (round 1 M1): a merge whose result differs from the premise on a declared path is never dropped", { timeout: 60_000 }, () => {
+  const repos = [];
+  afterAll(() => {
+    for (const r of repos) fs.rmSync(r.dir, { recursive: true, force: true });
+  });
+  const lineFor = (shape) => {
+    const r = makeResultMergeRepo(shape);
+    repos.push(r);
+    const file = path.join(r.dir, "beads.json");
+    const notes = `Premise verified 2026-10-19 at origin/main ${r.premise} by reading the code.\nPremise depends on: x.ts`;
+    fs.writeFileSync(file, JSON.stringify([completeBead({ notes })]));
+    const res = runCliAllowFail(["--beads", file, "--repo", r.dir, "--head", r.m]);
+    return { r, res, line: res.stdout.split("\n").find((l) => /^\s+(ok|FAIL)\s+premise-fresh\b/.test(l)) || "" };
+  };
+  for (const [shape, what] of [
+    ["d1", "`git merge -s ours` of a side commit that changed x.ts"],
+    ["d2", "a conflict resolution that keeps the older x.ts, fast-forwarded onto main"],
+    ["e", "an octopus merge whose result restores x.ts"],
+  ]) {
+    it(`${shape}: ${what} reads stale, naming the merge and x.ts`, () => {
+      const { r, res, line } = lineFor(shape);
+      expect(res.status).toBe(1);
+      expect(failedChecks(res.stdout)).toEqual(["premise-fresh"]);
+      expect(line).toContain(`${r.m.slice(0, 7)} touched x.ts`);
+      expect(line).not.toContain("touched .");
+      const listed = line.match(/\b[0-9a-f]{7} touched /g) || [];
+      expect(line).toContain(`${listed.length} of those commit(s) touched a declared path`);
+    });
+  }
+});
+
+describe("ugcportal-zoee jtyl K2: the excerpt starts at the label, and a statement saying `line` is read", { timeout: 60_000 }, () => {
+  let pr;
+  let c;
+  beforeAll(() => {
+    const made = makePathRepo();
+    pr = made.dir;
+    c = made.c;
+  }, 30_000);
+  afterAll(() => {
+    if (pr) fs.rmSync(pr, { recursive: true, force: true });
+  });
+  const run = (bead) => {
+    const file = path.join(pr, `beads-${Math.random().toString(36).slice(2)}.json`);
+    fs.writeFileSync(file, JSON.stringify([bead]));
+    const res = runCliAllowFail(["--beads", file, "--repo", pr, "--head", c[6]]);
+    return { res, line: res.stdout.split("\n").find((l) => /^\s+(ok|FAIL)\s+premise-fresh\b/.test(l)) || "" };
+  };
+
+  it("K2: a description statement naming no commit is quoted from its label, not from the paragraph's first words", () => {
+    const base = completeBead();
+    const head = "Opening words of a long paragraph that runs on well past eighty characters before it gets anywhere near the label. ";
+    const description = `${base.description}\n\n${head}Premise (verified today by reading the code, which this line says nothing more about and names no commit).`;
+    const notes = `Premise verified 2026-10-19 at origin/main ${c[6]} by reading the code.\nPremise depends on: src/lib/a.ts`;
+    const { res, line } = run({ ...base, description, notes });
+    expect(res.status).toBe(1);
+    expect(line).toContain("names no commit");
+    expect(line).toContain('("Premise (verified');
+    expect(line).not.toContain("Opening words");
+  });
+
+  it("round 1 M2: a statement that says `line` yet names a commit is still read", () => {
+    for (const verified of [
+      "Premise verified line-by-line at origin/main",
+      "Premise verified line by line at origin/main",
+      "Premise verified line L12 at origin/main",
+      "Premise verified line #12 at origin/main",
+    ]) {
+      const found = findPremiseLines(`${verified} ${c[0]} by reading the code.\nPremise depends on: src/lib/a.ts`, "");
+      expect(found.length, verified).toBe(1);
+      expect(found[0].shas, verified).toEqual([c[0]]);
+    }
+  });
+
+  it("round 1 M2: the older of two statements is not judged when the newer one says line-by-line (fail-open shape)", () => {
+    const base = completeBead();
+    const notes = `Premise verified 2026-10-19 at origin/main ${c[0]} by reading the code.\nPremise depends on: README.md\nPremise verified line-by-line at origin/main ${c[1]} by reading the code.\nPremise depends on: src/lib/c.ts`;
+    const { res, line } = run({ ...base, notes });
+    expect(res.status).toBe(1);
+    expect(line).toContain("touched");
+    expect(line).toContain(`premise verified at ${c[1].slice(0, 7)}`);
+  });
+});
+
+describe("ugcportal-zoee (PR #324 round 2 L2): a failed `git diff` in commitsTouching is named as `git diff`", { timeout: 60_000 }, () => {
+  let dir;
+  let c0;
+  let merge;
+  beforeAll(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "zoee-diff-"));
+    const g = (args) => execFileSync("git", args, { cwd: dir, encoding: "utf8" }).trim();
+    g(["init", "-q", "-b", "main"]);
+    g(["config", "user.email", "test@example.com"]);
+    g(["config", "user.name", "Test"]);
+    fs.writeFileSync(path.join(dir, "x.ts"), "x v0\n");
+    fs.writeFileSync(path.join(dir, "o.txt"), "o v0\n");
+    g(["add", "-A"]);
+    g(["commit", "-q", "-m", "c0"]);
+    c0 = g(["rev-parse", "HEAD"]);
+    g(["checkout", "-q", "-b", "side"]);
+    fs.writeFileSync(path.join(dir, "x.ts"), "x side\n");
+    g(["commit", "-q", "-am", "s1"]);
+    g(["checkout", "-q", "main"]);
+    fs.writeFileSync(path.join(dir, "o.txt"), "o v1\n");
+    g(["commit", "-q", "-am", "c1"]);
+    g(["merge", "-q", "-s", "ours", "-m", "m ours", "side"]);
+    merge = g(["rev-parse", "HEAD"]);
+  }, 30_000);
+  afterAll(() => {
+    if (dir) fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const realGit = (args, cwd) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+
+  it("returns {failed} naming `git diff` and the merge when only the diff fails, and the list when nothing fails", () => {
+    const failingDiff = (args, cwd) => {
+      if (args.includes("diff")) throw Object.assign(new Error("injected git diff failure"), { status: 128 });
+      return realGit(args, cwd);
+    };
+    expect(makeGitContext(merge, dir, failingDiff).commitsTouching(c0, ["x.ts"])).toEqual({ failed: `\`git diff\` of ${c0.slice(0, 7)} against merge ${merge.slice(0, 7)}` });
+    const listed = makeGitContext(merge, dir).commitsTouching(c0, ["x.ts"]);
+    expect(Array.isArray(listed)).toBe(true);
+    expect(listed.map((x) => x.files)).toEqual([["x.ts"]]);
+  });
+
+  it("the premise-fresh detail names the command that failed", () => {
+    const git = {
+      head: "f".repeat(40),
+      headShort: "fffffff",
+      resolveCommit: (sha) => sha.padEnd(40, "0"),
+      commitsAhead: () => 3,
+      commitsNotOnMain: () => 0,
+      commitsTouching: () => ({ failed: "`git diff` of abcdefa against merge 1234567" }),
+      pathExists: () => true,
+    };
+    const notes = `Premise verified 2026-10-19 at origin/main ${"abcdefa".padEnd(40, "0")} by reading the code.\nPremise depends on: x.ts`;
+    const fresh = validateBead(completeBead({ notes }), { git, headShort: "fffffff" }).results.find((r) => r.id === "premise-fresh");
+    expect(fresh.ok).toBe(false);
+    expect(fresh.detail).toContain("`git diff` of abcdefa against merge 1234567 failed");
+    expect(fresh.detail).not.toContain("`git log`");
+    expect(fresh.detail).toContain("was not measured");
+  });
 });

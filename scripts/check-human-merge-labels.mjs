@@ -14,8 +14,12 @@
  * a verdict (L1). A round comment counts only when it was written by the
  * reviewing account (`gh api user`, compared with any `app/` prefix removed
  * and case-insensitively, since gh reports a bot as `app/<slug>` on a PR but
- * `<slug>` on its comments). That is step 4b's reviewer-identity rule, not a
- * rule about the PR's author: a PR the reviewer opened itself (a human-authored
+ * `<slug>` on its comments). The identity source (`gh api user`) is shared with
+ * step 4b; the handling of another account's marker is not: step 4b reads a
+ * round marker by any other account as a `broken` chain
+ * (`($mk | any(.login != $me))`), while this check ignores such a comment and
+ * reads the reviewer's latest round comment. It is a rule about who wrote the
+ * comment, not about the PR's author: a PR the reviewer opened itself (a human-authored
  * PR, step 4b's `approx` chain) still has its round comments counted, and a
  * comment by the bot that opened the PR is not a review. A comment with no
  * readable author, or no readable reviewer login, is not a round comment
@@ -27,8 +31,13 @@
  * (`gh pr comment`), never in a review body. The label is applied only at the
  * sensitive-path reviewed-clean stop (step 2). The `approx`-at-cap and
  * broken-chain zero-finding stops stamp a non-round `ugcportal-review-stop`
- * comment, are not labelled by this check's PR, and so are not read here
- * (ugcportal-osth).
+ * comment. Under step 2's precedence such a stop is labelled when the PR
+ * touches a sensitive path and the run reviewed clean, and its stop comment
+ * is not read here (ugcportal-osth). The check lists the label by the PR's
+ * latest ROUND comment instead: C when that round comment lacks the verdict
+ * marker (the PR #274 shape: a blocked round 6, then the stop, then the
+ * label) or when the PR has no round comment by the reviewer at all, and
+ * nothing, or D if the head moved, after a labelled clean round.
  *
  *   A  latest round comment carries the verdict marker line
  *      `<!-- ugcportal-needs-human-merge -->` but the PR has no label.
@@ -145,7 +154,8 @@ function latestRoundComment(comments, reviewer) {
 /**
  * Pure classification over injected data.
  *
- * @param {Array<{number:number, author?:{login?:string}, headRefOid?:string, labels?:Array<{name:string}>, comments?:Array<{body?:string, author?:{login?:string}}>, files?:Array<{path:string}>}>} prs
+ * @param {Array<{number:number, headRefOid?:string, labels?:Array<{name:string}>, comments?:Array<{body?:string, author?:{login?:string}}>, files?:Array<{path:string}>}>} prs
+ * @param {string|undefined} reviewer the reviewing account's login (`gh api user`); absent or empty, no comment is a round comment
  */
 export function classifyPrs(prs, reviewer) {
   let roundReviewed = 0;
@@ -227,7 +237,7 @@ function currentLogin() {
 function listOpenPrs() {
   const out = execFileSync(
     "gh",
-    ["pr", "list", "--state", "open", "--json", "number,author,headRefOid,labels,comments,files", "--limit", String(PR_LIST_LIMIT)],
+    ["pr", "list", "--state", "open", "--json", "number,headRefOid,labels,comments,files", "--limit", String(PR_LIST_LIMIT)],
     { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 },
   );
   return JSON.parse(out);

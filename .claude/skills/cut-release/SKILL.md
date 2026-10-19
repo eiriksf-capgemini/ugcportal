@@ -238,35 +238,43 @@ So write every free-text field through a **quoted** heredoc (`<<'BD_EOF'`, which
 
 ```bash
 scratch=$(mktemp -d); trap 'rm -rf "$scratch"' EXIT
+cat > "$scratch/title.txt" <<'BD_EOF'
+<fill: the recommendation, as the bead title>
+BD_EOF
 cat > "$scratch/desc.md" <<'BD_EOF'
-As a <role>, I want <capability>, so that <benefit>.
+As <fill: role>, I want <fill: capability>, so that <fill: benefit>.
 
-In scope: ...
-Out of scope: ...
+In scope: <fill: scope>
+Out of scope: <fill: neighbouring work>
 BD_EOF
 cat > "$scratch/acc.md" <<'BD_EOF'
-K1: Given ..., when ..., <outcome>.
-Verified by: ...
+K1: Given <fill: state>, when <fill: action>, <fill: outcome>.
+Verified by: <fill: the command and the output that counts as passing>
 
-K2: Following should never happen: ...
-Verified by: ...
+K2: Following should never happen: <fill: the failure>.
+Verified by: <fill: a mutation or input that used to trigger it, and the command showing it now fails loudly>
 BD_EOF
 cat > "$scratch/notes.md" <<'BD_EOF'
-Premise verified <date>: <command or file checked>.
+Premise verified <fill: YYYY-MM-DD> at origin/main <fill: sha>: <fill: command or file checked, and what it showed>.
+Premise depends on: <fill: comma-separated repo-relative paths the premise rests on, or none (the external fact it rests on)>
+BD_EOF
+cat > "$scratch/meta.json" <<'BD_EOF'
+{"cc_type": "chore", "cc_scope": "process", "model": "sonnet", "model_effort": "high", "model_why": "<fill: one line, no double quote or backslash: why this tier fits>", "retro_source": "<fill: document.md#N>"}
 BD_EOF
 
-bd create "$(cat <<'BD_EOF'
-<title>
-BD_EOF
-)" --type=task --priority=<n> \
+grep -l '<fill' "$scratch"/* && { echo "unfilled placeholder" >&2; exit 1; }
+
+bd create "$(cat "$scratch/title.txt")" --type=task --priority=<fill: n> \
   --body-file "$scratch/desc.md" \
   --acceptance="$(cat "$scratch/acc.md")" \
   --notes="$(cat "$scratch/notes.md")" \
-  --deps="discovered-from:<retrospective-bead-id>" \
-  --metadata='{"cc_type":"chore","cc_scope":"process","model":"sonnet","model_effort":"high","model_why":"...","retro_source":"release-cost-v0.5.0-vs-v0.6.0.md#2"}'
+  --deps="discovered-from:<fill: retrospective-bead-id>" \
+  --metadata @"$scratch/meta.json"
 ```
 
 The delimiter is `BD_EOF` rather than `EOF` because a recommendation quoting a shell snippet can itself contain a line reading exactly `EOF`, which both of the documents checked do. If any text could contain `BD_EOF` too, change the delimiter again rather than trimming the text.
+
+The title goes through a file and the metadata through `@file`, not through an inline `$(cat` heredoc inside the double quotes or a single-quoted `--metadata` string. On macOS `/bin/bash` 3.2.57 the inline form is parsed before the heredoc is read, so an unbalanced `)` in the recommendation ends the substitution early and any `$(...)` or backtick after it runs; a single-quoted JSON string ends at the first apostrophe, so `it's` in `model_why` ends the quote and a following `$(...)` runs. A quoted heredoc written to a file is read verbatim by bash and zsh alike, and `"$(cat "$scratch/title.txt")"` does not re-scan its output. The `grep -l '<fill'` line stops the block before a bead exists if any placeholder is left, and the metadata must stay valid JSON, so `model_why` and `retro_source` carry no double quote or backslash.
 
 **5. Backfill `retro_source` on beads that already existed.** The first run against a given document finds recommendations whose beads exist but predate this convention. Set the key on those rather than filing duplicates — matching by hand once is what makes every later run exact.
 
