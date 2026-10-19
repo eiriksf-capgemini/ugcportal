@@ -72,21 +72,32 @@ diverging as more time passes.
    **For a review round, the model comes from a written rule
    (ugcportal-1mhn).** Before spawning the `worker-reviewer`, run
    `node scripts/reviewer-model.mjs <pr-number>` from the main checkout and
-   pass the `model` it prints (and its `effort`). It prints `opus` when any
-   changed path is on its risk list (`RISK_PATHS` in the script: attestation,
-   resale rights, origin, test-support, API route handlers, auth, prisma,
-   workflows, `scripts/check-*.mjs`, and the secret/credential/env paths;
-   sourced from the `pr-review-merge` step 2 sensitive-path list and
-   `CLAUDE.md`'s model-fit table), otherwise the bead's `model` tier with a
-   floor of `sonnet` (never haiku for review); `.claude/**` and `CLAUDE.md`
-   are process prose and take the bead's tier. Exit 2 (no bead id in the PR
-   title, or no `model` on the bead) means the orchestrator decides by hand
-   and records why; `opus`, the agent file's own `model:`, is the fallback.
-   Measured basis (v0.9.0 cost review): 71 opus review rounds averaged 883k
-   ITE against 335k for 36 sonnet rounds; beads tiered sonnet drew 45 opus
-   rounds carrying 53% of review cost; every medium was found by an opus
-   round, on the larger and riskier PRs (an association, not causation, which
-   is why risk paths stay on opus).
+   pass the `model` it prints as the spawn's model. The spawn takes a model
+   only: effort comes from the agent definition, so the `effort` it prints is
+   for the record (the round comment's `Model:` line) and for a future
+   harness that accepts one. It prints `opus` when any changed path is on its
+   risk list (`RISK_PATHS` in the script: attestation, resale rights, origin,
+   test-support, API route handlers, auth, prisma, workflows,
+   `scripts/check-*.mjs`, the `.claude/settings*.json` permission files, the
+   secret/credential/env paths, the process-guard scripts — itself,
+   `sweep-merged-branches.mjs`, `check-human-merge-labels.mjs`,
+   `gh-app-token.mjs` — and any `src/lib/**` or `src/app/**` path whose name
+   says session, sign-in, auth, roles, admin, oauth, sellability, publishing,
+   rights, licence, pricing, payment, crypto, encryption, attestation, origin,
+   disclosure or evidence; sourced from the `pr-review-merge` step 2
+   sensitive-path list and `CLAUDE.md`'s model-fit table), and also `opus`
+   when gh's 100-file window truncated the file list; otherwise the bead's
+   `model` tier with a floor of `sonnet` (never haiku for review);
+   `.claude/skills/**`, `.claude/agents/**` and `CLAUDE.md` are process prose
+   and take the bead's tier. Exit 2 (no bead id in the PR title, or no
+   `model` on the bead) means the orchestrator decides by hand and records
+   why; `opus`, the agent file's own `model:`, is the fallback.
+   Measured basis (`docs/process/release-cost-v0.8.1-vs-v0.9.0.md` section
+   3): 71 opus rounds, mean 1.02M ITE per round (883k per pass over 83
+   passes), against 36 sonnet rounds at a mean of 335k; the 61 rounds on
+   sonnet-tiered beads (45 opus, 16 sonnet) carry 45.1M of 85.3M review ITE,
+   53%; every medium was found by an opus round, on the larger PRs, an
+   association only (which is why risk paths stay on opus).
 2. **Set a default subagent model, so an omitted argument has a safe
    landing instead of inheriting Opus.** Claude Code (confirmed on the
    installed CLI, v2.1.267, against

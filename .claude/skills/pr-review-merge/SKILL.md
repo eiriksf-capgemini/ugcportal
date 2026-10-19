@@ -101,7 +101,7 @@ If the changed files (`gh pr view --json files`) touch any of the following, thi
 - Anything that looks like infra/secrets config: `docker-compose.yml`, `**/*secret*`, `**/*credential*`, `.env*`, `**/*.pem`, `**/*.key`
 - Auth code: `src/lib/auth.ts`, anything under `src/app/api/auth/`
 
-This list is the authority for what routes to a human. `scripts/check-human-merge-labels.mjs` (`SENSITIVE_PATH_RES`, used by `isSensitivePath`) mirrors it in code to classify labels after the fact (it routes nothing) and `scripts/check-sensitive-files.mjs` only points here; when this list changes, change the mirror and its test rows in the same PR.
+This list is the authority for what routes to a human. `scripts/check-human-merge-labels.mjs` (`SENSITIVE_PATH_RES`, used by `isSensitivePath`) mirrors it in code to classify labels after the fact (it routes nothing) and `scripts/check-sensitive-files.mjs` only points here; when this list changes, change the mirror and its test rows in the same PR, and classify the new entry in `scripts/reviewer-model.mjs` (`RISK_PATHS`, or `PROCESS_PROSE` with its reason), whose test fails on a step-2 regex it does not classify.
 
 If any of these are touched, still run the review (step 4) and post it as a normal comment, but explicitly state in the comment that this PR requires human approval/merge because it touches a sensitive path, and do not call `gh pr review --approve` or `gh pr merge`.
 
@@ -865,6 +865,7 @@ gh pr comment <n> --body "$(cat <<'EOF'
 <!-- ugcportal-whole-file-read: <every file in the diff, space separated> -->
 Auto-approved (review round <N>, chain <exact|approx>): CI green, no sensitive paths touched, no blocking findings.
 Whole-file read (step 4.3): <per-file verdicts>.
+Model: <tier> (<reason>)
 EOF
 )"
 ```
@@ -1000,6 +1001,7 @@ gh pr comment <n> --body "$(cat <<'EOF'
 <!-- ugcportal-fix-wake: N=<N> trigger=<fired|not-fired|n/a-round-1> since=<sha|none|unresolved> changed=<k files> terms=<regex|-> hits=<k|-> falsified=<k|-> -->
 <!-- ugcportal-measured: deltas=<k> absences=<k> at=<headRefOid> baseline=<sha|n/a> -->
 Review round <N> (chain <exact|approx>, head <headRefOid>). Blocking: ...
+Model: <tier> (<reason>)
 EOF
 )"
 ```
@@ -1142,7 +1144,7 @@ State plainly:
 
 - PR number and decision (merged / left for human), with the exact reason.
 - **The review round number and the chain status (`exact` / `approx` / `broken`)** — for a bootstrap, which of the three sources the starting number came from, whether the clamp applied, and that you stamped `B + 1`; for `approx`, *why* it is approx (bootstrap, reset, or self-asserted because the reviewer is the PR's author); for `broken`, which integrity check failed and which comments were involved.
-- **The model this round ran on and why (ugcportal-1mhn):** the `model=… effort=… reason=…` line the orchestrator got from `node scripts/reviewer-model.mjs <pr-number>` before spawning you (it is in your brief), or, when the script exited 2 or the brief names none, the model you ran on and the orchestrator's recorded reason. Copy it into the round comment too.
+- **The model this round ran on and why (ugcportal-1mhn):** the `model=… effort=… reason=…` line the orchestrator got from `node scripts/reviewer-model.mjs <pr-number>` before spawning you (it is in your brief), or, when the script exited 2 or the brief names none, the model you ran on and the orchestrator's recorded reason. Write it as the `Model: <tier> (<reason>)` line both step 5 templates carry.
 - **That you released the step 1a lock**, or — if you stood down — that another run held it and you consumed no round, posted nothing and stamped nothing.
 - If step 5's merge-readiness read stopped the run (a `mergeStateStatus`/`mergeable` value that is not `CLEAN` or `BEHIND`, `UNKNOWN` twice, or `CLEAN` with a head other than the reviewed one): the value read (and, for the head case, both heads) and that the follow-up comment was posted.
 - If `gh pr merge` was refused for any reason (not mergeable, squash refused, or `--match-head-commit` refused because the head moved), or `squashMergeAllowed` was false: the error (or the `squashMergeAllowed` value) quoted, that the follow-up comment was posted and that the lock was released.
