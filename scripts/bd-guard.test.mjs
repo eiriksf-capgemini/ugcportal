@@ -205,6 +205,47 @@ describe("pr-review-merge step 5a block (ugcportal-nr72)", () => {
   });
 });
 
+// ugcportal-kwxh K5: review-standards section 3's inline-fix rule carries two exclusions, each
+// in a sentence a grep for "never" finds. The pinned copy below is those two paragraphs as
+// written; the live section must contain each verbatim, and the check must fail on the pinned
+// copy with either one removed, so dropping an exclusion from the skill cannot pass silently.
+describe("review-standards section 3 inline-fix exclusions (ugcportal-kwxh K5)", () => {
+  const HEADING = "### A text-only low may be fixed by the reviewer inside the round";
+  const PINNED_EXCLUSIONS = [
+    "**A medium-or-above finding is never fixed inline and never deferred as a bead in place of blocking:** in every round it blocks, and at the cap it goes to a human, exactly as the table above says.",
+    "**A code change or a test change is never applied by the reviewer as an inline fix, and neither is any fix the reviewer cannot state exactly in the finding.** Those go through the table above: a fix pass by the implementer where the finding blocks (any finding at round 1, a medium-or-above at every round), a bead where it is a low from round 2 on an `exact` chain.",
+  ];
+  const pinnedFile = pin("review-standards-inline-fix.md", PINNED_EXCLUSIONS.join("\n\n") + "\n");
+  const exclusions = (text) => ({
+    mediumNeverDeferred: /medium-or-above finding is never\b[^\n]*\bnever deferred\b/.test(text),
+    codeOrTestNeverInline: /code change or a test change is never applied by the reviewer as an inline fix/.test(text),
+  });
+  const liveSection = () => {
+    const text = fs.readFileSync(skill("review-standards"), "utf8");
+    const at = text.indexOf(HEADING);
+    expect(at, "inline-fix heading").toBeGreaterThan(-1);
+    const end = text.indexOf("\n### ", at + HEADING.length);
+    return text.slice(at, end < 0 ? undefined : end);
+  };
+
+  it("the live section carries both exclusions", () => {
+    expect(exclusions(liveSection())).toEqual({ mediumNeverDeferred: true, codeOrTestNeverInline: true });
+  });
+  it("each pinned exclusion paragraph matches the live section verbatim, and carries a 'never'", () => {
+    const live = liveSection();
+    for (const para of fs.readFileSync(pinnedFile, "utf8").trim().split("\n\n")) {
+      expect(para).toMatch(/\bnever\b/);
+      expect(live).toContain(para);
+    }
+  });
+  it("the pinned copy passes the check, and fails it with either exclusion removed", () => {
+    const pinned = fs.readFileSync(pinnedFile, "utf8");
+    expect(exclusions(pinned)).toEqual({ mediumNeverDeferred: true, codeOrTestNeverInline: true });
+    expect(exclusions(pinned.replace(PINNED_EXCLUSIONS[0], "")).mediumNeverDeferred).toBe(false);
+    expect(exclusions(pinned.replace(PINNED_EXCLUSIONS[1], "")).codeOrTestNeverInline).toBe(false);
+  });
+});
+
 describe("passes through / fail-open", () => {
   it("non-bd commands are untouched, even with backticks and --notes", () => {
     expect(hook('git commit -m "fix `x` $(y) --notes"').code).toBe(0);
