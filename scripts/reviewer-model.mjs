@@ -26,7 +26,9 @@
  *      under .claude/skills/ (a script) is code, not prose.
  *   3. PRESENTATION_ALLOWLIST -> the bead's tier: exact paths and narrow
  *      globs, each with the reason a defect in it cannot reach sellability,
- *      rights, auth, money, data or the review and merge process.
+ *      rights, auth, money, data or the review and merge process. No file an
+ *      entry covers is imported by a module routed opus (rule 1 or 4); the
+ *      import-graph test fails naming the pair when one is (ugcportal-gvrf).
  *   4. Code default -> opus: every other path, which is code or
  *      configuration (src/**, prisma/**, scripts/**, .github/**, .beads/**,
  *      e2e/**, public/**, package*.json, Dockerfile, *.config.*, vitest*,
@@ -91,24 +93,32 @@ export const PROCESS_PROSE = [
 /**
  * Presentation files that take the bead's tier. Each entry says why a defect
  * in it cannot reach sellability, rights, auth, money, data or the review and
- * merge process. When in doubt a file stays off this list and routes opus.
- * The tests fail on an entry that matches no tracked file, on one that covers
- * a step-2 sensitive path or a risk-named path, and on any edit to the list.
+ * merge process, and a test backs the part of that a name cannot: no module
+ * the script routes opus (guard or code default) imports any file an entry
+ * covers (the import-graph test in reviewer-model.test.mjs, ugcportal-gvrf).
+ * A module code imports shapes that code's behaviour, so it is not
+ * presentation-only whatever its directory is called: src/lib/design/
+ * scan-source.ts, the scanning engine behind the privacy, attestation,
+ * sellability and consent guards, routes opus for that reason, as do the
+ * UI primitives, type scale, stylesheets and upload form helpers the pages
+ * import.
+ * When in doubt a file stays off this list and routes opus. The tests also
+ * fail on an entry that matches no tracked file, on one that covers a step-2
+ * sensitive path or a risk-named path, and on any edit to the list.
  */
 export const PRESENTATION_ALLOWLIST = [
-  { re: /^src\/components\/ui\//, reason: "UI primitives (button, focus ring, link and input class strings): styling, no data access, auth or money" },
-  { re: /^src\/app\/vendor\//, reason: "vendored shadcn Tailwind stylesheet: CSS only, no logic" },
-  { re: /^src\/app\/globals\.css$/, reason: "global stylesheet: CSS only, no logic" },
-  { re: /^src\/app\/favicon\.ico$/, reason: "favicon: a static icon, no logic" },
-  { re: /^src\/lib\/design\//, reason: "design tokens, colour maths and the source scans that police them: a defect weakens a visual-design check only" },
-  { re: /^src\/components\/type-scale(?:\.test)?\.tsx?$/, reason: "typography class constants: styling only" },
-  { re: /^src\/components\/page-title\.tsx$/, reason: "renders a heading from its children: no data access" },
-  { re: /^src\/components\/site\/section-heading\.ts$/, reason: "section heading class string: styling only" },
-  { re: /^src\/lib\/breakpoints\.ts$/, reason: "responsive breakpoint constants: layout only" },
-  { re: /^src\/lib\/utils\.ts$/, reason: "re-exports the cn class-name joiner: styling only" },
-  { re: /^src\/app\/about\/page(?:\.test)?\.tsx$/, reason: "about page: composes static site sections, reads no data and gates nothing" },
-  { re: /^src\/app\/upload\/alt-text(?:\.test)?\.ts$/, reason: "client-side alt-text form helper: the server re-validates through media-rules.ts" },
-  { re: /^src\/app\/upload\/tag-selection(?:\.test)?\.ts$/, reason: "client-side tag picker state: the tag cap comes from media-rules.ts and the server enforces it" },
+  { re: /^src\/app\/favicon\.ico$/, reason: "favicon: a static icon, no logic, imported by nothing" },
+  {
+    re: /^src\/lib\/design\/(?:tailwind-source-scan|terracotta-500-guard)(?:\.test)?\.ts$/,
+    reason: "the motion-utility and terracotta-500 contrast scanners and their tests: imported only by their own tests, so a defect weakens a visual-design check only",
+  },
+  {
+    re: /^src\/lib\/design\/(?:color|contrast|dual-meaning-usage|ink-muted-usage|motion-reduce-pairing|no-raw-hex|terracotta-primary-control|tokens|usage)\.test\.ts$/,
+    reason: "tests of the design tokens, colour maths and visual-design rules: imported by nothing, so a defect weakens a visual-design check only",
+  },
+  { re: /^src\/lib\/design\/__snapshots__\/contrast\.test\.ts\.snap$/, reason: "the contrast test's snapshot of measured colour pairings: read by that test only" },
+  { re: /^src\/lib\/utils\.ts$/, reason: "re-exports the cn class-name joiner: styling only, imported by no module the script routes opus" },
+  { re: /^src\/app\/about\/page(?:\.test)?\.tsx$/, reason: "about page: composes static site sections, reads no data, gates nothing and is imported only by its own test" },
 ];
 
 const TIERS = ["haiku", "sonnet", "opus", "fable"];
@@ -127,16 +137,19 @@ export function beadIdFromTitle(title) {
 }
 
 /**
- * Which rule classifies one path.
+ * Which rule classifies one path. `allowlist` exists for the import-graph
+ * test, which checks a widened list without editing this one; main() and
+ * decide() always use PRESENTATION_ALLOWLIST.
  * @param {string} path
+ * @param {{re: RegExp, reason: string}[]} [allowlist]
  * @returns {{rule: "guard"|"process prose"|"allowlist"|"code default", reason: string}}
  */
-export function classify(path) {
+export function classify(path, allowlist = PRESENTATION_ALLOWLIST) {
   const guard = GUARD_PATHS.find((r) => r.re.test(path));
   if (guard) return { rule: "guard", reason: guard.reason };
   const prose = PROCESS_PROSE.find((r) => r.re.test(path));
   if (prose) return { rule: "process prose", reason: prose.reason };
-  const allow = PRESENTATION_ALLOWLIST.find((r) => r.re.test(path));
+  const allow = allowlist.find((r) => r.re.test(path));
   if (allow) return { rule: "allowlist", reason: allow.reason };
   return { rule: "code default", reason: "code or configuration on no allowlist" };
 }

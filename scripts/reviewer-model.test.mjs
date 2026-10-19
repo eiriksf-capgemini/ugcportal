@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, chmodSync } from "node:fs";
+import { mkdtempSync, writeFileSync, chmodSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   decide,
@@ -105,7 +105,7 @@ describe("the rule: process prose and allowlisted presentation take the bead's t
     expect(d.reason).toBe("bead ugcportal-abcd tier sonnet; 6 changed path(s), none code by default: 6 process prose");
   });
   it("an allowlisted presentation file takes the bead's tier and the reason names the allowlist entry", () => {
-    const d = decide({ title: t("ugcportal-abcd"), paths: ["src/components/ui/button.tsx"], bead: { model: "sonnet" } });
+    const d = decide({ title: t("ugcportal-abcd"), paths: ["src/lib/design/no-raw-hex.test.ts"], bead: { model: "sonnet" } });
     expect(d.model).toBe("sonnet");
     expect(d.reason).toContain("1 allowlist (allowlist: ");
   });
@@ -138,19 +138,12 @@ describe("the rule: process prose and allowlisted presentation take the bead's t
 describe("pinned lists: deleting or adding an entry fails", () => {
   it("PRESENTATION_ALLOWLIST is exactly this list", () => {
     expect(PRESENTATION_ALLOWLIST.map((r) => String(r.re))).toEqual([
-      "/^src\\/components\\/ui\\//",
-      "/^src\\/app\\/vendor\\//",
-      "/^src\\/app\\/globals\\.css$/",
       "/^src\\/app\\/favicon\\.ico$/",
-      "/^src\\/lib\\/design\\//",
-      "/^src\\/components\\/type-scale(?:\\.test)?\\.tsx?$/",
-      "/^src\\/components\\/page-title\\.tsx$/",
-      "/^src\\/components\\/site\\/section-heading\\.ts$/",
-      "/^src\\/lib\\/breakpoints\\.ts$/",
+      "/^src\\/lib\\/design\\/(?:tailwind-source-scan|terracotta-500-guard)(?:\\.test)?\\.ts$/",
+      "/^src\\/lib\\/design\\/(?:color|contrast|dual-meaning-usage|ink-muted-usage|motion-reduce-pairing|no-raw-hex|terracotta-primary-control|tokens|usage)\\.test\\.ts$/",
+      "/^src\\/lib\\/design\\/__snapshots__\\/contrast\\.test\\.ts\\.snap$/",
       "/^src\\/lib\\/utils\\.ts$/",
       "/^src\\/app\\/about\\/page(?:\\.test)?\\.tsx$/",
-      "/^src\\/app\\/upload\\/alt-text(?:\\.test)?\\.ts$/",
-      "/^src\\/app\\/upload\\/tag-selection(?:\\.test)?\\.ts$/",
     ]);
     for (const r of PRESENTATION_ALLOWLIST) expect(r.reason.length, String(r.re)).toBeGreaterThan(25);
   });
@@ -233,6 +226,116 @@ describe("walk: every tracked file is classified by exactly one rule", () => {
   }, 30_000); // spawns a real git ls-files over the tree
 });
 
+// K2 of ugcportal-gvrf: an allowlisted module imported by a module the
+// script routes opus is never presentation-only, whatever its file name says.
+// The case it exists for is src/lib/design/scan-source.ts: a directory named
+// design, no risk word in the name, and the scanning engine behind the privacy,
+// attestation, sellability, licence, alcohol-commerce and consent guards.
+// The graph is resolved from import specifiers, not guessed from names:
+// every tracked .js/.jsx/.mjs/.cjs/.ts/.tsx/.mts/.css file is read (src/,
+// scripts/, e2e/ and the root configs alike), and each relative or `@/`
+// specifier in a from-clause, a side-effect or CSS @import, import(),
+// require() or vi.mock()/vi.importActual() is resolved against the tracked
+// file list the way tsconfig's bundler resolution and `@/*` -> `src/*` do.
+const IMPORTER_EXT = /\.(?:[cm]?[jt]sx?|mts|css)$/;
+const SPECIFIER_RE = /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+|\brequire\s*\(\s*|\bvi\.(?:mock|doMock|importActual)\s*\(\s*)(["'`])([^"'`\n]+)\1/g;
+const RESOLVE_SUFFIXES = ["", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".css",
+  "/index.ts", "/index.tsx", "/index.js", "/index.mjs"];
+
+/** Resolve one specifier from `from` to a tracked path; null for a bare package, {unresolved} when no tracked file matches. */
+function resolveSpecifier(from, spec, tracked) {
+  let base;
+  if (spec.startsWith("@/")) base = `src/${spec.slice(2)}`;
+  else if (spec.startsWith("./") || spec.startsWith("../")) base = posix.normalize(posix.join(posix.dirname(from), spec));
+  else return null;
+  for (const suffix of RESOLVE_SUFFIXES) if (tracked.has(base + suffix)) return base + suffix;
+  const noJs = base.replace(/\.[cm]?jsx?$/, "");
+  if (noJs !== base) for (const suffix of [".ts", ".tsx", ".mts"]) if (tracked.has(noJs + suffix)) return noJs + suffix;
+  return { unresolved: base };
+}
+
+let graphCache = null;
+/** Every import edge between tracked files, plus the relative and alias specifiers no tracked file matched. */
+function importGraph() {
+  if (graphCache) return graphCache;
+  const files = trackedFiles();
+  const tracked = new Set(files);
+  const importers = files.filter((p) => IMPORTER_EXT.test(p));
+  const edges = [];
+  const unresolved = [];
+  for (const from of importers) {
+    for (const m of readFileSync(join(ROOT, from), "utf8").matchAll(SPECIFIER_RE)) {
+      const to = resolveSpecifier(from, m[2], tracked);
+      if (to === null) continue;
+      if (typeof to === "string") edges.push([from, to]);
+      else unresolved.push([from, m[2], to.unresolved]);
+    }
+  }
+  graphCache = { files, importers, edges, unresolved };
+  return graphCache;
+}
+
+const stem = (p) => posix.basename(p).replace(/(?:\.test)?\.[^.]+$/, "");
+
+/**
+ * Every (allowlisted file, importer the script routes opus) pair under `allowlist`.
+ * An unresolved relative or alias specifier whose last segment names an
+ * allowlisted file's stem counts as such an import too, so a resolver gap
+ * fails toward a violation rather than away from one.
+ */
+function importViolations(allowlist) {
+  const { files, edges, unresolved } = importGraph();
+  const routedOpus = (p) => ["guard", "code default"].includes(classify(p, allowlist).rule);
+  const allowlisted = (p) => classify(p, allowlist).rule === "allowlist";
+  const out = new Set();
+  for (const [from, to] of edges) if (allowlisted(to) && routedOpus(from)) out.add(`${to} <- ${from}`);
+  const allowStems = new Map(files.filter(allowlisted).map((p) => [stem(p), p]));
+  for (const [from, spec] of unresolved) {
+    const hit = allowStems.get(stem(spec));
+    if (hit && routedOpus(from)) out.add(`${hit} <- ${from} (unresolved ${spec})`);
+  }
+  return [...out].sort();
+}
+
+describe("ugcportal-gvrf K1: a PR changing only the source-scanning engine routes opus", () => {
+  for (const tier of ["haiku", "sonnet"]) {
+    it(`src/lib/design/scan-source.ts alone, bead tier ${tier} -> opus by the code default`, () => {
+      const d = decide({ title: t("ugcportal-abcd"), paths: ["src/lib/design/scan-source.ts"], bead: { model: tier, model_effort: "low" } });
+      expect(d).toMatchObject({ ok: true, model: "opus", effort: "low" });
+      expect(d.reason).toBe("code default: src/lib/design/scan-source.ts is code or configuration on no allowlist; routed opus");
+    });
+  }
+});
+
+describe("import graph (ugcportal-gvrf K2): no allowlisted module is imported by a module the script routes opus", () => {
+  it("the resolver sees relative, alias and CSS imports (positive controls, counts printed)", () => {
+    const { importers, edges, unresolved } = importGraph();
+    const has = (from, to) => edges.some(([f, t]) => f === from && t === to);
+    console.log(`reviewer-model import graph: ${importers.length} importer files read, ${edges.length} edges resolved, ${unresolved.length} relative or alias specifiers unresolved`);
+    expect(importers.length).toBeGreaterThan(400);
+    expect(edges.length).toBeGreaterThan(1000);
+    expect(has("src/app/privacy/content.test.ts", "src/lib/design/scan-source.ts"), "alias import").toBe(true);
+    expect(has("src/app/upload/upload-form.tsx", "src/app/upload/alt-text.ts"), "relative import").toBe(true);
+    expect(has("src/app/admin/curation/price-form.tsx", "src/components/ui/button.tsx"), "alias .tsx import").toBe(true);
+    expect(has("src/app/layout.tsx", "src/app/globals.css"), "side-effect CSS import").toBe(true);
+    expect(has("src/app/globals.css", "src/app/vendor/shadcn-tailwind.css"), "CSS @import").toBe(true);
+  }, 30_000); // spawns a real git ls-files and reads every tracked code file
+  it("PRESENTATION_ALLOWLIST: every allowlisted tracked file's importers are allowlisted or prose (pairs named on failure)", () => {
+    const { files } = importGraph();
+    const checked = files.filter((p) => classify(p).rule === "allowlist").length;
+    const v = importViolations(PRESENTATION_ALLOWLIST);
+    console.log(`reviewer-model import graph: ${checked} allowlisted tracked file(s) checked, ${v.length} imported by an opus-routed module`);
+    expect(checked).toBeGreaterThan(0);
+    expect(v, `allowlisted module imported by a module routed opus:\n${v.join("\n")}`).toEqual([]);
+  }, 30_000);
+  it("mutation kept as a test: re-adding src/lib/design/** fails the check, naming scan-source.ts and the privacy guard", () => {
+    const widened = [...PRESENTATION_ALLOWLIST, { re: /^src\/lib\/design\//, reason: "the 28781a3 entry" }];
+    const v = importViolations(widened);
+    expect(v).toContain("src/lib/design/scan-source.ts <- src/app/privacy/content.test.ts");
+    expect(v).toContain("src/lib/design/scan-source.ts <- src/lib/test-support/prisma-write-scan.ts");
+  }, 30_000);
+});
+
 describe("named files route opus whatever the bead tier", () => {
   // Fixed paths written here, not read off any list in the script, so a
   // widened allowlist cannot take its own test case with it.
@@ -255,6 +358,10 @@ describe("named files route opus whatever the bead tier", () => {
     "src/lib/alcohol-commerce.ts", "src/lib/consent.ts", "src/app/privacy/content.ts", "src/app/licence/content.ts",
     // guard configuration: the npm-audit allowlist, the push hook, the bd PreToolUse guard
     "scripts/npm-audit-allowlist.json", ".beads/hooks/pre-push", "scripts/bd-guard.mjs",
+    // the source-scanning engine behind the privacy, attestation, sellability,
+    // licence and consent guards, its test and its support file (ugcportal-gvrf)
+    "src/lib/design/scan-source.ts", "src/lib/design/scan-source.test.ts",
+    "src/lib/design/scan-source-legacy.test-support.ts", "src/lib/test-support/prisma-write-scan.ts",
   ];
   for (const tier of ["haiku", "sonnet", "opus", "fable"]) {
     it(`risk files with and without a risk word in their name route opus (bead tier ${tier})`, () => {

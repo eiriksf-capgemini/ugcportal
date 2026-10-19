@@ -80,16 +80,23 @@ diverging as more time passes.
    when it is process prose (`PROCESS_PROSE` in the script: markdown anywhere,
    including `.claude/skills/**`, `.claude/agents/**`, `CLAUDE.md` and
    `CHANGELOG.md`, and everything under `docs/`) or on the pinned
-   `PRESENTATION_ALLOWLIST` (styling, static assets and render-only files,
-   each entry with the reason a defect in it cannot reach sellability,
-   rights, auth, money, data or the review and merge process). Every other
+   `PRESENTATION_ALLOWLIST` (the favicon, the `cn` re-export, the about page
+   and the visual-design checks under `src/lib/design/`, each entry with the
+   reason a defect in it cannot reach sellability, rights, auth, money, data
+   or the review and merge process). A test fails, naming the pair, when any
+   file the allowlist covers is imported by a module that routes `opus`
+   (ugcportal-gvrf): code that imports a module is shaped by it, which is why
+   `src/lib/design/scan-source.ts`, the scanning engine behind the privacy,
+   attestation, sellability and consent guards, routes `opus`. Every other
    path is code or configuration and routes `opus` (`code default`), and the
    non-prose `pr-review-merge` step 2 sensitive paths route `opus` ahead of
    both lists (`GUARD_PATHS`); so does a file list gh's 100-file window
-   truncated. The cost consequence: most code PRs review on `opus`; docs,
-   process and allowlisted presentation PRs review at the bead's tier, which
-   is where recommendation 4 of that cost review (section 7 of the document
-   named below) applies, and a later
+   truncated. The cost consequence: most code PRs review on `opus`; PRs
+   whose every path is prose or allowlisted review at the bead's tier. That
+   covers the docs and process half of recommendation 4 of that cost review
+   (section 7 of the document named below); the script reads only the
+   changed paths and the bead's tier, so it has no notion of a lows-only PR,
+   and a lows-only round on a code PR routes `opus`. A later
    measurement decides whether the allowlist should widen. The reason it
    prints names the rule that fired (`truncated`, `guard`, `code default`,
    `floor`, or the bead tier with its process-prose and allowlist counts).
