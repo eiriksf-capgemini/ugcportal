@@ -122,20 +122,24 @@ If a task genuinely needs a change here:
 ## Review iteration: severity gate and round cap
 
 Review rounds on a PR are bounded. Rationale and the measurement behind it:
-`ugcportal-2yj`. Operative detail: `.claude/skills/review-standards/SKILL.md`
+`ugcportal-2yj`. The any-finding row covers round 1 alone, not rounds 1-3,
+since `ugcportal-kwxh`, on the v0.9.0 review measured in that bead: 64 of 107
+rounds found only lows and cost 58.3M ITE, 69% of the cost of the 107 measured rounds,
+and all 16 rounds that found a medium-or-above were rounds 1-3 (none at round
+4 or later). Operative detail: `.claude/skills/review-standards/SKILL.md`
 and `.claude/skills/pr-review-merge/SKILL.md` (steps 4, 4.1, 4b, 5, 5a, 5b).
 A "round" is a pass that actually reviewed the diff — a run that stopped at red
 CI reviewed nothing and does not count. Exactly one row below matches each round.
 
 | Round      | What blocks the merge |
 |------------|------------------------|
-| 1-3        | **Any** finding, CONFIRMED or PLAUSIBLE, at any severity. Fix everything. |
-| 4-5        | Any **medium-or-above**, confirmed or unsettled. Lows are filed as beads and the PR merges. |
+| 1          | **Any** finding, CONFIRMED or PLAUSIBLE, at any severity. Fix everything. |
+| 2-5        | Any **medium-or-above**, confirmed or unsettled. Lows are filed as beads and the PR merges. |
 | 6 (cap)    | The same — but a blocker here goes to a **human**, not into a seventh round. Otherwise the PR merges with its lows filed. |
 | 7+         | Only on an **exact** marker chain, with a real round-6 stop comment and evidence someone acted on it. Then a scoped verification pass on what they fixed — never a fresh hunt. |
 
 Confidence changes what a **low** costs, not what a medium-or-above costs: from
-round 4 an unsettled plausible medium blocks exactly as a confirmed one does.
+round 2 an unsettled plausible medium blocks exactly as a confirmed one does.
 `code-review` does not report severity — **the reviewer assigns it** and states
 it per finding. A defective test inherits the severity of what it guards, so an
 assertion that cannot fail over a fresh fail-open fix is medium-or-above, not a
@@ -143,9 +147,15 @@ assertion that cannot fail over a fresh fail-open fix is medium-or-above, not a
 
 Every deferred finding becomes a bead with its severity recorded and a
 `discovered-from` edge to the parent — nothing above low is ever closed by the
-cap rather than by a decision. Implementers: from round 4, stop grinding on low
+cap rather than by a decision. Implementers: from round 2, stop grinding on low
 findings and file them. Reviewers: this is not licence to review less carefully
-in rounds 1-3; if first-round finding counts drop, the rule is being misused.
+in round 1; if first-round finding counts drop, the rule is being misused.
+
+A low whose fix is text only (a comment, a doc sentence, a PR-body line, a
+commit subject) and that the reviewer can state in full may be fixed by the
+reviewer inside the round instead of through a fix pass; a code or test change
+never is, and a medium-or-above is never deferred. The rule and what the round
+comment records: `review-standards` section 3.
 
 Scope freeze applies from first push: work discovered during review becomes its
 own bead, not an addition to the PR in flight.
