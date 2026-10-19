@@ -3,10 +3,11 @@ import { MAX_TAGS_PER_ITEM } from "@/lib/media-rules";
 /**
  * What the tag picker draws, and what ticking a box does (ugcportal-jsc).
  *
- * Its own module for the reason the four siblings beside it are: the repo's
- * vitest runs in a node environment with no DOM, so anything reachable only
- * through a React event handler is in practice untested. `upload-form.tsx`
- * holds state wiring; the decisions live here, where a test can make them.
+ * Its own module for the reason the four siblings beside it are: this repo's
+ * vitest runs in a node environment by default (jsdom is opt-in per test file),
+ * so anything reachable only through a React event handler is in practice
+ * untested. `upload-form.tsx` holds state wiring; the decisions live here,
+ * where a test can make them.
  *
  * That is not a formality here. The cap below is the whole of the fix for a
  * review finding, and a cap enforced inside a JSX callback would have shipped

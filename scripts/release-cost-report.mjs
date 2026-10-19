@@ -597,8 +597,29 @@ function replaceKeepingSpans(lexed, re, build) {
 const FINDINGS_COUNT_RE =
   /(?<![\w-])(?<!round\s)\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(?:candidate\s+|surviving\s+|new\s+|further\s+)?findings?\b/i;
 
+const STRONG_NONE_RE = /\b(no|zero)\s+(blocking\s+|code\s+)?findings?\b/i;
+
 const NONE_RE =
   /\b(no|zero)\s+(blocking\s+|code\s+)?findings?\b|\bno medium(-or-above| or above)?\s+(found|anywhere|outstanding)|\bnone stands as a defect\b|\bdiff is clean\b|\bnothing to fix\b|\bfound nothing\b/i;
+
+/**
+ * A line whose no-findings phrase is not the round's verdict: a sub-heading
+ * ("Verified, no finding:", "Family 3 -- checked, nothing found:": the line
+ * ends with a colon) or a tool-output line (the line opens
+ * with the name of a script or command whose output it quotes, as in
+ * "claims-audit --pr 285: zero findings"). Markdown emphasis is already
+ * stripped from the text it reads.
+ */
+function isSubHeadingOrToolOutput(line, isVerdictLine = false) {
+  const l = line.trim();
+  if (!isVerdictLine && /:\s*$/.test(l)) return true;
+  return /^(?:[-*>\s]*)(?:\$\s*|npx\s+|node\s+)?(?:scripts\/)?(?:claims-audit|sweep-candidates|check-[\w-]+|release-cost-report|vitest|eslint)\b/i.test(l);
+}
+
+/** A quoted phrase ("Auto-approved... no blocking findings") is cited, not said. */
+function stripQuoted(line) {
+  return line.replace(/"[^"\n]*"|\u201c[^\u201d\n]*\u201d/g, " ");
+}
 
 /**
  * Counts the severities the reviewer STATED in one verdict comment.
@@ -618,7 +639,12 @@ const NONE_RE =
  *
  * `stated` is false when the comment names no severity at all and does not
  * say it found nothing -- the report prints "unstated" for that round
- * rather than a number.
+ * rather than a number. "Says it found nothing" is read over the whole
+ * comment, minus sub-heading lines (ending with a colon, the first line
+ * excepted), tool-output lines
+ * (opening with a script name), double-quoted phrases, and, off the first
+ * line, the weaker phrases (see the comment at `statedNone`); a verdict that
+ * sits lower in the body therefore counts (ugcportal-to7b).
  *
  * Two specific non-findings contexts are excluded from the count
  * (ugcportal-zo8n), however close a severity word sits next to the number:
@@ -779,25 +805,55 @@ export function classifySeverity(body) {
   // Stated means the reviewer put a severity on at least one finding, or
   // said in so many words that nothing (or nothing above low) was found.
   // Prose that merely mentions "medium-or-above blocks" does not count.
-  // "Family 3 — checked, nothing found" is about one family, not the
-  // verdict, so the bare phrase does not count; the verdict-level forms do.
-  const none = NONE_RE.test(text);
-  result.stated = itemMedium + itemLow + summaryMedium + summaryLow > 0 || none;
+  // The no-findings phrase is read over the whole comment, not only the
+  // first line: a round's verdict can sit in the body ("... zero findings
+  // this round. Round 1-3 gate: merges only with zero findings -- met." on
+  // #194 r2; "Verdict: ..." / "Zero findings. Merging." lower down on #151
+  // r3, #152 r1, #154 r3, #155 r2, #165 r2, #185 r1, #206 r3, #219 r2). It
+  // skips what is not the verdict (ugcportal-45bh, narrowed in
+  // ugcportal-to7b):
+  //  - a sub-heading line, one that ends with a colon ("Verified, no
+  //    finding:"), except the first line, which is the verdict line even when
+  //    it introduces a list ("... after verification none stands as a
+  //    defect:", #83 r5), and a verdict on a "## ..." heading line (#271 r3),
+  //    both of which are read;
+  //  - a tool-output line, one that opens with the name of a script it quotes
+  //    ("claims-audit --pr 285: zero findings");
+  //  - a phrase inside double quotes, which is cited, not said; and
+  //  - off the first line, the weaker phrases ("found nothing", "nothing to
+  //    fix", "diff is clean", "none stands as a defect", "no medium ...
+  //    found"): sweep notes say "found nothing elsewhere" about one grep, not
+  //    about the round. Only "no/zero [blocking|code] findings" counts there.
+  const verdictLine = text.split("\n").map((l) => l.trim()).find((l) => l !== "") ?? "";
+  const none = NONE_RE.test(verdictLine);
+  const statedNone = text.split("\n").some((l) => (l.trim() === verdictLine ? NONE_RE : STRONG_NONE_RE).test(stripQuoted(l)) && !isSubHeadingOrToolOutput(l, l.trim() === verdictLine));
+  result.stated = itemMedium + itemLow + summaryMedium + summaryLow > 0 || statedNone;
   // The verdict's own "no findings" form, kept apart from `stated` so a
   // reader can let it outrank a bare findings count (withFindingsKeys). It is
   // true only for an approval-shaped verdict line (the first non-empty line):
   // it opens with Approved / Auto-approved / Clean / No findings / Zero
   // findings / Verified clean, matches NONE_RE, states no findings count
   // ("3 findings", "two findings"), and carries none of "Blocking:", "Not
-  // merged", "block(s)", "left for a human". A blocking verdict that quotes
-  // the band rule ("merge requires zero findings") is therefore never clean
-  // (#157 r3, #207 r2, #209 r4), nor is a sub-heading such as "Verified, no
-  // finding:" in a blocking round (#277 r1, #258 r1).
-  const verdictLine = text.split("\n").map((l) => l.trim()).find((l) => l !== "") ?? "";
+  // merged", "block(s)", "left for a human". Only that line is read, so:
+  //  - a round written in the blocking template ("Review round N (chain
+  //    ...). **Blocking ...**", zero-finding rounds on sensitive-path PRs
+  //    included) opens with "Review round", does not read clean, and an
+  //    all-zero key on it is flagged inconsistent when its prose carries a
+  //    bare count (rf5o);
+  //  - a blocking line that opens with an approval word does read clean when
+  //    it has none of the blocking words ("No findings above low; merge
+  //    requires zero findings, so L1 must be fixed first."), so a later bare
+  //    count in that body does not flag an all-zero key (peom); and
+  //  - "no blocking findings" on a round 4-6 approval does not mean the round
+  //    found nothing: deferred lows appear only as a bare count in the body.
+  // A quote of the band rule ("merge requires zero findings") after a
+  // non-approval opening word, and a sub-heading such as "Verified, no
+  // finding:" in a blocking round (#157 r3, #207 r2, #209 r4; #277 r1, #258
+  // r1), do not read clean.
   const approvalShaped = /^[*_`\s]*(?:auto-)?approved\b|^[*_`\s]*(?:clean|no findings|zero findings|verified clean)\b/i.test(verdictLine);
   const statesCount = FINDINGS_COUNT_RE.test(verdictLine);
   const blockingWord = /\bblocking\s*:|\bnot merged\b|\bblocks?\b|\bleft for a human\b/i.test(verdictLine);
-  result.clean = none && NONE_RE.test(verdictLine) && approvalShaped && !statesCount && !blockingWord;
+  result.clean = none && approvalShaped && !statesCount && !blockingWord;
   return result;
 }
 
@@ -932,6 +988,12 @@ export function analysePr(data, reviewer) {
       r.medium += sev.medium;
       r.low += sev.low;
       r.stated = r.stated || sev.stated;
+      // A bare findings count in the addendum joins the round and clears
+      // `clean` (4hsc); an addendum with no count changes neither.
+      if (sev.findings != null) {
+        r.findings = (r.findings ?? 0) + sev.findings;
+        r.clean = false;
+      }
       r.addenda += 1;
       continue;
     }
@@ -1000,12 +1062,19 @@ export function parseFindingsKey(value) {
  * flagged. A bare findings count does not make a round inconsistent only when
  * the verdict line itself (the first non-empty line, as classifySeverity
  * reads `clean`) is approval-shaped: it opens with Approved / Auto-approved /
- * Clean / No findings / Zero findings / Verified clean, says the round found
- * nothing, states no findings count, and carries none of "Blocking:", "Not
- * merged", "block(s)", "left for a human". Gate prose such as "merge requires
- * zero findings" on a blocking line does not count, and neither does a
+ * Clean / No findings / Zero findings / Verified clean, contains one of
+ * NONE_RE's no-findings phrases, states no findings count, and carries none of
+ * "Blocking:", "Not merged", "block(s)", "left for a human" (the `clean` rule
+ * of classifySeverity, which the comment above `approvalShaped` there states
+ * in full). A
+ * quote of the band rule ("merge requires zero findings") after a
+ * non-approval opening word does not read clean, and neither does a
  * "Verified, no finding:" sub-heading in a blocking round (M1, #285 round 4:
- * #157 r3, #207 r2, #209 r4; P1, round 3: #277 r1, #258 r1). And
+ * #157 r3, #207 r2, #209 r4; P1, round 3: #277 r1, #258 r1); but a blocking
+ * line that opens with an approval word and carries none of the blocking
+ * words does read clean (peom), so an all-zero key on such a round is not
+ * flagged (an addendum comment's bare count still joins the round and clears
+ * this, 4hsc). And
  * "round-2 findings" is a back-reference, not a count (N1, #285 round 2).
  *
  * A finding recorded as `unstated:<n>` counts as medium-or-above in the
@@ -1526,6 +1595,7 @@ export function roundsSplit(rows) {
   const best = new Map();
   for (const r of rows) {
     for (const [n, sp] of Object.entries(r.prRoundSplit ?? {})) {
+      if (sp.keys + sp.prose === 0) continue; // a PR with no marker rounds has none to count (zu69)
       const cur = best.get(n);
       if (!cur || sp.keys > cur.sp.keys) best.set(n, { id: r.id, sp });
     }
@@ -1534,7 +1604,7 @@ export function roundsSplit(rows) {
   const fellBack = new Map();
   for (const { id, sp } of best.values()) if (sp.prose > 0) fellBack.set(id, (fellBack.get(id) ?? 0) + sp.prose);
   const siblings = [];
-  for (const r of rows) for (const n of Object.keys(r.prRoundSplit ?? {})) if (best.get(n)?.id !== r.id) siblings.push(`${short(r.id)} (gh-${n})`);
+  for (const r of rows) for (const n of Object.keys(r.prRoundSplit ?? {})) if (best.has(n) && best.get(n).id !== r.id) siblings.push(`${short(r.id)} (gh-${n})`);
   return {
     fromKeys: sum([...best.values()].map((v) => v.sp.keys)),
     fromProse: sum([...best.values()].map((v) => v.sp.prose)),
@@ -1790,7 +1860,7 @@ function renderDataGaps(rowsByRelease, prAnalysesByNumber, unmerged) {
     if (unstated.length) lines.push(`  - rounds whose verdict states no severity: ${unstated.join(", ")}`);
     const split = roundsSplit(rows);
     lines.push(`  - rounds whose severity came from \`findings_rN\` keys: ${split.fromKeys}; rounds that fell back to the prose parse: ${split.fromProse}${split.fellBack.length ? ` -- ${split.fellBack.join(", ")}` : ""}`);
-    if (split.siblings.length) lines.push(`  - sibling bead, PR counted once (its rounds are in the line above under the bead that carries the keys, not again): ${split.siblings.join(", ")}`);
+    if (split.siblings.length) lines.push(`  - sibling bead, PR counted once (its rounds are counted once, under one other bead on the same PR, not again): ${split.siblings.join(", ")}`);
     const keyProblems = rows.filter((r) => r.keyFallbacks.length).map((r) => `${r.id.replace("ugcportal-", "")} (${r.keyFallbacks.join(", ")})`);
     if (keyProblems.length) lines.push(`  - \`findings_rN\` present but not used, prose kept (${keyProblems.length}): ${keyProblems.join("; ")}`);
     const unstatedF = rows.filter((r) => r.unstatedFindings > 0).map((r) => `${r.id.replace("ugcportal-", "")} (${r.unstatedFindings})`);
