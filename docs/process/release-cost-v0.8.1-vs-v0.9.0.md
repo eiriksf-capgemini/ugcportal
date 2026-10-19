@@ -2,7 +2,7 @@
 
 This document is the cost review of the v0.9.0 release (tag `v0.9.0` = `4dd2ef9`), measured on 2026-10-19 by a read-only analyst agent from bead metadata, `scripts/agent-pass-cost.mjs` and `scripts/release-cost-report.mjs`. The analyst report below is committed verbatim; section 7 and the appendix were added afterwards.
 
-The inputs named under "Inputs" live only under `/tmp` on the orchestrator's machine and are not reproducible from the repo. Every table below sits under the command that produced it.
+The inputs named under "Inputs" live only under `/tmp` on the orchestrator's machine and are not reproducible from the repo. Each measured table below names the command or script that produced it, or the input file it was derived from (a few derived tables cite only the script directory `/tmp/rr-work/`).
 
 ---
 
@@ -399,7 +399,7 @@ The 37 release PRs alone come to +12,115 / -4,659 = 16,774. The tag range also h
 1. Cut what a reviewer reads: split `.claude/skills/pr-review-merge/SKILL.md` (189 kB at v0.9.0, read by all 109 reviewer agents) into a short operational checklist and a reference opened per step. Basis: section 4 (process docs 39.7% of review ITE; fixed share median 76% per round).
 2. From round 2 apply the round-4 rule: a round that finds only lows files them as beads and the PR merges; round 1 stays the any-finding hunt. Basis: sections 2b and 2c (64 lows-only rounds, 58.3M ITE, 69%; every medium found in rounds 1-3, 14 of 16 in rounds 1-2; rounds 4+ 15.7M with no medium; stopped PRs 56% of review cost).
 3. Fix trivial lows (a sentence, a commit subject) inline in the same round instead of a fix pass plus a fresh round. Basis: section 2d (PRs of 1-10 lines cost a median 331k per round; #327, five lines, took three rounds and 1.70M).
-4. Route the reviewer model by risk: sonnet for docs, process and lows-only PRs, opus for guard, auth, sellability, rights and CI paths, honouring the bead's model tier. Basis: section 3 (71 opus rounds mean 883k vs 36 sonnet rounds mean 335k; sonnet-tiered beads drew 45 opus rounds carrying 53% of review cost; every medium found by an opus round, association only).
+4. Route the reviewer model by risk: sonnet for docs, process and lows-only PRs, opus for guard, auth, sellability, rights and CI paths, honouring the bead's model tier. Basis: section 3 (71 opus rounds, mean 1.02M ITE per round and 883k per pass over 83 passes, against 36 sonnet rounds at a mean of 335k; the 61 rounds on sonnet-tiered beads, 45 of them opus, carry 45.1M of 85.3M review ITE, 53%; every medium was found by an opus round, on the larger PRs, an association only).
 5. Record per-round transcript cost on the bead as `cost_ite_qa_rN` beside `tokens_qa_rN`. Basis: Inputs and section 2a (per-round ITE had to be rebuilt from 2,090 agent files).
 
 ## Appendix: owner of every numbered entry
