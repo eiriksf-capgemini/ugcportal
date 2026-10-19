@@ -1,5 +1,142 @@
 # Changelog
 
+## v0.9.0 - 2026-10-19
+
+### 💰 Cost Summary
+
+**Transcript cost (input-token equivalents)**
+
+| Type | Impl | QA | Total | Beads with data |
+|---|---:|---:|---:|:---:|
+| ✨ Features | 7,216,933 | 12,609,365 | 19,826,298 | 3/3 |
+| 🐛 Fixes | 6,538,369 | 22,173,079 | 28,711,448 | 11/38 |
+| 📝 Documentation | 3,188,619 | 7,100,344 | 10,288,963 | 10/34 |
+| 🧪 Tests | 1,909,123 | 5,734,554 | 7,643,677 | 4/9 |
+| 🏗️ Build & CI | 3,237,974 | 12,288,738 | 15,526,712 | 3/3 |
+| 🔧 Chores | 14,371,433 | 25,389,328 | 39,760,761 | 6/7 |
+| 🚫 Closed without a change | 107,691 | — | 107,691 | 1/3 |
+| **Total** | **36,570,142** | **85,295,408** | **121,865,550** | **38/97** |
+
+*Transcript cost is priced from local agent transcripts by `scripts/agent-pass-cost.mjs` in input-token equivalents: proportional to price only for a model priced at the standard ratios (two models whose cache read is cheaper are the exceptions), and a relative measure across models; it omits work done inline in an orchestrator session. The context-size table is each agent's final context window, not what it cost, and is not comparable with the first table or summable with it. A bead's figures can keep growing later from review on a follow-up fix without retroactively updating a past release — treat both as a lower bound, not the release's full or final cost.*
+
+### ✨ Features
+
+- **A configured user has no way to attest an upload that already exists, so their auto-published items can never become sellable** (`ugcportal-gkax`, scope: upload) — [#291](https://github.com/eiriksf-capgemini/ugcportal/pull/291)
+- **Curation: store a free-text licence grant on a priced listing and show it to the buyer** (`ugcportal-74w.1`, scope: curation) — [#297](https://github.com/eiriksf-capgemini/ugcportal/pull/297)
+- **The app sets no X-Frame-Options, frame-ancestors or Referrer-Policy header on any response** (`ugcportal-7ex5`, scope: security) — [#304](https://github.com/eiriksf-capgemini/ugcportal/pull/304)
+
+### 🐛 Fixes
+
+- **parameterCallSites accepts a parameter with a default initialiser, so the attestation guard's call-site link fails open; report the initialiser in problems (left when ugcportal-2k2q hit its pass budget)** (`ugcportal-pm4t`, scope: test-support) — [#306](https://github.com/eiriksf-capgemini/ugcportal/pull/306)
+- **attestation-write-paths guard approves the media-upload write on a session-bound const the write never reads; link handleUpload's userId parameter to its call-site argument** (`ugcportal-y1tn`, scope: test-support) — [#306](https://github.com/eiriksf-capgemini/ugcportal/pull/306)
+- **Nothing routes a .claude/agents change to a human, and check-sensitive-files' comment claims it does** (`ugcportal-lmsi`, scope: process) — [#299](https://github.com/eiriksf-capgemini/ugcportal/pull/299)
+- **npm-audit gate: when one GHSA id appears at two severities, the printed (pkg, severity) token depends on vulnerabilities key order (left when ugcportal-1j4j's fourth pass hit review round 3)** (`ugcportal-eylm`, scope: ci) — [#326](https://github.com/eiriksf-capgemini/ugcportal/pull/326)
+- **npm-audit gate prints an advisory's severity from the affected package's worst severity, and its stale-entry message says an id "no longer appears" when it still appears at moderate (left when ugcportal-1j4j hit its pass budget)** (`ugcportal-1aw4`, scope: ci) — [#326](https://github.com/eiriksf-capgemini/ugcportal/pull/326)
+- **Lows batch S1: dispatch gate premise-fresh merge commits, mid-sentence premise mentions, git-failure wording in four copies, and a stale test comment (arfp, ze80, jtyl, itti)** (`ugcportal-zoee`, scope: process) — [#324](https://github.com/eiriksf-capgemini/ugcportal/pull/324)
+- **Lows batch R1: release-cost-report clean/stated reading, addendum findings count, sibling line, and pr-review-merge step 4a item 5 to match (peom, rf5o, 45bh, oium, 4hsc, zu69)** (`ugcportal-to7b`, scope: review) — [#322](https://github.com/eiriksf-capgemini/ugcportal/pull/322)
+- **Lows batch F1: cut-release 7a and review-standards section 1 bead snippets through quoted files, and the bd-guard test header (5q0a, cupf, 2xmq)** (`ugcportal-d7fm`, scope: process) — [#320](https://github.com/eiriksf-capgemini/ugcportal/pull/320)
+- **Lows batch P2: check-human-merge-labels header, pr-review-merge step 2 and step 6 descriptions of it, and two missing guard tests (0n6h, 2ww3, lhak, rix6, 9uf5)** (`ugcportal-cafh`, scope: process) — [#317](https://github.com/eiriksf-capgemini/ugcportal/pull/317)
+- **Lows batch P1: pr-review-merge merge step, BEHIND recovery and five stale prose claims (r8oq, 7998, slf2, s1t7, l6kd, 6do8, h46e)** (`ugcportal-c7q2`, scope: process) — [#312](https://github.com/eiriksf-capgemini/ugcportal/pull/312)
+- **Lows batch V1: vitest config named export and two vitest comments (wcga, soa9)** (`ugcportal-sxsg`, scope: vitest) — [#311](https://github.com/eiriksf-capgemini/ugcportal/pull/311)
+- **PR #299 body: pre-review checklist and K1 test line still say scripts are unchanged since the suite run, false after the round-4 commit d140ec6** (`ugcportal-hb3o`, scope: process) — [#299](https://github.com/eiriksf-capgemini/ugcportal/pull/299)
+- **pr-review-merge step 2 companions: five prose defects left when ugcportal-lmsi hit its pass budget (PR #299 round 3)** (`ugcportal-8ii6`, scope: process) — [#299](https://github.com/eiriksf-capgemini/ugcportal/pull/299)
+- **The Instagram callback builds its redirect from request.url while its two sibling admin routes use the configured origin** (`ugcportal-bawz`, scope: instagram) — [#314](https://github.com/eiriksf-capgemini/ugcportal/pull/314)
+- **Ten of thirteen mutating API handlers rely on the SameSite cookie alone: the same-origin second lock covers only the three admin routes** (`ugcportal-qf9v`, scope: api) — [#305](https://github.com/eiriksf-capgemini/ugcportal/pull/305)
+- **premise-fresh: two of the four "fails when" copies name the ancestry git-failure case and two do not (PR #289 round 7 L1)** (`ugcportal-itti`, scope: process) — [#324](https://github.com/eiriksf-capgemini/ugcportal/pull/324)
+- **bindingsNamed sees only plain const/let/var declarations while its docstring says every binding** (`ugcportal-2k2q`, scope: test-support) — [#306](https://github.com/eiriksf-capgemini/ugcportal/pull/306)
+- **premise-fresh lists a merge commit as having touched a declared path with no file named (PR #289 round 6 L2)** (`ugcportal-ze80`, scope: process) — [#324](https://github.com/eiriksf-capgemini/ugcportal/pull/324)
+- **check-bead-dispatch test comment names the removed premiseCommits function (PR #289 round 5 L1)** (`ugcportal-arfp`, scope: process) — [#324](https://github.com/eiriksf-capgemini/ugcportal/pull/324)
+- **Every vitest run prints a rolldown MIXED_EXPORTS warning because vitest.config.ts now has a named export beside its default export** (`ugcportal-wcga`, scope: vitest) — [#311](https://github.com/eiriksf-capgemini/ugcportal/pull/311)
+- **Two inaccurate vitest comments from PR 295: ViteNodeRunner.globFiles does not exist, and "stricter than vitest 3" overlooks whitespace-only values** (`ugcportal-soa9`, scope: vitest) — [#311](https://github.com/eiriksf-capgemini/ugcportal/pull/311)
+- **K3 late-attestation test only covers one of the route's 400 branches, so a Media write on the other 400 branch passes** (`ugcportal-dsp8`, scope: upload) — [#307](https://github.com/eiriksf-capgemini/ugcportal/pull/307)
+- **pr-review-merge step 5 "first write this round makes" ignores the lock ref and the label removal, both writes that can precede the round comment** (`ugcportal-h46e`, scope: process) — [#312](https://github.com/eiriksf-capgemini/ugcportal/pull/312)
+- **classifySeverity clean: approval-shape rule reads 15 genuine zero-finding rounds as not clean, unstated in the doc and over-stated in the P1 test title** (`ugcportal-rf5o`, scope: review) — [#322](https://github.com/eiriksf-capgemini/ugcportal/pull/322)
+- **classifySeverity clean: "never clean" claim is false for a qualified no-findings opener, and "no blocking findings" is described as found-nothing** (`ugcportal-peom`, scope: review) — [#322](https://github.com/eiriksf-capgemini/ugcportal/pull/322)
+- **classifySeverity: a "Verified, no finding:" sub-heading in a blocking verdict sets stated=true on the prose side** (`ugcportal-45bh`, scope: review) — [#322](https://github.com/eiriksf-capgemini/ugcportal/pull/322)
+- **release-cost-report addenda merge medium/low/stated into a round but not the findings count, so the bare-count guard misses them** (`ugcportal-4hsc`, scope: review) — [#322](https://github.com/eiriksf-capgemini/ugcportal/pull/322)
+- **pr-review-merge step 4a item 5: the #281 example names a stamp-write refusal, but #281's unstamped pass was a lock-write denial** (`ugcportal-oium`, scope: review) — [#322](https://github.com/eiriksf-capgemini/ugcportal/pull/322)
+- **release-cost-report Data gaps sibling line says "the bead that carries the keys" on PRs where no bead carries keys** (`ugcportal-zu69`, scope: review) — [#322](https://github.com/eiriksf-capgemini/ugcportal/pull/322)
+- **release-cost-report clean verdict line: comment says the summary regex reads the first line and SKILL.md says the line after the marker** (`ugcportal-tw9x`, scope: review) — [#285](https://github.com/eiriksf-capgemini/ugcportal/pull/285)
+- **bd-guard.test.mjs header says every case runs the real CLI, but the five fixture-loader cases do not** (`ugcportal-2xmq`, scope: process) — [#320](https://github.com/eiriksf-capgemini/ugcportal/pull/320)
+- **dispatch-bead section 5 tells a fix agent to push with `git push origin HEAD:<branch>`, which bypasses the bot HTTPS push and the pre-push skip that section 2 and worker-implementer.md require** (`ugcportal-8570`, scope: process) — [#315](https://github.com/eiriksf-capgemini/ugcportal/pull/315)
+- **pr-review-merge BEHIND recovery poll treats a failed gh pr view as a changed head and stops as sha not fetched** (`ugcportal-7998`, scope: process) — [#312](https://github.com/eiriksf-capgemini/ugcportal/pull/312)
+- **pr-review-merge step 6 report list and merge-failure paragraph omit the new CLEAN head-mismatch and match-head-commit refusal stops** (`ugcportal-s1t7`, scope: process) — [#312](https://github.com/eiriksf-capgemini/ugcportal/pull/312)
+- **pr-review-merge BEHIND rationale says a kept file makes step 4.2 take its fail-safe branch, which is not what 4.2 does** (`ugcportal-r8oq`, scope: process) — [#312](https://github.com/eiriksf-capgemini/ugcportal/pull/312)
+- **cut-release step 7a bead snippet single-quotes model_why in --metadata and builds the title from an inline heredoc; both run code on an apostrophe or an unbalanced parenthesis** (`ugcportal-5q0a`, scope: process) — [#320](https://github.com/eiriksf-capgemini/ugcportal/pull/320)
+- **review-standards section 1 still files review-discovered beads in the bare-finding form (title heredoc, --body-file -), the unformed-bead source nr72 fixes only in pr-review-merge** (`ugcportal-cupf`, scope: process) — [#320](https://github.com/eiriksf-capgemini/ugcportal/pull/320)
+- **pr-review-merge merge step still falls back to --merge, which the main ruleset refuses (squash and rebase only)** (`ugcportal-slf2`, scope: process) — [#312](https://github.com/eiriksf-capgemini/ugcportal/pull/312)
+
+### 📝 Documentation
+
+- **Lows batch D1: dispatch-bead section 5 fix-agent worktree, push and idle text, and the existing-branch worktree form in the worker machine sections (hvda, m7bh, 8570, 88up, 2day)** (`ugcportal-6c4p`, scope: process) — [#315](https://github.com/eiriksf-capgemini/ugcportal/pull/315)
+- **Lows batch A1: three figures in architecture-review-2026-10-18 (flq1, 9dem, vfmc)** (`ugcportal-d6si`, scope: architecture) — [#310](https://github.com/eiriksf-capgemini/ugcportal/pull/310)
+- **PR #306 body, Fifth pass K2: attestation-write-paths.test.ts:642 is placed "in the other test" but sits in the same test as the call-site link** (`ugcportal-hi8m`, scope: test-support) — [#306](https://github.com/eiriksf-capgemini/ugcportal/pull/306)
+- **Two stale pointers left by PR #299's review: development-process.md names the removed CI job guard-sensitive-files, and pr-review-merge step 2 cites a scripts/lib/dashboard-data.mjs that does not exist** (`ugcportal-33xi`, scope: process) — [#309](https://github.com/eiriksf-capgemini/ugcportal/pull/309)
+- **PR #302 body K3 bullet: rights-system-review-2026-10-12 citations are said to be in "the header, sections 1, 4, 9 and 10"; the grep it names returns none in section 10** (`ugcportal-ddqe`, scope: architecture) — [#302](https://github.com/eiriksf-capgemini/ugcportal/pull/302)
+- **architecture-review-2026-10-18.md section 5: "every admin action calls requireAdmin (the security review's 3.9 drove all four)" reads as four admin actions; there are five, changeUserRole included** (`ugcportal-vfmc`, scope: architecture) — [#310](https://github.com/eiriksf-capgemini/ugcportal/pull/310)
+- **architecture-review-2026-10-18.md section 4.3: the isPublishOperator row counts 2 files but names only the preview route; the second is publish-authority.ts's own call inside publishOperatorRefusal** (`ugcportal-9dem`, scope: architecture) — [#310](https://github.com/eiriksf-capgemini/ugcportal/pull/310)
+- **architecture-review-2026-10-18.md section 3.1: "field-level @unique" is reported as 18, but grep -c '@unique' also counts the 4 @@unique lines; field-level is 14** (`ugcportal-flq1`, scope: architecture) — [#310](https://github.com/eiriksf-capgemini/ugcportal/pull/310)
+- **PR #303 body defines "prisma CLI family" two ways: Summary excludes engines-version, the K2 grouping includes it** (`ugcportal-8blu`, scope: deps) — [#303](https://github.com/eiriksf-capgemini/ugcportal/pull/303)
+- **Register stale-note names only the vitest row, but the prisma row's Installed cell (7.10.0) is stale since PR #303 moved prisma to 7.10.1** (`ugcportal-nexj`, scope: deps) — [#327](https://github.com/eiriksf-capgemini/ugcportal/pull/327)
+- **PR #303 body Summary lists the register changes without the round-4 "Stale since this snapshot" note** (`ugcportal-c5re`, scope: deps) — [#303](https://github.com/eiriksf-capgemini/ugcportal/pull/303)
+- **PR #300 body: round-4 evidence is stale (suite line numbers from 94bc974; checklist item 4 not re-run over the round-4 comment lines)** (`ugcportal-exsm`, scope: review) — [#300](https://github.com/eiriksf-capgemini/ugcportal/pull/300)
+- **PR #305 body reports the three affected test files as 56/56; they hold 89 tests (50 + 29 + 10)** (`ugcportal-l3ca`, scope: api) — [#305](https://github.com/eiriksf-capgemini/ugcportal/pull/305)
+- **siteOrigin doc says isSameOriginRequest falls back to an Origin/Host header and sits above it; it does neither** (`ugcportal-vbrb`, scope: api) — [#319](https://github.com/eiriksf-capgemini/ugcportal/pull/319)
+- **origin.ts header says requireAdmin is the first gate on the admin routes, but the alcohol brand route's gate is requireAdminAccess** (`ugcportal-bq9g`, scope: api) — [#318](https://github.com/eiriksf-capgemini/ugcportal/pull/318)
+- **Register "Patch moves taken" and PR #303 body: the stayed-at-7.10.0 list misses two packages, and four body sentences misstate the move; left when ugcportal-90i5 hit its pass budget** (`ugcportal-umox`, scope: deps) — [#303](https://github.com/eiriksf-capgemini/ugcportal/pull/303)
+- **recordClearance docstring says the clearance reason is the one piece of free text on the curation screen, but the licence-terms textarea is a second** (`ugcportal-wk6t`, scope: curation) — [#301](https://github.com/eiriksf-capgemini/ugcportal/pull/301)
+- **env.example says ADMIN_BOOTSTRAP_EMAILS is matched against the address stored on the User row; the code and a later paragraph of the same file say the asserted address** (`ugcportal-42yh`, scope: auth) — [#313](https://github.com/eiriksf-capgemini/ugcportal/pull/313)
+- **A mangled tripwire comment in media/route.test.ts and the unfixed "node environment with no DOM" sentence in alt-text.ts and tag-selection.ts** (`ugcportal-sd96`, scope: upload) — [#323](https://github.com/eiriksf-capgemini/ugcportal/pull/323)
+- **declarationsNamed docblock and test title claim "every shape" and "any binding shape" for a scan that reads four declaration kinds** (`ugcportal-uj69`, scope: upload) — [#316](https://github.com/eiriksf-capgemini/ugcportal/pull/316)
+- **check-human-merge-labels header says the non-counting stops are not labelled where step 2's precedence labels a sensitive-path reviewed-clean one** (`ugcportal-2ww3`, scope: process) — [#317](https://github.com/eiriksf-capgemini/ugcportal/pull/317)
+- **pr-review-merge step 6 says step 4b's counter keeps only the reviewer's markers where step 4b reads a foreign marker as a broken chain** (`ugcportal-lhak`, scope: process) — [#317](https://github.com/eiriksf-capgemini/ugcportal/pull/317)
+- **pr-review-merge step 2 points at step 5b for the 7+ conditions and says the check lists a stop-comment label as C unconditionally** (`ugcportal-0n6h`, scope: process) — [#317](https://github.com/eiriksf-capgemini/ugcportal/pull/317)
+- **pr-review-merge step 2 record says 3 to 19 seconds where #285 was labelled 2 seconds after opening** (`ugcportal-l6kd`, scope: process) — [#312](https://github.com/eiriksf-capgemini/ugcportal/pull/312)
+- **pr-review-merge step 4b says PR #131's only marker sits on a COMMENTED review, but #131 carries two markers** (`ugcportal-6do8`, scope: process) — [#312](https://github.com/eiriksf-capgemini/ugcportal/pull/312)
+- **dispatch-bead section 5 says the idle figures recorded on 2026-10-16 overstated the transcript measure, but two of that day's lines understate it** (`ugcportal-m7bh`, scope: process) — [#315](https://github.com/eiriksf-capgemini/ugcportal/pull/315)
+- **dispatch-bead section 5 measures idle only after the dispatch (fresh agent's startTs) and bans the orchestrator's clock, leaving no stated method for the idle figure the resume-or-fresh decision is taken on** (`ugcportal-88up`, scope: process) — [#315](https://github.com/eiriksf-capgemini/ugcportal/pull/315)
+- **dispatch-bead section 5 says the detached worktree add is granted to reviewers and analysts but does not tell the brief to override a worker-implementer's own machine section, which today allows only the -b form** (`ugcportal-hvda`, scope: process) — [#315](https://github.com/eiriksf-capgemini/ugcportal/pull/315)
+- **worker-*.md machine section gives only the -b worktree form, so a fresh fix agent following dispatch-bead section 5 cannot add a worktree on the PR's existing branch without contradicting its own agent file** (`ugcportal-2day`, scope: process) — [#315](https://github.com/eiriksf-capgemini/ugcportal/pull/315)
+- **release-cost-report: withFindingsKeys docstring points at the wrong rule statement and, with item 5, omits the addendum clause (left when ugcportal-to7b hit its pass budget)** (`ugcportal-4an4`, scope: review) — [#322](https://github.com/eiriksf-capgemini/ugcportal/pull/322)
+- **declarationsNamed docblock: the agreement clause is false for its own example, and the PR body quotes a phrase the file does not contain (left when ugcportal-uj69 hit its pass budget)** (`ugcportal-pjah`, scope: upload) — [#316](https://github.com/eiriksf-capgemini/ugcportal/pull/316)
+- **Two prose claims in PR #306 overstate the scan tests and the call-site link (left when ugcportal-2k2q hit its pass budget a second time)** (`ugcportal-9olk`, scope: test-support) — [#306](https://github.com/eiriksf-capgemini/ugcportal/pull/306)
+- **prisma-write-scan.ts module header says ONE SCANNER, TWO CALLERS while prismaModelWritesIn has four callers** (`ugcportal-6hpv`, scope: test-support) — [#321](https://github.com/eiriksf-capgemini/ugcportal/pull/321)
+- **pr-review-merge line 561 points at 'step 5 line 517', which is blank; the rule it means now sits near line 854** (`ugcportal-29ki`, scope: process) — [#299](https://github.com/eiriksf-capgemini/ugcportal/pull/299)
+
+### 🧪 Tests
+
+- **Attestation guard's leak message still says the request may be read only by readJsonBody after #305 also permitted isSameOriginRequest** (`ugcportal-p5ep`, scope: api) — [#325](https://github.com/eiriksf-capgemini/ugcportal/pull/325)
+- **next.config.test.ts pins the header entries but not the `/:path*` rule object: a has/missing condition leaves every response bare while the test stays green (PR #304 round 3 L1)** (`ugcportal-5o8q`, scope: security) — [#304](https://github.com/eiriksf-capgemini/ugcportal/pull/304)
+- **playwright.config.ts hardcodes localhost:3000; take the e2e dev-server port from UGCPORTAL_E2E_PORT** (`ugcportal-wds4`, scope: e2e) — [#308](https://github.com/eiriksf-capgemini/ugcportal/pull/308)
+- **Stale count comments in page.test.tsx and resale-rights.test.ts (five codes, three ways) and actions.ts's "three form fields", left when ugcportal-hx2 hit its pass budget** (`ugcportal-0fue`, scope: rights) — [#301](https://github.com/eiriksf-capgemini/ugcportal/pull/301)
+- **release-cost-report test file: stale header and SHAPES comments, plus PR #300's title type and body wording, left when ugcportal-s4eb hit its pass budget** (`ugcportal-omyh`, scope: review) — [#300](https://github.com/eiriksf-capgemini/ugcportal/pull/300)
+- **check-human-merge-labels: no test pins fail-closed for an absent reviewer and an authorless comment; reviewer param undocumented, author fetched unused** (`ugcportal-9uf5`, scope: process) — [#317](https://github.com/eiriksf-capgemini/ugcportal/pull/317)
+- **release-cost-report test: no assertion pins that marker lines are skipped when finding the verdict line (mutant survives 173/173)** (`ugcportal-s4eb`, scope: review) — [#300](https://github.com/eiriksf-capgemini/ugcportal/pull/300)
+- **check-human-merge-labels: no test pins reviewedHead to the ugcportal-measured line, a mutant reading any at= survives** (`ugcportal-rix6`, scope: process) — [#317](https://github.com/eiriksf-capgemini/ugcportal/pull/317)
+- **Three stale comments left by the August removal (#250)** (`ugcportal-x76d`, scope: auth) — [#293](https://github.com/eiriksf-capgemini/ugcportal/pull/293)
+
+### 🏗️ Build & CI
+
+- **Move the prisma CLI family 7.10.0 -> 7.10.1 within range to clear the deepmerge-ts and mysql2 advisories pinned inside it** (`ugcportal-90i5`, scope: deps) — [#303](https://github.com/eiriksf-capgemini/ugcportal/pull/303)
+- **CI gate on npm audit --audit-level=high so the advisory count cannot drift back** (`ugcportal-1j4j`, scope: ci) — [#326](https://github.com/eiriksf-capgemini/ugcportal/pull/326)
+- **vitest 3.2.7 -> 4.1.x: close the tinypool RCE gadget and the @vitest/mocker path traversal within Node 20** (`ugcportal-gdi0`, scope: deps) — [#295](https://github.com/eiriksf-capgemini/ugcportal/pull/295)
+
+### 🔧 Chores
+
+- **Audit tokens_qa for resumed reviewer agents the way ugcportal-cii0 audited tokens_impl** (`ugcportal-zu0a`, scope: process) — [#294](https://github.com/eiriksf-capgemini/ugcportal/pull/294)
+- **Enforce B2: three implementation passes without a clean round stops the bead and re-plans** (`ugcportal-bc04`, scope: process) — [#296](https://github.com/eiriksf-capgemini/ugcportal/pull/296)
+- **Dependency review: vendor shadcn's stylesheet so its advisory chain can go, and record the deliberate major-version deferrals** (`ugcportal-pc7s`, scope: deps) — [#292](https://github.com/eiriksf-capgemini/ugcportal/pull/292)
+- **MUSIC layer: refuse 'deliver muted' as a clearance while the deliverable is the raw original** (`ugcportal-hx2`, scope: rights) — [#301](https://github.com/eiriksf-capgemini/ugcportal/pull/301)
+- **Security review of the application** (`ugcportal-5x8`, scope: security) — [#298](https://github.com/eiriksf-capgemini/ugcportal/pull/298)
+- **Architecture review of the application** (`ugcportal-rma`, scope: architecture) — [#302](https://github.com/eiriksf-capgemini/ugcportal/pull/302)
+- **PR #302 body: step 7 says attribution on 2/2 commits where the branch has 3; left when ugcportal-rma hit its pass budget** (`ugcportal-rgw7`, scope: architecture) — [#302](https://github.com/eiriksf-capgemini/ugcportal/pull/302)
+
+### 🚫 Closed without a change
+
+- **Curation UI: triage an owner-uploaded original and set its price and licence** (`ugcportal-74w`, scope: curation, resolution: none)
+- **Attestation route and origin.ts comments still describe the pre-#305 lock: 'request read only by readJsonBody' twice, no cross-origin 403 in the refusal list, origin.ts names requireAdmin alone (PR #305 round 3 F1-F3)** (`ugcportal-zn42`, scope: api, resolution: none)
+- **Playwright e2e suite is flaky at full parallelism against the shared dev-server SQLite database** (`ugcportal-uwh1`, scope: e2e, resolution: none)
+
 ## v0.8.1 - 2026-10-16
 
 ### 💰 Cost Summary
