@@ -343,7 +343,7 @@ export function findPremiseLines(notes, description = "") {
   for (const [field, text] of [["description", String(description || "")], ["notes", String(notes || "")]]) {
     const lines = text.split("\n");
     for (let i = 0; i < lines.length; i++) {
-      if (!isPremiseStatementStart(lines[i])) continue;
+      if (!isPremiseStatementStart(lines[i], lines[i + 1] || "")) continue;
       const own = shasIn(lines[i]);
       const next = lines[i + 1] || "";
       const wrapped = own.length === 0 && !isPremiseStatementStart(next) && !DEPENDS_LINE_RE.test(next) ? LEADING_SHA_RE.exec(next) : null;
@@ -370,15 +370,31 @@ const DEPENDS_LINE_RE = /^[\s*_>`#-]*premise depends on\s*:/i;
  * whitespace or markup between, so "on the premise: the gate at <sha> was
  * green" is not a statement but "2026-10-06 audit: premise re-verified" is.
  * Nor is a mention of the bead form itself ("a guardrail K, Premise verified
- * line, metadata"): a verb followed by the word `line` (and not by a line
- * number) names the form, not a verification (ugcportal-jtyl).
+ * line, metadata"; also the quoted spellings "`Premise verified:` line" and
+ * "Premise verified: line"): see isFormMention (ugcportal-jtyl).
  */
-const PREMISE_LABEL_RE = /(?:^|[.:;!?,(\[])[\s`*_>#(\[-]*premise(?![\w-])[\s,(]*(?:(?:re-?)?(?:verified|checked|measured|confirmed)\b(?!\s+lines?\b(?!\s+\d))|corrected\b|:)/i;
+const PREMISE_LABEL_RE = /(?:^|[.:;!?,(\[])[\s`*_>#(\[-]*premise(?![\w-])[\s,(]*(?:(?:re-?)?(?:verified|checked|measured|confirmed)\b|corrected\b|:)/i;
 /** A line that OPENS with a commit token, after any quoting or list markup: the hard-wrap continuation. */
 const LEADING_SHA_RE = /^[\s`*_>(\[-]*([0-9a-f]{7,40})\b/;
 
-function isPremiseStatementStart(line) {
-  return PREMISE_LABEL_RE.test(line) && !DEPENDS_LINE_RE.test(line);
+/** the verb, then (through quote/colon markup) the word `line`, not `line-by-line`, `line by line`, `line 12`, `line #12`, `line L12` */
+const FORM_MENTION_RE = /premise[\s,(]*(?:re-?)?(?:verified|checked|measured|confirmed)[\s`*_:)]*lines?\b(?!\s*-\s*by\b|\s+by\b|\s+#?L?\d)/i;
+
+/**
+ * A line that names the bead form ("Premise verified line, metadata") rather
+ * than making a verification. It is a mention only when it also names no
+ * commit, on its own line or as the leading token of the next: a line that
+ * names a commit is a statement whatever else it says, so the exclusion cannot
+ * hide one (ugcportal-jtyl).
+ */
+function isFormMention(line, next = "") {
+  const label = PREMISE_LABEL_RE.exec(line);
+  if (!label || !FORM_MENTION_RE.test(line.slice(label.index))) return false;
+  return shasIn(line).length === 0 && !LEADING_SHA_RE.test(next);
+}
+
+function isPremiseStatementStart(line, next = "") {
+  return PREMISE_LABEL_RE.test(line) && !DEPENDS_LINE_RE.test(line) && !isFormMention(line, next);
 }
 
 /**
@@ -1265,9 +1281,13 @@ export function makeGitContext(headOverride, repoDir = REPO_ROOT) {
      * failed, so an error fails closed instead of reading as "touched
      * nothing". A merge commit is diffed against its first parent
      * (`--diff-merges=first-parent`; `--name-only` alone prints no files for
-     * a merge) and dropped when that shows no declared file; the commits it
-     * merged are in the range and listed themselves, so a declared path
-     * changed only on a merged side branch still fails (ugcportal-ze80).
+     * a merge). One that shows no declared file there is dropped only when
+     * its RESULT does not differ from the premise commit on a declared path
+     * beyond what the other listed commits already name: a merge that
+     * restores a path to its premise text (`-s ours`, an octopus result, a
+     * conflict resolution that keeps the old side) changes nothing against
+     * its first parent yet makes HEAD differ from the premise, so it is
+     * listed with the files that differ (ugcportal-ze80).
      * `--literal-pathspecs`, because declared paths in this repo
      * carry glob characters (`src/app/api/media/[id]/`) that would otherwise
      * match a different path or none. `--no-renames`, so a rename counts as
@@ -1282,16 +1302,31 @@ export function makeGitContext(headOverride, repoDir = REPO_ROOT) {
           ["--literal-pathspecs", "log", "--reverse", "--full-history", "--no-renames", "--diff-merges=first-parent", "--format=%x00%H", "--name-only", `${full}..${head}`, "--", ...paths],
           repoDir,
         );
-        return out
+        const commits = out
           .split("\0")
           .map((chunk) => chunk.split("\n").map((l) => l.trim()).filter(Boolean))
           .filter((rows) => rows.length > 0)
-          .map(([sha, ...files]) => ({ sha, files }))
-          // A merge can be listed (it differs on a declared path from one of its
-          // parents) yet show no declared file against its first parent: it
-          // brought nothing in itself, and the commits it merged are in the
-          // range and listed on their own.
-          .filter((c) => c.files.length > 0);
+          .map(([sha, ...files]) => ({ sha, files }));
+        // A merge can be listed yet show no declared file against its first
+        // parent. Dropping it is safe only when HEAD's difference from the
+        // premise on the declared paths is already named by the other listed
+        // commits; otherwise the merge itself made HEAD differ (it restored
+        // the premise's text, or kept a side's older one), so it is listed
+        // with the files its result differs on.
+        const named = new Set(commits.flatMap((c) => c.files));
+        const kept = [];
+        for (const c of commits) {
+          if (c.files.length > 0) {
+            kept.push(c);
+            continue;
+          }
+          const differs = git(["--literal-pathspecs", "diff", "--name-only", "--no-renames", full, c.sha, "--", ...paths], repoDir)
+            .split("\n")
+            .map((l) => l.trim())
+            .filter((f) => f && !named.has(f));
+          if (differs.length > 0) kept.push({ sha: c.sha, files: differs });
+        }
+        return kept;
       } catch {
         return null;
       }

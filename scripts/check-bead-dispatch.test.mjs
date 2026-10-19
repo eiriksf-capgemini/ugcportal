@@ -2551,6 +2551,99 @@ describe("ugcportal-zoee ze80: a merge commit on main is not listed as touching 
   });
 });
 
+/**
+ * Scratch repos where the merge ITSELF makes HEAD differ from the premise on
+ * x.ts while its first-parent diff shows no declared file (ugcportal-ze80,
+ * review round 1). Each returns { dir, premise, m, ... } with HEAD at `m`.
+ */
+function makeResultMergeRepo(shape) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "zoee-result-"));
+  const run = (args) => execFileSync("git", args, { cwd: dir, encoding: "utf8" }).trim();
+  const write = (rel, text) => fs.writeFileSync(path.join(dir, rel), text);
+  const commit = (msg) => {
+    run(["add", "-A"]);
+    run(["commit", "-q", "-m", msg]);
+    return run(["rev-parse", "HEAD"]);
+  };
+  run(["init", "-q", "-b", "main"]);
+  run(["config", "user.email", "test@example.com"]);
+  run(["config", "user.name", "Test"]);
+  write("x.ts", "x v0\n");
+  write("o.txt", "o0\n");
+  const c0 = commit("c0");
+  const out = { dir, c0 };
+  if (shape === "d1") {
+    // side commit s1 changes x.ts (the premise); mainline touches o.txt; `-s ours` keeps v0
+    run(["checkout", "-q", "-b", "side"]);
+    write("x.ts", "x v1\n");
+    out.premise = commit("s1 side x.ts");
+    run(["checkout", "-q", "main"]);
+    write("o.txt", "o1\n");
+    out.c1 = commit("c1 o.txt");
+    run(["merge", "-q", "-s", "ours", "-m", "m ours", "side"]);
+  } else if (shape === "d2") {
+    // main commit p fixes x.ts (the premise); feat merges main and keeps its old x.ts; main fast-forwards
+    run(["checkout", "-q", "-b", "feat"]);
+    write("o.txt", "o1\n");
+    out.f1 = commit("f1 o.txt");
+    run(["checkout", "-q", "main"]);
+    write("x.ts", "x v1\n");
+    out.premise = commit("p fixes x.ts");
+    run(["checkout", "-q", "feat"]);
+    run(["merge", "-q", "--no-commit", "--no-ff", "main"]);
+    run(["checkout", c0, "--", "x.ts"]);
+    run(["commit", "-q", "-m", "m keeps the old x.ts"]);
+    run(["checkout", "-q", "main"]);
+    run(["merge", "-q", "--ff-only", "feat"]);
+  } else {
+    // octopus of s (changes x.ts: the premise) and t (adds t.txt), result restoring x.ts to v0
+    run(["checkout", "-q", "-b", "s"]);
+    write("x.ts", "x v1\n");
+    out.premise = commit("s1 x.ts");
+    run(["checkout", "-q", "main"]);
+    run(["checkout", "-q", "-b", "t"]);
+    write("t.txt", "t\n");
+    commit("t1 t.txt");
+    run(["checkout", "-q", "main"]);
+    run(["merge", "-q", "--no-commit", "--no-ff", "s", "t"]);
+    run(["checkout", c0, "--", "x.ts"]);
+    run(["commit", "-q", "-m", "m octopus restores x.ts"]);
+  }
+  out.m = run(["rev-parse", "HEAD"]);
+  return out;
+}
+
+describe("ugcportal-zoee ze80 (round 1 M1): a merge whose result differs from the premise on a declared path is never dropped", { timeout: 60_000 }, () => {
+  const repos = [];
+  afterAll(() => {
+    for (const r of repos) fs.rmSync(r.dir, { recursive: true, force: true });
+  });
+  const lineFor = (shape) => {
+    const r = makeResultMergeRepo(shape);
+    repos.push(r);
+    const file = path.join(r.dir, "beads.json");
+    const notes = `Premise verified 2026-10-19 at origin/main ${r.premise} by reading the code.\nPremise depends on: x.ts`;
+    fs.writeFileSync(file, JSON.stringify([completeBead({ notes })]));
+    const res = runCliAllowFail(["--beads", file, "--repo", r.dir, "--head", r.m]);
+    return { r, res, line: res.stdout.split("\n").find((l) => /^\s+(ok|FAIL)\s+premise-fresh\b/.test(l)) || "" };
+  };
+  for (const [shape, what] of [
+    ["d1", "`git merge -s ours` of a side commit that changed x.ts"],
+    ["d2", "a conflict resolution that keeps the older x.ts, fast-forwarded onto main"],
+    ["e", "an octopus merge whose result restores x.ts"],
+  ]) {
+    it(`${shape}: ${what} reads stale, naming the merge and x.ts`, () => {
+      const { r, res, line } = lineFor(shape);
+      expect(res.status).toBe(1);
+      expect(failedChecks(res.stdout)).toEqual(["premise-fresh"]);
+      expect(line).toContain(`${r.m.slice(0, 7)} touched x.ts`);
+      expect(line).not.toContain("touched .");
+      const listed = line.match(/\b[0-9a-f]{7} touched /g) || [];
+      expect(line).toContain(`${listed.length} of those commit(s) touched a declared path`);
+    });
+  }
+});
+
 describe("ugcportal-zoee jtyl: a mention of the premise form is not a statement, and the excerpt starts at the label", { timeout: 60_000 }, () => {
   let pr;
   let c;
@@ -2589,5 +2682,38 @@ describe("ugcportal-zoee jtyl: a mention of the premise form is not a statement,
     expect(line).toContain("names no commit");
     expect(line).toContain('("Premise (verified');
     expect(line).not.toContain("Opening words");
+  });
+
+  it("round 1 M2: a statement that says `line` yet names a commit is still read", () => {
+    for (const verified of [
+      "Premise verified line-by-line at origin/main",
+      "Premise verified line by line at origin/main",
+      "Premise verified line L12 at origin/main",
+      "Premise verified line #12 at origin/main",
+    ]) {
+      const found = findPremiseLines(`${verified} ${c[0]} by reading the code.\nPremise depends on: src/lib/a.ts`, "");
+      expect(found.length, verified).toBe(1);
+      expect(found[0].shas, verified).toEqual([c[0]]);
+    }
+  });
+
+  it("round 1 M2: the older of two statements is not judged when the newer one says line-by-line (fail-open shape)", () => {
+    const base = completeBead();
+    const notes = `Premise verified 2026-10-19 at origin/main ${c[0]} by reading the code.\nPremise depends on: README.md\nPremise verified line-by-line at origin/main ${c[1]} by reading the code.\nPremise depends on: src/lib/c.ts`;
+    const { res, line } = run({ ...base, notes });
+    expect(res.status).toBe(1);
+    expect(line).toContain("touched");
+    expect(line).toContain(`premise verified at ${c[1].slice(0, 7)}`);
+  });
+
+  it("round 1 L1: the backtick and colon spellings of the mention are not statements", () => {
+    for (const text of [
+      "In scope: user story, a guardrail K, `Premise verified:` line, metadata.",
+      "In scope: user story, a guardrail K, `Premise verified` line, metadata.",
+      "In scope: user story, a guardrail K, Premise verified: line, metadata.",
+      "In scope: user story, a guardrail K, Premise verified line, metadata.",
+    ]) {
+      expect(findPremiseLines("", text).length, text).toBe(0);
+    }
   });
 });
