@@ -1065,14 +1065,16 @@ export function parseFindingsKey(value) {
  * Clean / No findings / Zero findings / Verified clean, contains one of
  * NONE_RE's no-findings phrases, states no findings count, and carries none of
  * "Blocking:", "Not merged", "block(s)", "left for a human" (the `clean` rule
- * of classifySeverity, which that docstring and comment state in full). A
+ * of classifySeverity, which the comment above `approvalShaped` there states
+ * in full). A
  * quote of the band rule ("merge requires zero findings") after a
  * non-approval opening word does not read clean, and neither does a
  * "Verified, no finding:" sub-heading in a blocking round (M1, #285 round 4:
  * #157 r3, #207 r2, #209 r4; P1, round 3: #277 r1, #258 r1); but a blocking
  * line that opens with an approval word and carries none of the blocking
  * words does read clean (peom), so an all-zero key on such a round is not
- * flagged. And
+ * flagged (an addendum comment's bare count still joins the round and clears
+ * this, 4hsc). And
  * "round-2 findings" is a back-reference, not a count (N1, #285 round 2).
  *
  * A finding recorded as `unstated:<n>` counts as medium-or-above in the
