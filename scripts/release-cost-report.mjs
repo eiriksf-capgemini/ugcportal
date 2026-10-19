@@ -844,7 +844,7 @@ export function classifySeverity(body) {
   //    it has none of the blocking words ("No findings above low; merge
   //    requires zero findings, so L1 must be fixed first."), so a later bare
   //    count in that body does not flag an all-zero key (peom); and
-  //  - "no blocking findings" on a round 4-6 approval does not mean the round
+  //  - "no blocking findings" on a round 2-6 approval does not mean the round
   //    found nothing: deferred lows appear only as a bare count in the body.
   // A quote of the band rule ("merge requires zero findings") after a
   // non-approval opening word, and a sub-heading such as "Verified, no
@@ -1029,18 +1029,20 @@ export function analysePr(data, reviewer) {
 /**
  * Parses one `findings_rN` value, the per-round record pr-review-merge step
  * 4a has the orchestrator write: `f1:<n> f2:<n> f3:<n> f4:<n> med:<n>
- * low:<n>` with an optional trailing `unstated:<n>`. Returns null for
- * anything else (absent, extra or missing fields, a non-integer), so a
- * malformed value is never read as zeros.
+ * low:<n>` with an optional trailing `unstated:<n>`, then an optional
+ * trailing `merged:lows-filed` (ugcportal-kwxh: the round merged with its lows
+ * filed as beads; read as `mergedLowsFiled`). Returns null for anything else
+ * (absent, extra or missing fields, a non-integer), so a malformed value is
+ * never read as zeros.
  *
  * @param {unknown} value
  */
 export function parseFindingsKey(value) {
   if (typeof value !== "string") return null;
-  const m = /^f1:(\d+) f2:(\d+) f3:(\d+) f4:(\d+) med:(\d+) low:(\d+)(?: unstated:(\d+))?$/.exec(value.trim());
+  const m = /^f1:(\d+) f2:(\d+) f3:(\d+) f4:(\d+) med:(\d+) low:(\d+)(?: unstated:(\d+))?( merged:lows-filed)?$/.exec(value.trim());
   if (!m) return null;
-  const [f1, f2, f3, f4, med, low, unstated] = m.slice(1).map((x) => (x === undefined ? 0 : Number(x)));
-  return { f1, f2, f3, f4, med, low, unstated };
+  const [f1, f2, f3, f4, med, low, unstated] = m.slice(1, 8).map((x) => (x === undefined ? 0 : Number(x)));
+  return { f1, f2, f3, f4, med, low, unstated, mergedLowsFiled: m[8] !== undefined };
 }
 
 /**

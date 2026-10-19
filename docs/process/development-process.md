@@ -321,12 +321,16 @@ a nit.
 
 A separate reviewer agent runs the **`pr-review-merge`** skill against the
 PR. Each pass stamps a round marker comment. A pass that stopped at red CI
-reviewed nothing and does not count as a round.
+reviewed nothing and does not count as a round. The any-finding row covered
+rounds 1–3 until `ugcportal-kwxh` (2026-10-19) narrowed it to round 1; the
+measurement behind that, and the rule that a text-only low may be fixed by the
+reviewer inside the round, are in `.claude/skills/review-standards/SKILL.md`
+section 3.
 
 | Round | What blocks the merge |
 |---|---|
-| 1–3 | **Any** finding, CONFIRMED or PLAUSIBLE, at any severity. Fix everything. |
-| 4–5 | Any **medium-or-above**, confirmed or unsettled. Lows are filed as beads and the PR merges. |
+| 1 | **Any** finding, CONFIRMED or PLAUSIBLE, at any severity. Fix everything. |
+| 2–5 | Any **medium-or-above**, confirmed or unsettled. Lows are filed as beads and the PR merges. |
 | 6 (cap) | The same — but a blocker here goes to a **human**, not a seventh round. |
 | 7+ | Only on an **exact** marker chain, anchored to the latest stop comment at or above 6, with evidence someone acted since it. See `pr-review-merge` step 5b, which is operative — `CLAUDE.md`'s phrasing of this row is stale relative to it. |
 
@@ -354,7 +358,7 @@ opening, which is the operative source; `ugcportal-2yj` has the full
 rationale.
 
 **Confidence changes what a low costs, never what a medium costs.** From
-round 4 an unsettled plausible medium blocks exactly as a confirmed one
+round 2 an unsettled plausible medium blocks exactly as a confirmed one
 does. Both late-round defects that motivated the rule presented as
 unconfirmed plausible mediums before anyone ran them down.
 
@@ -363,7 +367,7 @@ lenient band had never been legitimately reached in this repo.** (It was applied
 #75 — which is a separate defect, not an exception to this.) Until
 `ugcportal-62b6` the reviewer and the PR author were the same GitHub account,
 so every marker chain computed as `approx` rather than `exact`, and an
-`approx` chain runs the strict rounds-1–3 rule at *every* round. In recorded context size, not cost: one P3
+`approx` chain runs the strict any-finding rule at *every* round. In recorded context size, not cost: one P3
 bead recorded **987k review tokens** (`tokens_qa` 987,870 on `ugcportal-577s`, PR #201, in `bd show
 ugcportal-577s --json` on 2026-10-16; `zo8n` shares that PR and records the
 same figure; context size, not cost). The fix is a separate author

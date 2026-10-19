@@ -521,7 +521,7 @@ It reads `bd show <id> --json` and its exit status is the verdict:
 
 | Exit | Verdict | Meaning | You |
 |---|---|---|---|
-| 0 | PROCEED | the count read is not below R, and it is under 3 or a counted round is clean (`f1:0 f2:0 f3:0 f4:0 med:0 low:0`) | dispatch the round per section 5 |
+| 0 | PROCEED | the count read is not below R, and it is under 3 or a counted round is clean (`f1:0 f2:0 f3:0 f4:0 med:0 low:0`, or a round that merged with its lows filed, `med:0`, at least one low and the trailing ` merged:lows-filed` of `pr-review-merge` step 4a item 5, ugcportal-kwxh) | dispatch the round per section 5 |
 | 1 | STOP | 3+ passes, not below R, and no counted round clean | do **not** spawn; do the stop below |
 | 2 | UNKNOWN | any multi-PR signal (above); or `tokens_impl_passes` absent, empty, not a whole number, or below R; or the bead could not be read | do what the message names and re-run; on a multi-PR bead, decide by hand (above); do **not** treat it as zero and carry on |
 

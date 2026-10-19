@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { checkPassBudget, CLEAN_FINDINGS, formatVerdict, main, MULTI_PR_OWNER, parsePrs } from "./check-pass-budget.mjs";
+import { parseFindingsKey } from "./release-cost-report.mjs";
 
 const DIRTY = "f1:1 f2:0 f3:0 f4:0 med:0 low:1";
 const bead = (metadata) => ({ id: "ugcportal-fix", metadata });
@@ -121,6 +122,38 @@ describe("checkPassBudget", () => {
     for (const v of ["clean", "f1:0 f2:0 f3:0 f4:0 med:0 low:00", "f1:0 f2:0 f3:0 f4:0 med:0", ""]) {
       expect(checkPassBudget(bead({ tokens_impl_passes: 3, findings_r1: v })).verdict).toBe("STOP");
     }
+  });
+
+  // ugcportal-kwxh: from round 2 a round whose only findings are lows merges with the lows
+  // filed as beads; pr-review-merge step 4a item 5 records it with a trailing ` merged:lows-filed`.
+  const MERGED_LOWS = "f1:1 f2:0 f3:0 f4:0 med:0 low:1 merged:lows-filed";
+
+  it("K3 (kwxh): three passes and a round that merged with its lows filed print PROCEED, naming that round clean", () => {
+    const r = checkPassBudget(bead({ tokens_impl_passes: 3, findings_r1: DIRTY, findings_r2: MERGED_LOWS }));
+    expect([r.verdict, r.exit]).toEqual(["PROCEED", 0]);
+    expect(r.message).toContain("clean round was recorded (findings_r2)");
+  });
+
+  it("K3 (kwxh): three passes and only low-only rounds that did not merge still print STOP", () => {
+    const r = checkPassBudget(bead({ tokens_impl_passes: 3, findings_r1: DIRTY, findings_r2: DIRTY, findings_r3: "f1:2 f2:0 f3:0 f4:0 med:0 low:2" }));
+    expect([r.verdict, r.exit]).toEqual(["STOP", 1]);
+  });
+
+  it("K3 (kwxh): a merged:lows-filed tag on a round with a medium, an unstated finding or no low is not clean", () => {
+    for (const v of [
+      "f1:1 f2:0 f3:0 f4:0 med:1 low:1 merged:lows-filed",
+      "f1:1 f2:0 f3:0 f4:0 med:0 low:1 unstated:1 merged:lows-filed",
+      "f1:0 f2:0 f3:0 f4:0 med:0 low:0 merged:lows-filed",
+      "f1:1 f2:0 f3:0 f4:0 med:0 low:1 merged:lows",
+      "f1:1 f2:0 f3:0 f4:0 med:0 low:1 merged:lows-filed extra",
+    ]) {
+      expect(checkPassBudget(bead({ tokens_impl_passes: 3, findings_r1: v })).verdict, v).toBe("STOP");
+    }
+  });
+
+  it("K3 (kwxh): every value the budget reads as a merged round parses in release-cost-report", () => {
+    const k = parseFindingsKey(MERGED_LOWS);
+    expect(k).toMatchObject({ med: 0, low: 1, unstated: 0, mergedLowsFiled: true });
   });
 
   it("tolerates extra whitespace in a clean string", () => {

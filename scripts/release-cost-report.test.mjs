@@ -1234,7 +1234,7 @@ describe("findings_rN keys (ugcportal-2jvh)", () => {
   const row = (id) => rows.find((r) => r.id === id);
 
   it("parseFindingsKey reads the six fields, the optional unstated, and rejects everything else as null", () => {
-    expect(parseFindingsKey("f1:2 f2:0 f3:1 f4:0 med:1 low:2")).toEqual({ f1: 2, f2: 0, f3: 1, f4: 0, med: 1, low: 2, unstated: 0 });
+    expect(parseFindingsKey("f1:2 f2:0 f3:1 f4:0 med:1 low:2")).toEqual({ f1: 2, f2: 0, f3: 1, f4: 0, med: 1, low: 2, unstated: 0, mergedLowsFiled: false });
     expect(parseFindingsKey("f1:0 f2:0 f3:0 f4:0 med:0 low:0 unstated:2")).toMatchObject({ unstated: 2 });
     for (const bad of [undefined, null, 3, "", "f1:2 f3:1 med:1 low:2", "f1:a f2:0 f3:0 f4:0 med:0 low:0", "f1:1 f2:0 f3:0 f4:0 med:0 low:0 extra:1"]) expect(parseFindingsKey(bad)).toBeNull();
   });
@@ -1267,6 +1267,14 @@ describe("findings_rN keys (ugcportal-2jvh)", () => {
     buildRows(release, new Map(beads.map((b) => [b.id, b])), shared);
     expect(shared.get(901).rounds[0]).toMatchObject({ medium: 1, low: 1 });
     expect(shared.get(901).rounds[0].source).toBeUndefined();
+  });
+
+  it("K3 (kwxh): a round that merged with its lows filed is parsed from its key, not listed as malformed", () => {
+    expect(parseFindingsKey("f1:1 f2:0 f3:0 f4:0 med:0 low:2 merged:lows-filed")).toEqual({ f1: 1, f2: 0, f3: 0, f4: 0, med: 0, low: 2, unstated: 0, mergedLowsFiled: true });
+    const out = withFindingsKeys(pr(1, [round(1, 0, 2)]), { findings_r1: "f1:1 f2:0 f3:0 f4:0 med:0 low:2 merged:lows-filed" });
+    expect(out.rounds[0]).toMatchObject({ source: "keys", medium: 0, low: 2, stated: true });
+    expect(out.rounds[0].fallbackReason).toBeUndefined();
+    for (const bad of ["f1:1 f2:0 f3:0 f4:0 med:0 low:2 merged:lows", "f1:1 f2:0 f3:0 f4:0 med:0 low:2 merged:lows-filed x"]) expect(parseFindingsKey(bad)).toBeNull();
   });
 
   it("a malformed key falls back to the prose figure and is listed, never read as zeros", () => {
@@ -1440,10 +1448,10 @@ describe("findings_rN keys (ugcportal-2jvh)", () => {
     expect(item5()).not.toMatch(/never clean/);
   });
 
-  it("peom K2: item 5 qualifies a round 4-6 approval's 'no blocking findings': lows may have been deferred", () => {
+  it("peom K2: item 5 qualifies a round 2-6 approval's 'no blocking findings': lows may have been deferred", () => {
     const text = item5();
     expect(text).not.toMatch(/says the round found nothing/);
-    expect(text).toMatch(/round 4-6[^.]*deferred/i);
+    expect(text).toMatch(/round 2-6[^.]*deferred/i);
   });
 
   it("rf5o K1: a zero-finding round in the blocking template with a tool-output bare count never reads clean, so its all-zero key is inconsistent; item 5 says so", () => {
