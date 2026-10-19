@@ -14,7 +14,11 @@
  *     examined beside the advisory counts, pass or fail;
  *   - an allowlist entry has no owner bead, no valid recorded/re-check date
  *     or no reason, or its re-check date has passed;
- *   - an allowlisted id no longer appears (a stale entry nobody removed);
+ *   - an allowlisted id is not collected: the gate collects high and critical
+ *     advisories only, so an entry fails either because the id no longer
+ *     appears in the report (a stale entry nobody removed) or because it still
+ *     appears but below high (the message names the severity found; remove
+ *     the entry, the gate fails until then);
  *   - a high or critical package cannot be traced to any high or critical
  *     GHSA id (an unattributable finding is never waved through).
  *
@@ -86,9 +90,14 @@ export function parseAudit(text) {
   return report;
 }
 
+const RANK = { info: 0, low: 1, moderate: 2, high: 3, critical: 4 };
+const worst = (a, b) => (a === undefined || (RANK[b] ?? -1) > (RANK[a] ?? -1) ? b : a);
+
 /**
- * Map each high or critical GHSA id to { package, severity, affected[] }.
- * `unattributed` lists high/critical packages no such GHSA id reaches.
+ * Map each high or critical GHSA id to { package, severity, affected[] };
+ * severity is the advisory's own. `unattributed` lists high/critical packages
+ * no such GHSA id reaches. `present` maps every GHSA id in the report, at any
+ * severity, to its own (worst) severity; it never changes what blocks.
  */
 export function collectAdvisories(report) {
   const vulns = report.vulnerabilities;
@@ -98,7 +107,7 @@ export function collectAdvisories(report) {
     for (const via of vulns[name]?.via ?? []) {
       if (typeof via === "string" || !via || !BLOCKING.has(via.severity)) continue;
       const id = GHSA.exec(String(via.url ?? ""))?.[0];
-      out.push(id ? canonicalId(id) : `NO-GHSA:${via.source ?? via.title ?? "unknown"}`);
+      out.push({ id: id ? canonicalId(id) : `NO-GHSA:${via.source ?? via.title ?? "unknown"}`, severity: via.severity });
     }
     return out;
   };
@@ -107,12 +116,12 @@ export function collectAdvisories(report) {
   // memo shared between start points), so a cycle cannot leave a partial
   // result behind for a later start point to reuse: see "Cycles" above.
   const advisoriesOf = (name) => {
-    const out = new Set();
+    const out = new Map(); // id -> the advisory's own severity (from its via object)
     const seen = new Set([name]);
     const queue = [name];
     while (queue.length) {
       const cur = queue.shift();
-      for (const id of ownIds(cur)) out.add(id);
+      for (const { id, severity } of ownIds(cur)) out.set(id, worst(out.get(id), severity));
       for (const via of vulns[cur]?.via ?? [])
         if (typeof via === "string" && !seen.has(via)) {
           seen.add(via);
@@ -123,15 +132,23 @@ export function collectAdvisories(report) {
   };
   const advisories = new Map();
   const unattributed = [];
+  // every GHSA id in the report at any severity, for telling "below the gate"
+  // from "not in the report" when an allowlisted id is not collected
+  const present = new Map();
+  for (const v of Object.values(vulns))
+    for (const via of v?.via ?? []) {
+      const raw = typeof via === "string" || !via ? undefined : GHSA.exec(String(via.url ?? ""))?.[0];
+      if (raw) present.set(canonicalId(raw), worst(present.get(canonicalId(raw)), via.severity));
+    }
   for (const [name, v] of Object.entries(vulns)) {
     if (!BLOCKING.has(v?.severity)) continue;
     const ids = advisoriesOf(name);
     if (ids.size === 0) unattributed.push(name);
-    for (const id of ids) {
-      if (!advisories.has(id)) advisories.set(id, { id, package: null, severity: v.severity, affected: [] });
-      const a = advisories.get(id);
-      a.affected.push(name);
-      if (v.severity === "critical") a.severity = "critical";
+    for (const [id, severity] of ids) {
+      // the severity is the advisory's own, never the affected package's: a
+      // package's severity is the worst of all its advisories
+      if (!advisories.has(id)) advisories.set(id, { id, package: null, severity, affected: [] });
+      advisories.get(id).affected.push(name);
     }
   }
   // the owner package is the one carrying the advisory as a `via` object
@@ -142,7 +159,7 @@ export function collectAdvisories(report) {
       const id = raw && canonicalId(raw);
       if (id && advisories.has(id)) advisories.get(id).package = via.name ?? name;
     }
-  return { advisories, unattributed };
+  return { advisories, unattributed, present };
 }
 
 /** Returns an array of problems with the allowlist shape; empty when sound. */
@@ -174,7 +191,7 @@ export function evaluate(report, allowlist, now = new Date()) {
   const errors = validateAllowlist(allowlist, now);
   const lines = [];
   const entries = allowlist?.advisories && typeof allowlist.advisories === "object" ? allowlist.advisories : {};
-  const { advisories, unattributed } = collectAdvisories(report);
+  const { advisories, unattributed, present } = collectAdvisories(report);
   for (const name of unattributed)
     errors.push(`${name}: high or critical but no high/critical GHSA id could be traced to it; it cannot be allowlisted`);
   for (const a of advisories.values()) {
@@ -189,7 +206,12 @@ export function evaluate(report, allowlist, now = new Date()) {
     }
   }
   for (const id of Object.keys(entries))
-    if (!advisories.has(id)) errors.push(`allowlist entry ${id} (${entries[id]?.package ?? "?"}) no longer appears in npm audit; remove the stale entry`);
+    if (!advisories.has(id)) {
+      const who = `allowlist entry ${id} (${entries[id]?.package ?? "?"})`;
+      if (present.has(id))
+        errors.push(`${who} is present in npm audit at ${present.get(id)}, below the high/critical gate; remove the entry (the gate collects high and critical only, so it fails until then)`);
+      else errors.push(`${who} no longer appears in npm audit; remove the stale entry`);
+    }
   return { ok: errors.length === 0, errors, lines };
 }
 

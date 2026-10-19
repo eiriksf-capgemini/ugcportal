@@ -258,3 +258,73 @@ describe("K4: the allowlist accepts by GHSA id, never by package name", () => {
     expect(v.lines.join("\n")).toContain(BRACES);
   });
 });
+
+describe("each advisory is printed with its own severity (ugcportal-1aw4 L4)", () => {
+  // micromatch is critical because of GHSA-dddd; braces carries only the high GHSA-aaaa
+  const DDDD = "GHSA-dddd-eeee-ffff";
+  const mixed = () =>
+    report({
+      micromatch: node("micromatch", ["braces", advisory("micromatch", DDDD, "critical")], "critical"),
+      braces: node("braces", [advisory("braces", SECOND, "high")], "high"),
+    });
+
+  it("K1: a high advisory is not printed as critical because an affected package also carries a critical one", () => {
+    const v = evaluate(mixed(), allow({ [SECOND]: entry(), [DDDD]: entry({ package: "micromatch" }) }), NOW);
+    expect(v.ok).toBe(true);
+    const line = (id) => v.lines.find((l) => l.includes(id));
+    expect(line(SECOND)).toContain(`(braces, high)`);
+    expect(line(DDDD)).toContain(`(micromatch, critical)`);
+  });
+
+  it("K1: the not-in-the-allowlist error carries the advisory's own severity too", () => {
+    const v = evaluate(mixed(), allow({ [DDDD]: entry({ package: "micromatch" }) }), NOW);
+    expect(v.ok).toBe(false);
+    expect(v.errors.join("\n")).toContain(`${SECOND} (braces, high) is not in the allowlist`);
+  });
+
+  it("K3: in a three-package chain with three severities, every printed (pkg, severity) token equals its via object's", () => {
+    const own = { a: ["GHSA-aaaa-aaaa-aaaa", "high"], b: ["GHSA-bbbb-bbbb-bbbb", "critical"], c: ["GHSA-cccc-cccc-cccc", "high"] };
+    const r = report({
+      a: node("a", [advisory("a", own.a[0], own.a[1])], "high"),
+      b: node("b", ["a", advisory("b", own.b[0], own.b[1])], "critical"),
+      c: node("c", ["b", advisory("c", own.c[0], own.c[1])], "critical"),
+    });
+    const v = evaluate(r, allow({}), NOW);
+    const text = v.errors.join("\n");
+    const tokens = [...text.matchAll(/(GHSA-[a-z0-9-]+) \(([^,]+), (\w+)\)/g)];
+    expect(tokens).toHaveLength(3);
+    for (const [, id, pkg, sev] of tokens) {
+      expect(own[pkg][0]).toBe(id);
+      expect(sev).toBe(own[pkg][1]);
+    }
+    const ok = evaluate(r, allow(Object.fromEntries(Object.values(own).map(([id], i) => [id, entry({ package: "abc"[i] })]))), NOW);
+    const printed = [...ok.lines.join("\n").matchAll(/allowlisted (GHSA-[a-z0-9-]+) \(([^,]+), (\w+)\)/g)];
+    expect(printed).toHaveLength(3);
+    for (const [, id, pkg, sev] of printed) expect([id, sev]).toEqual(own[pkg]);
+  });
+});
+
+describe("an allowlisted id the gate does not collect (ugcportal-1aw4 L5, K2)", () => {
+  it("K2: an id still in the report at moderate fails and says it is present, naming the severity", () => {
+    const r = report({ braces: node("braces", [advisory("braces", BRACES, "moderate")], "moderate") });
+    const v = evaluate(r, allow(), NOW);
+    expect(v.ok).toBe(false);
+    const msg = v.errors.join("\n");
+    expect(msg).toContain(`allowlist entry ${BRACES} (braces) is present in npm audit at moderate`);
+    expect(msg).not.toContain("no longer appears");
+  });
+
+  it("K2: an id that is nowhere in the report still says it no longer appears", () => {
+    const r = report({ other: node("other", [advisory("other", SECOND, "high")]) });
+    const v = evaluate(r, allow({ [BRACES]: entry(), [SECOND]: entry({ package: "other" }) }), NOW);
+    expect(v.ok).toBe(false);
+    const msg = v.errors.join("\n");
+    expect(msg).toContain(`allowlist entry ${BRACES} (braces) no longer appears in npm audit`);
+    expect(msg).not.toContain("present in npm audit");
+  });
+
+  it("which severities block is unchanged: a moderate advisory with no entry still passes", () => {
+    const r = report({ braces: node("braces", [advisory("braces", BRACES, "moderate")], "moderate") });
+    expect(evaluate(r, allow({}), NOW).ok).toBe(true);
+  });
+});

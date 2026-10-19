@@ -1,5 +1,5 @@
 {
-  "_comment": "Accepted high or critical npm advisories, keyed by GHSA id, never by package name (ugcportal-1j4j). scripts/check-npm-audit.mjs fails CI on a high or critical advisory missing from this file, on an entry below that no longer appears in `npm audit --json` (remove it), on an entry with no owner bead, a malformed date or a missing reason, and on an entry whose re-check date has passed. Who may accept an advisory is ugcportal-pg85's rule; ownerBead is the hook it refines.",
+  "_comment": "Accepted high or critical npm advisories, keyed by GHSA id, never by package name (ugcportal-1j4j). scripts/check-npm-audit.mjs fails CI on a high or critical advisory missing from this file, on an entry below that is not a high or critical advisory in `npm audit --json` (the gate collects high and critical only: an entry whose id is gone from the report, or whose id is still there at a lower severity, fails, so remove it in both cases), on an entry with no owner bead, a malformed date or a missing reason, and on an entry whose re-check date has passed. Who may accept an advisory is ugcportal-pg85's rule; ownerBead is the hook it refines.",
   "advisories": {
     "GHSA-vfj7-8cjw-p6xm": {
       "package": "braces",
