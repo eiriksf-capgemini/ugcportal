@@ -1,9 +1,10 @@
 /**
- * Tests for scripts/bd-guard.mjs (ugcportal-vu49). Every case runs the real CLI
- * with hook JSON on stdin. The two BLESSED skill-file fixtures (cut-release and
- * review-standards) are loaded by content anchor (scripts/bd-guard-fixtures.mjs);
- * the pr-review-merge 5a block is sliced directly from the skill file by its
- * heading in the test itself, never by line number.
+ * Tests for scripts/bd-guard.mjs (ugcportal-vu49). The CLI cases run the real CLI
+ * with hook JSON on stdin; the cases in the "fixture loader" block test the
+ * loader module (scripts/bd-guard-fixtures.mjs) directly, with no hook call.
+ * The two BLESSED inline-heredoc fixtures are pinned copies loaded by content
+ * anchor (scripts/bd-guard-fixtures.mjs); the pr-review-merge 5a block is sliced
+ * directly from the skill file by its heading in the test itself, never by line number.
  */
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -26,12 +27,84 @@ const hook = (command) => run(JSON.stringify({ tool_name: "Bash", tool_input: { 
 
 const skill = (name) => path.join(root, ".claude", "skills", name, "SKILL.md");
 const ACC_ANCHOR = '--acceptance="$(cat "$scratch/acc.md")"';
+// ugcportal-d7fm: cut-release 7a and review-standards section 1 now file beads through quoted
+// files, so neither skill carries an inline `"$(cat <<'EOF' ... )"` block any more. These two
+// pinned copies of the former blocks keep the guard's blessed-heredoc allowance and the loader
+// exercised; the live blocks are checked in the K4 cases below.
+const PINNED = fs.mkdtempSync(path.join(os.tmpdir(), "bd-guard-pinned-"));
+const pin = (name, text) => {
+  const f = path.join(PINNED, name);
+  fs.writeFileSync(f, text);
+  return f;
+};
 const BLESSED = [
-  ["cut-release", skill("cut-release"), "bd create \"$(cat <<'BD_EOF'"],
+  [
+    "cut-release",
+    pin(
+      "cut-release.md",
+      String.raw`scratch=$(mktemp -d); trap 'rm -rf "$scratch"' EXIT
+cat > "$scratch/desc.md" <<'BD_EOF'
+As a <role>, I want <capability>, so that <benefit>.
+
+In scope: ...
+Out of scope: ...
+BD_EOF
+cat > "$scratch/acc.md" <<'BD_EOF'
+K1: Given ..., when ..., <outcome>.
+Verified by: ...
+
+K2: Following should never happen: ...
+Verified by: ...
+BD_EOF
+cat > "$scratch/notes.md" <<'BD_EOF'
+Premise verified <date>: <command or file checked>.
+BD_EOF
+
+bd create "$(cat <<'BD_EOF'
+<title>
+BD_EOF
+)" --type=task --priority=<n> \
+  --body-file "$scratch/desc.md" \
+  --acceptance="$(cat "$scratch/acc.md")" \
+  --notes="$(cat "$scratch/notes.md")" \
+  --deps="discovered-from:<retrospective-bead-id>" \
+  --metadata='{"cc_type":"chore","cc_scope":"process","model":"sonnet","model_effort":"high","model_why":"...","retro_source":"release-cost-v0.5.0-vs-v0.6.0.md#2"}'
+`,
+    ),
+    "bd create \"$(cat <<'BD_EOF'",
+  ],
   // pr-review-merge step 5a no longer uses the inline `"$(cat <<'BD_EOF' ... )"` form
   // (unsafe on bash 3.2, ugcportal-nr72); its block is tested below instead.
-  ["review-standards", skill("review-standards"), "so use quoted heredocs, which expand nothing"],
+  [
+    "review-standards",
+    pin(
+      "review-standards.md",
+      String.raw`so use quoted heredocs, which expand nothing, and pass the description on stdin:
+
+bd create --type=bug --priority=3 --title="$(cat <<'EOF'
+<title>
+EOF
+)" --deps=discovered-from:<parent-bead-id> --body-file - <<'EOF'
+Found during review of <PR>. ...
+EOF
+`,
+    ),
+    "so use quoted heredocs, which expand nothing",
+  ],
 ];
+// The live file-form blocks (ugcportal-d7fm): the text after each anchor up to its bash fence.
+const LIVE = {
+  "cut-release": [skill("cut-release"), "So write every free-text field through a **quoted** heredoc"],
+  "review-standards": [skill("review-standards"), "File the new bead with a `discovered-from` edge"],
+};
+function liveBlock(label) {
+  const [file, anchor] = LIVE[label];
+  const text = fs.readFileSync(file, "utf8");
+  const at = text.indexOf(anchor);
+  expect(at, `${label} anchor`).toBeGreaterThan(-1);
+  const open = text.indexOf("```bash\n", at) + "```bash\n".length;
+  return text.slice(open, text.indexOf("\n```", open) + 1);
+}
 
 describe("refuses (K1, K2)", () => {
   it("K1: bd update --notes names --append-notes", () => {
@@ -99,12 +172,19 @@ describe("allows (K2 must-pass, K4)", () => {
     expect(hook('bd create --description "a \\`b\\` c"').code).toBe(0);
   });
   for (const [label, file, anchor] of BLESSED) {
-    it(`K4: blessed heredoc as used in ${label}/SKILL.md`, () => {
+    it(`K4: the pinned former blessed heredoc of ${label} still passes the guard, and the live ${label}/SKILL.md snippet uses the file-based form`, () => {
+      // first half: the pinned temp-dir copy of the former inline block, not the skill
       const text = loadBlessedBlock(file, anchor);
       expect(text).toContain("$(cat <<'");
       const r = hook(text);
       expect(r.stderr).toBe("");
       expect(r.code).toBe(0);
+      // second half: the live skill's file-based block carries no inline heredoc and is allowed raw and filled
+      const live = liveBlock(label);
+      expect(live).not.toContain("$(cat <<");
+      expect(live).toContain('--metadata @"$scratch/meta.json"');
+      expect(hook(live).code).toBe(0);
+      expect(hook(live.replace(/<fill: [^>]*>/g, "x")).code).toBe(0);
     });
   }
 });
@@ -314,7 +394,7 @@ describe("fixture loader (ugcportal-ucnf)", () => {
     fs.writeFileSync(f, text);
     return f;
   };
-  const orig = fs.readFileSync(cutRelease, "utf8");
+  const orig = fs.readFileSync(BLESSED[0][1], "utf8");
 
   it("K1: 20 lines prepended leave every loaded fixture byte-identical", () => {
     const shifted = write("shifted.md", "filler line\n".repeat(20) + orig);

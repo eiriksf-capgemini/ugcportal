@@ -20,6 +20,12 @@ import { REFUSAL_EFFECT } from "@/lib/sign-in-policy";
  * So the doc is checked against the schema rather than against the memory of
  * whoever last edited it. Add a cascade to prisma/schema.prisma and this
  * fails until the runbook says so.
+ *
+ * The file also reads env.example: the ADMIN_BOOTSTRAP_EMAILS section must
+ * describe the address the provider asserts on the sign-in (stored
+ * User.email only as the fallback outside one), and must not carry the stale
+ * "stored on the user row" wording, however the comment is wrapped
+ * (ugcportal-42yh).
  */
 
 const REPO_ROOT = path.resolve(__dirname, "../..");
@@ -86,6 +92,7 @@ function documentedCascades(doc: string): string[] {
 
 const schema = read("prisma/schema.prisma");
 const doc = read("docs/access-control.md");
+const envExample = read("env.example");
 
 describe("the delete-cascade runbook matches the schema", () => {
   it("finds cascades in the schema at all", () => {
@@ -248,5 +255,70 @@ describe("the revocation runbook matches the code", () => {
     // (PR #91 review, round 3, finding 6).
     expect(revocationSection).toMatch(/\*\*Keep the logs if you want a record/);
     expect(revocationSection).toMatch(/the \*\*only\*\* trace/);
+  });
+});
+
+/**
+ * ugcportal-42yh K2: env.example's ADMIN_BOOTSTRAP_EMAILS section must
+ * consistently describe which address the promotion matches against. It
+ * currently describes the provider's asserted address (the one they arrive
+ * with), with the stored user.email as fallback only. It used to describe the
+ * stored address, and two paragraphs briefly contradicted each other when
+ * that changed.
+ *
+ * The test below guards against that contradiction recurring: if the section
+ * ever again contains the phrase "stored on the user row" (the marker of the
+ * stale description) while it is supposed to describe the asserted address, it
+ * will fail and point the next reader to the bead.
+ */
+
+const ADMIN_BOOTSTRAP_SECTION_START = "# First-admin bootstrap (ugcportal-lu7)";
+const ADMIN_BOOTSTRAP_SECTION_END = "ADMIN_BOOTSTRAP_EMAILS=";
+
+/**
+ * The ADMIN_BOOTSTRAP_EMAILS section of env.example. It starts with the
+ * section header and ends with the variable assignment.
+ */
+function adminBootstrapSection(env: string): string {
+  const start = env.indexOf(ADMIN_BOOTSTRAP_SECTION_START);
+  if (start === -1) {
+    return "";
+  }
+  const end = env.indexOf(ADMIN_BOOTSTRAP_SECTION_END, start);
+  if (end === -1) {
+    return "";
+  }
+  return env.slice(start, end + ADMIN_BOOTSTRAP_SECTION_END.length);
+}
+
+/** Strip each line's leading "#", join with single spaces, collapse whitespace. */
+function normaliseComment(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => line.replace(/^\s*#/, "").trim())
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+describe("env.example ADMIN_BOOTSTRAP_EMAILS section consistency", () => {
+  const section = adminBootstrapSection(envExample);
+
+  it("has the section at all", () => {
+    expect(section.length).toBeGreaterThan(0);
+  });
+
+  it("does not contain the stale phrase 'stored on the user row', however wrapped", () => {
+    // ugcportal-42yh: the old description used this phrase. The section is
+    // hard-wrapped and "# "-prefixed, so a rewrap can split the phrase across
+    // lines; normalise to one line of single-spaced prose before matching.
+    expect(normaliseComment(section)).not.toMatch(/stored on the user row/i);
+  });
+
+  it("still describes the address the provider asserts", () => {
+    // A tripwire that the section talks about assertion at all. It does not
+    // discriminate old text from new (the old text said "asserts" too); the
+    // stale-phrase test above is the guard.
+    expect(normaliseComment(section)).toMatch(/asserts/i);
   });
 });
