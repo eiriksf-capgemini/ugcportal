@@ -23,7 +23,8 @@
  * commit on `main` since; or a path it declares does not exist at
  * origin/main's HEAD (ugcportal-ul2j). Any git failure while asking
  * (`git rev-list` for the counts, `git log` for the touching commits, `git
- * merge-base` for the ordering) fails the bead closed, as not measured.
+ * diff` for a merge's result against the premise, `git merge-base` for the
+ * ordering) fails the bead closed, as not measured.
  * `PREMISE_FRESHNESS_COST`'s comment gives the rules in the order the check
  * applies them.
  *
@@ -182,8 +183,8 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
  *      that can still differ -- ordering them by count judged the lower one
  *      with its own narrower declaration and passed a stale premise (round
  *      6, M1). Ordering by ancestry does not depend on main being linear.
- *      Any git failure (`git rev-list`, `git log`, `git merge-base`) fails the
- *      bead closed, as not measured. The cost is deliberate: a bead whose
+ *      Any git failure (`git rev-list`, `git log`, `git diff`, `git
+ *      merge-base`) fails the bead closed, as not measured. The cost is deliberate: a bead whose
  *      description still carries an old typo'd, pruned or off-main premise
  *      fails until that line is re-verified, even when its notes hold a
  *      sound, fresh one -- re-verifying those lines across the backlog is
@@ -343,10 +344,10 @@ export function findPremiseLines(notes, description = "") {
   for (const [field, text] of [["description", String(description || "")], ["notes", String(notes || "")]]) {
     const lines = text.split("\n");
     for (let i = 0; i < lines.length; i++) {
-      if (!isPremiseStatementStart(lines[i], lines[i + 1] || "")) continue;
+      if (!isPremiseStatementStart(lines, i)) continue;
       const own = shasIn(lines[i]);
       const next = lines[i + 1] || "";
-      const wrapped = own.length === 0 && !isPremiseStatementStart(next) && !DEPENDS_LINE_RE.test(next) ? LEADING_SHA_RE.exec(next) : null;
+      const wrapped = own.length === 0 && !isPremiseStatementStart(lines, i + 1) && !DEPENDS_LINE_RE.test(next) ? LEADING_SHA_RE.exec(next) : null;
       const statement = wrapped ? `${lines[i].trim()} ${next.trim()}` : lines[i].trim();
       out.push({ field, line: statement, shas: wrapped ? [wrapped[1]] : own, depends: findDeclaration(lines, i) });
     }
@@ -377,24 +378,72 @@ const PREMISE_LABEL_RE = /(?:^|[.:;!?,(\[])[\s`*_>#(\[-]*premise(?![\w-])[\s,(]*
 /** A line that OPENS with a commit token, after any quoting or list markup: the hard-wrap continuation. */
 const LEADING_SHA_RE = /^[\s`*_>(\[-]*([0-9a-f]{7,40})\b/;
 
-/** the verb, then (through quote/colon markup) the word `line`, not `line-by-line`, `line by line`, `line 12`, `line #12`, `line L12` */
-const FORM_MENTION_RE = /premise[\s,(]*(?:re-?)?(?:verified|checked|measured|confirmed)[\s`*_:)]*lines?\b(?!\s*-\s*by\b|\s+by\b|\s+#?L?\d)/i;
+/**
+ * Anchored at the word `premise`: the verb, then (through quote/colon
+ * markup) the word `line`/`lines`, NOT followed by `by` or `-by`
+ * (`line by line`, `line-by-line`) or by a number (`line 12`, `line #12`,
+ * `line L12`, `lines 10-20`). Tested twice, and both must match: against
+ * the label line alone (so the word `line` itself is on the label line --
+ * a label whose `line` a wrap moved to the next line is not excluded by
+ * this), and against the statement's wrapped text joined with spaces (so a
+ * `by` or a number that a hard wrap moved to the next line still keeps the
+ * statement).
+ */
+const FORM_MENTION_RE = /^premise[\s,(]*(?:re-?)?(?:verified|checked|measured|confirmed)[\s`*_:)]*lines?\b(?!\s*-\s*by\b|\s+by\b|\s+#?L?\d)/i;
+/** a commit-shaped token anywhere (not global, so `.test` keeps no state) */
+const ANY_SHA_RE = /\b[0-9a-f]{7,40}\b/;
 
 /**
- * A line that names the bead form ("Premise verified line, metadata") rather
- * than making a verification. It is a mention only when it also names no
- * commit, on its own line or as the leading token of the next: a line that
- * names a commit is a statement whatever else it says, so the exclusion cannot
- * hide one (ugcportal-jtyl).
+ * The text a statement starting at `lines[i]` could run over: that line from
+ * its label onwards, then each following line up to (not including) a blank
+ * line, a line carrying a premise label (a statement or a mention: either
+ * starts a new note, and a commit on or after it is that note's) or a
+ * `Premise depends on:` line. Stopping at every labelled line, not only at
+ * the next statement, keeps the test below from needing to know whether
+ * that later line is a mention itself.
  */
-function isFormMention(line, next = "") {
+function wrappedStatement(lines, i) {
+  const line = lines[i] || "";
   const label = PREMISE_LABEL_RE.exec(line);
-  if (!label || !FORM_MENTION_RE.test(line.slice(label.index))) return false;
-  return shasIn(line).length === 0 && !LEADING_SHA_RE.test(next);
+  const parts = [line.slice(label ? label.index : 0)];
+  for (let k = i + 1; k < lines.length; k++) {
+    const l = lines[k];
+    if (l.trim() === "" || PREMISE_LABEL_RE.test(l) || DEPENDS_LINE_RE.test(l)) break;
+    parts.push(l);
+  }
+  return parts.map((p) => p.trim()).join(" ");
 }
 
-function isPremiseStatementStart(line, next = "") {
-  return PREMISE_LABEL_RE.test(line) && !DEPENDS_LINE_RE.test(line) && !isFormMention(line, next);
+/**
+ * Whether the labelled line `lines[i]` names the bead form ("Premise verified
+ * line, metadata") rather than making a verification. It is a mention only
+ * when the label is followed, on its own line, by `line`/`lines` that --
+ * read over its whole wrapped statement (`wrappedStatement`) -- is not
+ * `line by line`, `line-by-line` or a line number, AND no commit-shaped token appears
+ * anywhere in that text -- not on the label line, not at the start of the
+ * next, not later in any wrapped line. A statement that names a commit
+ * anywhere in its wrapped lines is therefore never excluded; one that names
+ * none is excluded only when it says `line` the way the form does, and every
+ * other one is kept and fails as naming no commit (ugcportal-jtyl; PR #324
+ * review rounds 1 and 2). Keeping a statement does not make a commit later in
+ * its wrapped lines its own: `findPremiseLines` still reads only a commit on
+ * the label line or opening the next, so a statement whose commit sits later
+ * than that names no commit and fails closed, as it does on main.
+ */
+function isFormMention(lines, i) {
+  const line = lines[i] || "";
+  const label = PREMISE_LABEL_RE.exec(line);
+  if (!label) return false;
+  const fromWord = (t) => t.slice(Math.max(0, t.toLowerCase().indexOf("premise")));
+  if (!FORM_MENTION_RE.test(fromWord(line.slice(label.index)))) return false;
+  const text = wrappedStatement(lines, i);
+  if (!FORM_MENTION_RE.test(fromWord(text))) return false;
+  return !ANY_SHA_RE.test(text);
+}
+
+function isPremiseStatementStart(lines, i) {
+  const line = lines[i] || "";
+  return PREMISE_LABEL_RE.test(line) && !DEPENDS_LINE_RE.test(line) && !isFormMention(lines, i);
 }
 
 /**
@@ -441,7 +490,7 @@ function shasIn(line) {
  */
 export function findDeclaration(lines, start) {
   for (let j = start; j < lines.length; j++) {
-    if (j > start && (lines[j].trim() === "" || isPremiseStatementStart(lines[j]))) break;
+    if (j > start && (lines[j].trim() === "" || isPremiseStatementStart(lines, j))) break;
     const m = DEPENDS_RE.exec(lines[j]);
     if (!m) continue;
     let raw = lines[j].slice(m.index + m[0].length).trim();
@@ -939,10 +988,12 @@ export const CHECKS = [
       return { ok: true, detail: `${where} declares \`Premise depends on: none\`${decl.reason ? ` ${decl.reason}` : ""}; no merge makes it stale${judgedNote ? `.${judgedNote}` : ""}` };
     }
     const touching = behind === 0 ? [] : ctx.git.commitsTouching(full, decl.paths);
-    if (touching === null) {
+    if (!Array.isArray(touching)) {
+      // `{failed}` from makeGitContext names the command; anything else that is not a list is a failure too
+      const what = touching && typeof touching.failed === "string" ? touching.failed : `\`git log\`/\`git diff\` over ${full.slice(0, 7)}..${ctx.headShort}`;
       return {
         ok: false,
-        detail: `${where}: \`git log\` over ${full.slice(0, 7)}..${ctx.headShort} failed, so whether it touched ${decl.paths.join(", ")} was not measured.${judgedNote} ${PREMISE_FRESHNESS_COST}`,
+        detail: `${where}: ${what} failed, so whether it touched ${decl.paths.join(", ")} was not measured.${judgedNote} ${PREMISE_FRESHNESS_COST}`,
       };
     }
     if (touching.length > 0) {
@@ -1209,13 +1260,14 @@ function git(args, repoDir) {
 /**
  * The git questions this script asks, behind an interface so the tests can
  * answer them from a fixture instead of needing a repo with a particular
- * history.
+ * history. `run` is the git runner, injectable so a test can fail one git
+ * command and leave the others real.
  */
-export function makeGitContext(headOverride, repoDir = REPO_ROOT) {
+export function makeGitContext(headOverride, repoDir = REPO_ROOT, run = git) {
   let head = headOverride;
   if (!head) {
     try {
-      head = git(["rev-parse", "origin/main"], repoDir);
+      head = run(["rev-parse", "origin/main"], repoDir);
     } catch {
       throw new Error(
         `git could not resolve origin/main in ${repoDir}. Run \`git fetch origin main\` first, or pass --head <sha>. ` +
@@ -1232,7 +1284,7 @@ export function makeGitContext(headOverride, repoDir = REPO_ROOT) {
       if (cache.has(sha)) return cache.get(sha);
       let full = null;
       try {
-        full = git(["rev-parse", "--verify", "--quiet", `${sha}^{commit}`], repoDir) || null;
+        full = run(["rev-parse", "--verify", "--quiet", `${sha}^{commit}`], repoDir) || null;
       } catch {
         full = null;
       }
@@ -1243,7 +1295,7 @@ export function makeGitContext(headOverride, repoDir = REPO_ROOT) {
     commitsAhead(full) {
       if (full === head) return 0;
       try {
-        return Number(git(["rev-list", "--count", `${full}..${head}`], repoDir));
+        return Number(run(["rev-list", "--count", `${full}..${head}`], repoDir));
       } catch {
         return Infinity;
       }
@@ -1256,7 +1308,7 @@ export function makeGitContext(headOverride, repoDir = REPO_ROOT) {
      */
     isAncestor(a, b) {
       try {
-        git(["merge-base", "--is-ancestor", a, b], repoDir);
+        run(["merge-base", "--is-ancestor", a, b], repoDir);
         return true;
       } catch (e) {
         return e && e.status === 1 ? false : null;
@@ -1270,16 +1322,18 @@ export function makeGitContext(headOverride, repoDir = REPO_ROOT) {
     commitsNotOnMain(full) {
       if (full === head) return 0;
       try {
-        return Number(git(["rev-list", "--count", `${head}..${full}`], repoDir));
+        return Number(run(["rev-list", "--count", `${head}..${full}`], repoDir));
       } catch {
         return Infinity;
       }
     },
     /**
      * The commits in `full..HEAD` that touched any of `paths`, oldest first,
-     * each with the files under those paths it touched; null when git
-     * failed, so an error fails closed instead of reading as "touched
-     * nothing". A merge commit is diffed against its first parent
+     * each with the files under those paths it touched; when git failed,
+     * `{failed}` naming the command that did (`git log` over the range, or
+     * `git diff` of the premise against a merge), so an error fails closed
+     * instead of reading as "touched nothing" and the bead's detail names
+     * the command that actually failed. A merge commit is diffed against its first parent
      * (`--diff-merges=first-parent`; `--name-only` alone prints no files for
      * a merge). One that shows no declared file there is dropped only when
      * its RESULT does not differ from the premise commit on a declared path
@@ -1297,8 +1351,9 @@ export function makeGitContext(headOverride, repoDir = REPO_ROOT) {
      */
     commitsTouching(full, paths) {
       if (paths.length === 0) return [];
+      let failed = `\`git log\` over ${full.slice(0, 7)}..${head.slice(0, 7)}`;
       try {
-        const out = git(
+        const out = run(
           ["--literal-pathspecs", "log", "--reverse", "--full-history", "--no-renames", "--diff-merges=first-parent", "--format=%x00%H", "--name-only", `${full}..${head}`, "--", ...paths],
           repoDir,
         );
@@ -1320,7 +1375,8 @@ export function makeGitContext(headOverride, repoDir = REPO_ROOT) {
             kept.push(c);
             continue;
           }
-          const differs = git(["--literal-pathspecs", "diff", "--name-only", "--no-renames", full, c.sha, "--", ...paths], repoDir)
+          failed = `\`git diff\` of ${full.slice(0, 7)} against merge ${c.sha.slice(0, 7)}`;
+          const differs = run(["--literal-pathspecs", "diff", "--name-only", "--no-renames", full, c.sha, "--", ...paths], repoDir)
             .split("\n")
             .map((l) => l.trim())
             .filter((f) => f && !named.has(f));
@@ -1328,13 +1384,13 @@ export function makeGitContext(headOverride, repoDir = REPO_ROOT) {
         }
         return kept;
       } catch {
-        return null;
+        return { failed };
       }
     },
     /** whether `p` names a file or directory in HEAD's tree */
     pathExists(p) {
       try {
-        git(["cat-file", "-e", `${head}:${p}`], repoDir);
+        run(["cat-file", "-e", `${head}:${p}`], repoDir);
         return true;
       } catch {
         return false;

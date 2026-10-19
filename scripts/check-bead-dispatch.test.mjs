@@ -996,7 +996,7 @@ describe("ul2j: premise freshness is scoped by the paths the premise declares", 
       resolveCommit: (sha) => sha.padEnd(40, "0"),
       commitsAhead: () => 3,
       commitsNotOnMain: () => 0,
-      commitsTouching: () => null,
+      commitsTouching: () => ({ failed: "`git log` over abcdefa..fffffff" }),
       pathExists: () => true,
     };
     const result = validateBead(completeBead({ notes: premise(0, "src/lib/a.ts") }), { git, headShort: "fffffff" });
@@ -1006,9 +1006,11 @@ describe("ul2j: premise freshness is scoped by the paths the premise declares", 
     expect(fresh.detail).toContain("was not measured");
   });
 
-  it("makeGitContext.commitsTouching returns null, not an empty list, when git fails", () => {
+  it("makeGitContext.commitsTouching returns {failed} naming `git log`, not an empty list, when git fails", () => {
     const ctx = makeGitContext(c[6], pr);
-    expect(ctx.commitsTouching("deadbeef".repeat(5), ["src/lib/a.ts"])).toBeNull();
+    const failed = ctx.commitsTouching("deadbeef".repeat(5), ["src/lib/a.ts"]);
+    expect(Array.isArray(failed)).toBe(false);
+    expect(failed.failed).toBe(`\`git log\` over deadbee..${c[6].slice(0, 7)}`);
     expect(ctx.commitsTouching(c[0], ["src/lib/a.ts"])).toEqual([{ sha: c[1], files: ["src/lib/a.ts"] }]);
     expect(ctx.pathExists("src/app/[id]")).toBe(true);
     expect(ctx.pathExists("src/lib/b.ts")).toBe(false);
@@ -2715,5 +2717,112 @@ describe("ugcportal-zoee jtyl: a mention of the premise form is not a statement,
     ]) {
       expect(findPremiseLines("", text).length, text).toBe(0);
     }
+  });
+  // --- fix round 2 (PR #324 review round 2): the mention test reads the whole wrapped statement ---
+
+  /** an older statement at c0 declaring README.md (fresh), then a newer one at c1 declaring src/lib/c.ts (touched by c6) */
+  const twoStatements = (newer) => `Premise verified 2026-10-19 at origin/main ${c[0]} by reading the code.\nPremise depends on: README.md\n${newer}\nPremise depends on: src/lib/c.ts`;
+
+  it("round 2 M1: a statement whose commit a hard wrap moved later on the next line is still read, so the older one is never judged in its place", () => {
+    for (const newer of [
+      `Premise verified lines\n10-20 of src/lib/c.ts at origin/main ${c[1]} by reading them.`,
+      `Premise checked line\nby line at origin/main ${c[1]}.`,
+      `Premise verified lines of src/lib/c.ts by reading them at\norigin/main ${c[1]}.`,
+    ]) {
+      expect(findPremiseLines(twoStatements(newer), "").length, newer).toBe(2);
+      const { res, line } = run({ ...completeBead(), notes: twoStatements(newer) });
+      expect(res.status, newer).toBe(1);
+      expect(line, newer).toContain("the notes' last premise statement names no commit");
+      expect(line, newer).not.toContain(`premise verified at ${c[0].slice(0, 7)}`);
+    }
+  });
+
+  it("round 2 M2: a newer statement naming no commit but saying line by line / line-by-line / a line number fails closed, on one line or wrapped", () => {
+    for (const newer of [
+      "Premise verified line by line on 2026-10-18 against the current code.",
+      "Premise verified line-by-line on 2026-10-18 against the current code.",
+      "Premise verified line 12 on 2026-10-18 against the current code.",
+      "Premise verified line #12 on 2026-10-18 against the current code.",
+      "Premise verified line L12 on 2026-10-18 against the current code.",
+      "Premise checked line\nby line on 2026-10-18 against the current code.",
+      "Premise verified lines\n10-20 on 2026-10-18 against the current code.",
+    ]) {
+      expect(findPremiseLines(twoStatements(newer), "").length, newer).toBe(2);
+      const { res, line } = run({ ...completeBead(), notes: twoStatements(newer) });
+      expect(res.status, newer).toBe(1);
+      expect(line, newer).toContain("the notes' last premise statement names no commit");
+    }
+  });
+
+  it("round 2: a wrapped mention of the form that names no commit anywhere is still not a statement", () => {
+    for (const text of [
+      "In scope: user story, a guardrail K, Premise verified line,\nmetadata, and nothing else.",
+      "In scope: user story, a guardrail K, `Premise verified:` line, metadata, and\nnothing else at all.",
+    ]) {
+      expect(findPremiseLines("", text).length, text).toBe(0);
+    }
+    // the exclusion never widens past the label line: a label whose `line` a wrap moved down stays a statement (and names no commit)
+    expect(findPremiseLines("", "In scope: a guardrail K, `Premise verified:`\nline, metadata.").map((st) => st.shas)).toEqual([[]]);
+    // a blank line ends the wrapped statement: a commit in the next paragraph is not the mention's
+    expect(findPremiseLines("", `a guardrail K, Premise verified line, metadata.\n\nPremise verified 2026-10-19 at ${c[0]}.`).map((st) => st.shas)).toEqual([[c[0]]]);
+  });
+});
+
+describe("ugcportal-zoee (PR #324 round 2 L2): a failed `git diff` in commitsTouching is named as `git diff`", { timeout: 60_000 }, () => {
+  let dir;
+  let c0;
+  let merge;
+  beforeAll(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "zoee-diff-"));
+    const g = (args) => execFileSync("git", args, { cwd: dir, encoding: "utf8" }).trim();
+    g(["init", "-q", "-b", "main"]);
+    g(["config", "user.email", "test@example.com"]);
+    g(["config", "user.name", "Test"]);
+    fs.writeFileSync(path.join(dir, "x.ts"), "x v0\n");
+    fs.writeFileSync(path.join(dir, "o.txt"), "o v0\n");
+    g(["add", "-A"]);
+    g(["commit", "-q", "-m", "c0"]);
+    c0 = g(["rev-parse", "HEAD"]);
+    g(["checkout", "-q", "-b", "side"]);
+    fs.writeFileSync(path.join(dir, "x.ts"), "x side\n");
+    g(["commit", "-q", "-am", "s1"]);
+    g(["checkout", "-q", "main"]);
+    fs.writeFileSync(path.join(dir, "o.txt"), "o v1\n");
+    g(["commit", "-q", "-am", "c1"]);
+    g(["merge", "-q", "-s", "ours", "-m", "m ours", "side"]);
+    merge = g(["rev-parse", "HEAD"]);
+  }, 30_000);
+  afterAll(() => {
+    if (dir) fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const realGit = (args, cwd) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+
+  it("returns {failed} naming `git diff` and the merge when only the diff fails, and the list when nothing fails", () => {
+    const failingDiff = (args, cwd) => {
+      if (args.includes("diff")) throw Object.assign(new Error("injected git diff failure"), { status: 128 });
+      return realGit(args, cwd);
+    };
+    expect(makeGitContext(merge, dir, failingDiff).commitsTouching(c0, ["x.ts"])).toEqual({ failed: `\`git diff\` of ${c0.slice(0, 7)} against merge ${merge.slice(0, 7)}` });
+    const listed = makeGitContext(merge, dir).commitsTouching(c0, ["x.ts"]);
+    expect(Array.isArray(listed)).toBe(true);
+    expect(listed.map((x) => x.files)).toEqual([["x.ts"]]);
+  });
+
+  it("the premise-fresh detail names the command that failed", () => {
+    const git = {
+      head: "f".repeat(40),
+      headShort: "fffffff",
+      resolveCommit: (sha) => sha.padEnd(40, "0"),
+      commitsAhead: () => 3,
+      commitsNotOnMain: () => 0,
+      commitsTouching: () => ({ failed: "`git diff` of abcdefa against merge 1234567" }),
+      pathExists: () => true,
+    };
+    const notes = `Premise verified 2026-10-19 at origin/main ${"abcdefa".padEnd(40, "0")} by reading the code.\nPremise depends on: x.ts`;
+    const fresh = validateBead(completeBead({ notes }), { git, headShort: "fffffff" }).results.find((r) => r.id === "premise-fresh");
+    expect(fresh.ok).toBe(false);
+    expect(fresh.detail).toContain("`git diff` of abcdefa against merge 1234567 failed");
+    expect(fresh.detail).not.toContain("`git log`");
+    expect(fresh.detail).toContain("was not measured");
   });
 });

@@ -96,7 +96,7 @@ it does not depend on `main` being linear. It fails the bead when:
   ancestor of the other (they sit on different sides of a merge commit), so
   the two latest statements cannot be ordered on this history — re-verify
   against `origin/main`'s HEAD and append one statement there;
-- any git failure (`git rev-list`, `git log`, `git merge-base`) while the
+- any git failure (`git rev-list`, `git log`, `git diff`, `git merge-base`) while the
   gate measures — the counts, the touching commits or the ordering — fails
   the bead closed, as not measured;
 - a commit on `origin/main` since the judged premise touched a declared path
