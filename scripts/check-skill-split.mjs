@@ -18,9 +18,11 @@
  *
  * A "sentence" is a unit of the pinned text: each non-empty line of a fenced
  * code block, each table row, and otherwise each sentence of a paragraph or
- * list item, split after `.`, `!` or `?` followed by whitespace. Splitting
- * finer than a grammarian would only makes the check stricter in coverage
- * (more, shorter units checked); it cannot make a dropped sentence pass.
+ * list item, split after `.`, `!` or `?` followed by whitespace. That splits
+ * finer than a grammarian would, which checks more, shorter units; the cost
+ * is that a very short unit can also match the same words somewhere else, so
+ * a dropped fragment of a few words passes when its exact text survives in
+ * another place.
  *
  * It also checks the other direction the split could fail in (K3): every
  * `reference/*.md` file is linked from `SKILL.md` at least once, by a markdown
@@ -129,7 +131,7 @@ function referenceLinks(text) {
 
 /**
  * @param {{oldText: string, skillText: string|null, references: Record<string, string>}} input
- *   references is keyed by path relative to the skill directory ("reference/x.md").
+ *   references is keyed by path relative to the skill directory, e.g. "reference/<name>.md".
  */
 export function checkSplit({ oldText, skillText, references }) {
   const units = splitUnits(oldText);

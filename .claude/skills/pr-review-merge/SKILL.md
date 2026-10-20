@@ -52,7 +52,7 @@ gh api -X POST repos/:owner/:repo/git/refs \
 gh api repos/:owner/:repo/git/ref/review-locks/pr-<n> --jq .object.sha
 ```
 
-- 422 at step 2, or another sha at step 3: **stand down.** Post nothing, stamp nothing, skip step 4, report "another `pr-review-merge` run holds the lock on PR #`<n>`; no round was consumed". First read the holder's date: more than **60 minutes** old, delete the ref and retry **once**.
+- 422 at step 2, or another sha at step 3: **stand down.** Post nothing, stamp nothing, skip step 4, report "another `pr-review-merge` run holds the lock on PR #`<n>`; no round was consumed". First read the holder's date: more than **60 minutes** old, delete the ref and retry **once** (a second 422: stand down).
 
 ```bash
 gh api repos/:owner/:repo/git/tags/<sha-from-step-3> --jq '[.tagger.date, .message] | @tsv'
@@ -422,7 +422,7 @@ gh pr view <n> --json mergeStateStatus,mergeable,headRefOid
 
 - `CLEAN`: `headRefOid` must equal `<reviewed-sha>`, the head step 1 printed (`<fix-sha>` after this round's inline-fix commit). Any other head is a push after review: stop. An equal head is merged pinned to it.
 - `UNKNOWN`: re-read once after `sleep 10`, then treat it as any other value. `CONFLICTING`, `DIRTY`, `BLOCKED`, `UNSTABLE` or any other value: not mergeable, stop.
-- **After an inline fix**, before the merge or the label, run the reference's checks; `<fix-sha>` then takes the place of `<reviewed-sha>`. Open only when this round applied an inline fix: [05-merge-readiness](reference/05-merge-readiness.md).
+- **After an inline fix**, before the merge or the label, run the reference's checks; after a fix commit, `<fix-sha>` takes the place of `<reviewed-sha>`. Open only when this round applied an inline fix: [05-merge-readiness](reference/05-merge-readiness.md).
 - **BEHIND**: run the recovery, in order, no step skipped: exactly one `update-branch` pinned to `<reviewed-sha>`, CI green on the new head, and a merge pinned to it only when the PR's own diff is unchanged. Open only when `mergeStateStatus` reads `BEHIND`: [05-merge-readiness](reference/05-merge-readiness.md).
 - **Every stop path** of the readiness read, the recovery and a refused merge: post a follow-up comment saying the merge did not happen and why, release the lock, report. Post no new round marker.
 
