@@ -89,7 +89,7 @@ export const FILE_WINDOW = 100;
  * step 2, which is the authority: change that list first, then this one and
  * its test rows in the same PR.
  */
-const SENSITIVE_PATH_RES = [
+export const SENSITIVE_PATH_RES = [
   /^\.claude\/settings(\.local)?\.json$/,
   /^\.claude\/skills\//,
   /^\.claude\/agents\//,
