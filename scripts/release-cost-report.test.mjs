@@ -1234,7 +1234,7 @@ describe("findings_rN keys (ugcportal-2jvh)", () => {
   const row = (id) => rows.find((r) => r.id === id);
 
   it("parseFindingsKey reads the six fields, the optional unstated, and rejects everything else as null", () => {
-    expect(parseFindingsKey("f1:2 f2:0 f3:1 f4:0 med:1 low:2")).toEqual({ f1: 2, f2: 0, f3: 1, f4: 0, med: 1, low: 2, unstated: 0 });
+    expect(parseFindingsKey("f1:2 f2:0 f3:1 f4:0 med:1 low:2")).toEqual({ f1: 2, f2: 0, f3: 1, f4: 0, med: 1, low: 2, unstated: 0, mergedLowsFiled: false });
     expect(parseFindingsKey("f1:0 f2:0 f3:0 f4:0 med:0 low:0 unstated:2")).toMatchObject({ unstated: 2 });
     for (const bad of [undefined, null, 3, "", "f1:2 f3:1 med:1 low:2", "f1:a f2:0 f3:0 f4:0 med:0 low:0", "f1:1 f2:0 f3:0 f4:0 med:0 low:0 extra:1"]) expect(parseFindingsKey(bad)).toBeNull();
   });
@@ -1267,6 +1267,43 @@ describe("findings_rN keys (ugcportal-2jvh)", () => {
     buildRows(release, new Map(beads.map((b) => [b.id, b])), shared);
     expect(shared.get(901).rounds[0]).toMatchObject({ medium: 1, low: 1 });
     expect(shared.get(901).rounds[0].source).toBeUndefined();
+  });
+
+  it("K3 (kwxh): a round ended by the gate with its lows filed is parsed from its key, not listed as malformed", () => {
+    expect(parseFindingsKey("f1:1 f2:0 f3:0 f4:0 med:0 low:2 merged:lows-filed")).toEqual({ f1: 1, f2: 0, f3: 0, f4: 0, med: 0, low: 2, unstated: 0, mergedLowsFiled: true });
+    const out = withFindingsKeys(pr(1, [round(1, 0, 2)]), { findings_r1: "f1:1 f2:0 f3:0 f4:0 med:0 low:2 merged:lows-filed" });
+    expect(out.rounds[0]).toMatchObject({ source: "keys", medium: 0, low: 2, stated: true });
+    expect(out.rounds[0].fallbackReason).toBeUndefined();
+    for (const bad of ["f1:1 f2:0 f3:0 f4:0 med:0 low:2 merged:lows", "f1:1 f2:0 f3:0 f4:0 med:0 low:2 merged:lows-filed x"]) expect(parseFindingsKey(bad)).toBeNull();
+  });
+
+  it("kwxh round 1, observation 1: a merged:lows-filed tag on a round with a medium, an unstated field or no low is malformed", () => {
+    for (const bad of [
+      "f1:1 f2:0 f3:0 f4:0 med:1 low:1 merged:lows-filed",
+      "f1:1 f2:0 f3:0 f4:0 med:0 low:1 unstated:1 merged:lows-filed",
+      "f1:1 f2:0 f3:0 f4:0 med:0 low:1 unstated:0 merged:lows-filed",
+      "f1:0 f2:0 f3:0 f4:0 med:0 low:0 merged:lows-filed",
+    ]) {
+      expect(parseFindingsKey(bad), bad).toBeNull();
+      expect(withFindingsKeys(pr(1, [round(1, 1, 1)]), { findings_r1: bad }).rounds[0], bad).toMatchObject({ source: "prose", fallbackReason: "malformed" });
+    }
+  });
+
+  it("kwxh round 1, observation 2: a round ended by the gate with its lows filed is reported as the PR's gate-ended round, not as a blocked lows round", () => {
+    const b = { id: "ugcportal-mlf1", title: "merged lows", metadata: { cc_type: "fix", prs: "gh-903", tokens_impl: 1000, tokens_qa: 2000, findings_r1: "f1:1 f2:0 f3:0 f4:0 med:1 low:0", findings_r2: "f1:1 f2:0 f3:0 f4:0 med:0 low:1 merged:lows-filed" } };
+    const blocked = { id: "ugcportal-mlf2", title: "blocked lows", metadata: { cc_type: "fix", prs: "gh-904", tokens_impl: 1000, tokens_qa: 1000, findings_r1: "f1:1 f2:0 f3:0 f4:0 med:1 low:0", findings_r2: "f1:1 f2:0 f3:0 f4:0 med:0 low:1" } };
+    const rel = { version: "v9.9.8", ids: [b.id, blocked.id], entries: new Map([b, blocked].map((x) => [x.id, { title: x.title, type: "Bug Fixes" }])) };
+    const an = new Map([[903, pr(903, [round(1, 1, 0), round(2, 0, 1)])], [904, pr(904, [round(1, 1, 0), round(2, 0, 1)])]]);
+    const rs = buildRows(rel, new Map([b, blocked].map((x) => [x.id, x])), an);
+    const merged = rs.find((r) => r.id === b.id);
+    const notMerged = rs.find((r) => r.id === blocked.id);
+    expect(merged.mergedLowsFiled).toEqual(["#903 r2"]);
+    expect(notMerged.mergedLowsFiled).toEqual([]);
+    expect(merged.roundDetail.map((d) => d.mergedLowsFiled)).toEqual([false, true]);
+    expect([merged.tail, notMerged.tail]).toEqual([1, 1]);
+    const report = renderReport({ releases: ["v9.9.8"], rowsByRelease: new Map([["v9.9.8", rs]]), membershipChecks: [], unmerged: [], generatedAt: "2026-10-19", reviewer: "x", prCount: 0 });
+    expect(report).toContain("| 1 (#903 r2 ended by the gate, lows filed) |");
+    expect(report).not.toContain("#904 r2 ended by the gate");
   });
 
   it("a malformed key falls back to the prose figure and is listed, never read as zeros", () => {
@@ -1440,10 +1477,10 @@ describe("findings_rN keys (ugcportal-2jvh)", () => {
     expect(item5()).not.toMatch(/never clean/);
   });
 
-  it("peom K2: item 5 qualifies a round 4-6 approval's 'no blocking findings': lows may have been deferred", () => {
+  it("peom K2: item 5 qualifies a round 2-6 approval's 'no blocking findings': lows may have been deferred", () => {
     const text = item5();
     expect(text).not.toMatch(/says the round found nothing/);
-    expect(text).toMatch(/round 4-6[^.]*deferred/i);
+    expect(text).toMatch(/round 2-6[^.]*deferred/i);
   });
 
   it("rf5o K1: a zero-finding round in the blocking template with a tool-output bare count never reads clean, so its all-zero key is inconsistent; item 5 says so", () => {
