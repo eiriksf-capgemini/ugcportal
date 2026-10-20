@@ -60,9 +60,14 @@
  * accepted cost_ite_* figure (absent, 0, malformed, or on a side marked incomplete) is read in context size; see costUnitOf.
  *
  * Per-round review figures: tokens_qa_rN holds round N's reviewer figure
- * (context size, not cost) on many beads, but this report does not read it;
- * the per-round column is the bead's QA figure / rounds, a crude mean, and
- * is labelled as such.
+ * (context size, not cost) on many beads. This report does not read its
+ * value as a figure; perRoundCost uses the key only to mark which rounds
+ * exist, and the Data gaps line names a round that has one but no
+ * cost_ite_qa_rN. cost_ite_qa_rN (ugcportal-gmzi) holds round N's transcript cost and is
+ * read by perRoundCost below. The qa/round column is still the bead's QA
+ * figure / rounds, a crude mean, and is labelled as such. The per-round
+ * keys are never summed into cost_ite_qa (that total is recomputed whole
+ * from the agent list).
  *
  * Controls table (ugcportal-md4c): with `--transcripts <dir>` (or alone with
  * `--controls-only`), a section prices each process control in the fixed
@@ -1311,6 +1316,41 @@ export function coverageIncomplete(meta, side) {
   return null;
 }
 
+/**
+ * Per-round transcript cost (ugcportal-gmzi): `cost_ite_qa_rN` beside
+ * `tokens_qa_rN`. A round exists when either key does. A round counts as
+ * costed only when its cost_ite_qa_rN is a positive integer; a 0 or a
+ * non-integer is listed in `rejected` (with its value) and never read as a
+ * figure, the same rule costUnitOf applies to cost_ite_qa (a 0 is what an
+ * empty transcript sum gives). Nothing here sums the rounds. A round number
+ * is 1-based with no leading zero, and the value is read under exactly the
+ * key that matched; a cost_ite_qa_r key whose suffix is any other run of
+ * digits (r0, r01) is listed in `malformed` and read as no round at all.
+ */
+export function perRoundCost(meta = {}) {
+  const ns = new Set();
+  const malformed = [];
+  for (const k of Object.keys(meta)) {
+    const m = /^(?:tokens_qa|cost_ite_qa)_r([1-9]\d*)$/.exec(k);
+    if (m) ns.add(m[1]);
+    else if (/^cost_ite_qa_r\d+$/.test(k)) malformed.push(k);
+  }
+  const rounds = [...ns].sort((a, b) => Number(a) - Number(b)).map((n) => {
+    const raw = meta[`cost_ite_qa_r${n}`];
+    const present = raw !== undefined && raw !== null && raw !== "";
+    const ite = positiveInt(raw);
+    return { n: Number(n), ite, rejected: present && ite === null ? String(raw) : null };
+  });
+  return {
+    rounds,
+    withCost: rounds.filter((r) => r.ite !== null).length,
+    total: rounds.length,
+    without: rounds.filter((r) => r.ite === null && r.rejected === null).map((r) => `r${r.n}`),
+    rejected: rounds.filter((r) => r.rejected !== null).map((r) => `r${r.n}=${r.rejected}`),
+    malformed: malformed.sort(),
+  };
+}
+
 export function costUnitOf(meta = {}) {
   const iteRejected = [];
   const iteIncomplete = [];
@@ -1429,7 +1469,7 @@ export function formatAgentCost(c) {
     const s = c.side ?? "<side>";
     // An existing marker is kept as it is: only a human who backfilled clears it.
     const marker = c.marker ?? `incomplete: ${why}`;
-    return `INCOMPLETE agents=${c.agents} passes=${c.passes} missing=${c.missing.join(",") || "none"} uncovered=${uncovered.join(",") || "none"} -- write no cost_ite_*/cost_calls_* and unset any already there, do not overwrite tokens_* from this; set cost_note_${s} to "${why}" and cost_coverage_${s} to "${marker}"`;
+    return `INCOMPLETE agents=${c.agents} passes=${c.passes} missing=${c.missing.join(",") || "none"} uncovered=${uncovered.join(",") || "none"} -- write no cost_ite_${s}/cost_calls_${s} total and unset any already there (per-round cost_ite_qa_r<N> keys are not touched), do not overwrite tokens_* from this; set cost_note_${s} to "${why}" and cost_coverage_${s} to "${marker}"`;
   }
   return `ite=${c.ite} calls=${c.calls} ctx=${c.ctx} agents=${c.agents} passes=${c.passes} missing=none uncovered=none`;
 }
@@ -1446,7 +1486,24 @@ export function runAgentCost(passesPath, ids, beadPath, side) {
   const shown = JSON.parse(fs.readFileSync(beadPath, "utf8"));
   const bead = Array.isArray(shown) ? shown[0] : shown;
   if (!bead || typeof bead !== "object") throw new Error(`${beadPath}: no bead in that file`);
-  return formatAgentCost(agentCostFromPasses(rows, ids.split(","), { meta: bead.metadata ?? {}, side }));
+  const agentIds = [...new Set(ids.split(",").map((x) => x.trim()).filter(Boolean))];
+  const summary = formatAgentCost(agentCostFromPasses(rows, agentIds, { meta: bead.metadata ?? {}, side }));
+  return [summary, ...agentCostLines(rows, agentIds)].join("\n");
+}
+
+/**
+ * One line per listed agent, after the summary: `agent=<id> ite=<n> calls=<n>
+ * passes=<n>` (that agent's figures summed over its passes), so a round's
+ * cost_ite_qa_r<N> / cost_calls_qa_r<N> is copied from the command already
+ * run (ugcportal-gmzi). An agent with no transcript prints `agent=<id>
+ * missing`, never an ite= of 0.
+ */
+export function agentCostLines(rows, agentIds) {
+  return agentIds.map((id) => {
+    const mine = rows.filter((r) => r.agentId === id);
+    if (mine.length === 0) return `agent=${id} missing`;
+    return `agent=${id} ite=${mine.reduce((a, r) => a + r.ite, 0)} calls=${mine.reduce((a, r) => a + r.calls, 0)} passes=${mine.length}`;
+  });
 }
 
 /** The unit label printed beside a bead's figures. */
@@ -1512,6 +1569,7 @@ export function buildRows(release, beadsById, prAnalysesByNumber) {
       qa,
       iteImpl,
       iteQa,
+      roundCost: perRoundCost(meta),
       iteTotal: iteImpl === null && iteQa === null ? null : (iteImpl ?? 0) + (iteQa ?? 0),
       implEstimated: est.impl,
       qaEstimated: est.qa,
@@ -1729,7 +1787,7 @@ function mdTable(headers, rows) {
 }
 
 function renderReleaseTable(rows) {
-  const headers = ["Bead", "Type", "Scope", "Tier/effort", "Impl", "QA", "Total", "Unit", "PRs", "Rounds", "Chain", "Mediums by round", "Lows (labels)", "qa/round", "Outcome (heuristic)"];
+  const headers = ["Bead", "Type", "Scope", "Tier/effort", "Impl", "QA", "Total", "Unit", "PRs", "Rounds", "Chain", "Mediums by round", "Lows (labels)", "qa/round", "QA ITE by round (rounds with cost n/m)", "Outcome (heuristic)"];
   // Rows are ranked within their unit (ITE first), never across units.
   const unitRank = (r) => (r.unit === "ite" ? 0 : r.unit === "context" ? 1 : 2);
   const body = rows
@@ -1751,6 +1809,7 @@ function renderReleaseTable(rows) {
       r.rounds !== null && r.roundsSource === "close reason" ? `n/a (${r.inlineLabelled.medium} labelled medium, ${r.inlineLabelled.unstated} unlabelled, ~${r.inlineBursts} bursts)` : r.mediumsByRound,
       r.rounds !== null && r.roundsSource === "close reason" ? `${r.inlineLabelled.low}` : String(r.lowsLabelled),
       r.perRound === null ? "—" : fmtTokens(r.perRound, r.qaEstimated || r.roundsSource !== "markers"),
+      r.roundCost.total === 0 ? "—" : `${r.roundCost.rounds.map((x) => `r${x.n} ${x.ite === null ? "?" : fmt(x.ite)}`).join("; ")} (${r.roundCost.withCost}/${r.roundCost.total})`,
       r.outcome,
     ]);
   return mdTable(headers, body);
@@ -1870,6 +1929,12 @@ function renderDataGaps(rowsByRelease, prAnalysesByNumber, unmerged) {
     lines.push(`  - PR but no round count from markers or close reason (${noRounds.length}): ${noRounds.join(", ") || "—"}`);
     lines.push(`  - round count from the close reason, not markers (${crRounds.length}): ${crRounds.join(", ") || "—"}`);
     if (disagree.length) lines.push(`  - markers and close reason disagree: ${disagree.join("; ")}`);
+    const noRoundCost = rows.filter((r) => r.roundCost.without.length).map((r) => `${r.id.replace("ugcportal-", "")} (${r.roundCost.without.join(", ")})`);
+    lines.push(`  - rounds with \`tokens_qa_rN\` but no \`cost_ite_qa_rN\` (${noRoundCost.length} beads): ${noRoundCost.join("; ") || "—"}`);
+    const badRoundCost = rows.filter((r) => r.roundCost.rejected.length).map((r) => `${r.id.replace("ugcportal-", "")} (${r.roundCost.rejected.join(", ")})`);
+    if (badRoundCost.length) lines.push(`  - \`cost_ite_qa_rN\` not a positive integer, not read as a round's cost (${badRoundCost.length}): ${badRoundCost.join("; ")}`);
+    const oddRoundKey = rows.filter((r) => r.roundCost.malformed.length).map((r) => `${r.id.replace("ugcportal-", "")} (${r.roundCost.malformed.join(", ")})`);
+    if (oddRoundKey.length) lines.push(`  - \`cost_ite_qa_rN\` key whose N is not a round number (1-based, no leading zero), not read (${oddRoundKey.length}): ${oddRoundKey.join("; ")}`);
     if (unstated.length) lines.push(`  - rounds whose verdict states no severity: ${unstated.join(", ")}`);
     const split = roundsSplit(rows);
     lines.push(`  - rounds whose severity came from \`findings_rN\` keys: ${split.fromKeys}; rounds that fell back to the prose parse: ${split.fromProse}${split.fellBack.length ? ` -- ${split.fellBack.join(", ")}` : ""}`);
@@ -1895,7 +1960,7 @@ export function renderReport(ctx) {
   const out = [];
   out.push(GENERATED_START);
   out.push("");
-  out.push(`_Generated ${generatedAt} by \`node scripts/release-cost-report.mjs\`; reviewer identity \`${reviewer ?? "unknown"}\`; ${prCount} PRs read via \`gh\`. Legend: \`~\` = the bead's own notes call this figure an estimate; \`(cr)\` = round count from the close reason (pre-marker PR); \`(!)\` = markers and close reason disagree, markers shown; \`rN:?\` = that round's verdict states no severity; "Lows (labels)" counts a keyed round's \`low:<n>\` as recorded and an un-keyed round's severity labels, a single \`LOW:\` label often covers several items, so on prose rounds it is a floor; a keyed round's \`unstated:<n>\` is counted as medium, not low. qa/round is the QA figure divided by rounds, a crude mean (\`tokens_qa_rN\` is not read here). Unit (ugcportal-cii0): each bead is read in ONE unit — \`ITE (cost)\` from \`cost_ite_impl\`/\`cost_ite_qa\` (transcript input-token equivalents, scripts/agent-pass-cost.mjs), or \`${CONTEXT_LABEL}\` from \`tokens_impl\`/\`tokens_qa\` when the bead has no accepted \`cost_ite_*\` figure (absent, 0, malformed, or on a side marked incomplete) (the agent's final context size, docs/process/cost-performance-claims-v0.7.0-2026-10-16.md section 1.2); impl/qa totals, medians, and the top-five tables are ${CONTEXT_LABEL}; the tier tables carry both, ITE in its own three columns; ITE is totalled only in its own columns and rows, and the two are never added._`);
+  out.push(`_Generated ${generatedAt} by \`node scripts/release-cost-report.mjs\`; reviewer identity \`${reviewer ?? "unknown"}\`; ${prCount} PRs read via \`gh\`. Legend: \`~\` = the bead's own notes call this figure an estimate; \`(cr)\` = round count from the close reason (pre-marker PR); \`(!)\` = markers and close reason disagree, markers shown; \`rN:?\` = that round's verdict states no severity; "Lows (labels)" counts a keyed round's \`low:<n>\` as recorded and an un-keyed round's severity labels, a single \`LOW:\` label often covers several items, so on prose rounds it is a floor; a keyed round's \`unstated:<n>\` is counted as medium, not low. qa/round is the QA figure divided by rounds, a crude mean (\`tokens_qa_rN\` is not read here; the per-round ITE column reads \`cost_ite_qa_rN\` and shows \`?\` for a round without one). Unit (ugcportal-cii0): each bead is read in ONE unit — \`ITE (cost)\` from \`cost_ite_impl\`/\`cost_ite_qa\` (transcript input-token equivalents, scripts/agent-pass-cost.mjs), or \`${CONTEXT_LABEL}\` from \`tokens_impl\`/\`tokens_qa\` when the bead has no accepted \`cost_ite_*\` figure (absent, 0, malformed, or on a side marked incomplete) (the agent's final context size, docs/process/cost-performance-claims-v0.7.0-2026-10-16.md section 1.2); impl/qa totals, medians, and the top-five tables are ${CONTEXT_LABEL}; the tier tables carry both, ITE in its own three columns; ITE is totalled only in its own columns and rows, and the two are never added._`);
   out.push("");
   for (const version of releases) {
     const rows = rowsByRelease.get(version);
