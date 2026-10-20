@@ -9,7 +9,7 @@ Usage: `/pr-review-merge <PR number>` (if no number is given, resolve the PR for
 
 This skill auto-merges code. Treat that as the whole point of the exercise, and treat the gate below as non-negotiable — do not talk yourself into merging "just this once" because the change looks small or obviously fine. If any gate fails, your job is to leave a clear comment and stop, not to merge anyway.
 
-**Layout (ugcportal-j13u).** This checklist carries each step's decision rule, commands, marker formats and stop conditions; each step's full text was moved verbatim into `reference/`, linked with when to open it. Where the two differ, the reference text is the rule. `node scripts/check-skill-split.mjs` checks that no rule sentence was dropped.
+**Layout (ugcportal-j13u).** This checklist carries each step's decision rule, commands, marker formats and stop conditions; each step's full text was moved verbatim into `reference/`, linked with when to open it. Where the two differ, the reference text is the rule. `node scripts/check-skill-split.mjs` checks that every unit (sentence, table row, code line) of the pinned copy occurs in this checklist plus `reference/` at least as often as before: a reworded or dropped unit is reported, a moved one is not. **Changing a rule:** edit the live text, run `node scripts/check-skill-split.mjs --repin` and put the sha256 it prints into `check-skill-split.test.mjs` in the same commit; never leave the superseded sentence in a reference file to keep the check green.
 
 Open only when weighing a merge at the cap: [00-cap-and-injection](reference/00-cap-and-injection.md).
 
@@ -77,16 +77,16 @@ A PR whose changed files touch any of these **always** goes to a human, however 
 - Auth code: `src/lib/auth.ts`, anything under `src/app/api/auth/`
 
 - Still run step 4 and post it as a normal comment that says the PR needs human approval and merge because it touches a sensitive path. Never call `gh pr review --approve` or `gh pr merge` on it.
-- **Only at the sensitive-path reviewed-clean stop**: put `<!-- ugcportal-needs-human-merge -->` on a line of its own in the round comment, which names the sensitive paths, then apply the label:
+- **Only at the sensitive-path reviewed-clean stop**: put `<!-- ugcportal-needs-human-merge -->` on a line of its own in the round comment (the stop comment at an `approx-cap` or `chain-broken` stop), which names the sensitive paths, then apply the label:
 
 ```bash
 gh pr edit <n> --add-label needs-human-merge
 ```
 
-- After an inline fix the label waits on step 5's checks. A stop with a blocker (the round-6 escalation included) gets no label, nor do the `approx-cap` and `chain-broken` stops for their chain state.
+- After an inline fix the label waits on step 5's checks. A stop with a blocker (the round-6 escalation included) gets no label, nor do the `approx-cap` and `chain-broken` stops for their chain state; but on a sensitive-path PR the sensitive-path stop governs: if the run reviewed clean, label it and put the verdict marker in the stop comment.
 - A later round with a blocking *finding* removes it (`gh pr edit <n> --remove-label needs-human-merge`) and asks the orchestrator to remove `stalled-on-human`; the sensitive-path gate never removes it. Nobody pre-labels at open.
 
-Open only when changing the list (its code mirrors move with it) or a label case is unsettled here: [02-sensitive-paths](reference/02-sensitive-paths.md).
+Open only when changing the list (its code mirrors move with it), when a sensitive-path PR is at an `approx-cap` or `chain-broken` stop, or when a label case is unsettled here: [02-sensitive-paths](reference/02-sensitive-paths.md).
 
 ## 3. CI gate
 

@@ -1,13 +1,18 @@
 #!/usr/bin/env node
 /**
  * Proves that splitting a skill into a checklist (`SKILL.md`) and reference
- * files (`reference/*.md`) dropped no rule (ugcportal-j13u).
+ * files (`reference/*.md`) dropped no text (ugcportal-j13u), and keeps proving
+ * it for every later PR that edits the skill.
  *
- * Input: the skill's pre-split text, pinned as a fixture, and the skill
- * directory as it stands now. Every sentence of the pinned text that carries
- * a rule word (RULE_WORD below) must appear verbatim in the new `SKILL.md` or
- * in one of its `reference/*.md` files. "Verbatim" is after two
- * normalisations, applied to both sides alike, and nothing else:
+ * Input: a pinned copy of the skill's text (the fixture below; until the first
+ * repin, the pre-split `SKILL.md` of origin/main 8993bb4) and the skill
+ * directory as it stands now.
+ *
+ * A "unit" is the same thing on both sides: each non-empty line of a fenced
+ * code block, each table row, and otherwise each sentence of a heading,
+ * paragraph or list item, split after `.`, `!` or `?` followed by whitespace
+ * (so `## 2. Sensitive-path gate` is two units). Before comparing, two normalisations apply to both sides alike,
+ * and nothing else:
  *
  *   - runs of whitespace collapse to one space, so a sentence re-wrapped or
  *     re-indented by the move still matches, and a leading list or quote
@@ -16,32 +21,49 @@
  *     `[text]`), so a link the move had to repoint (an in-page anchor that now
  *     lives in another file) still matches on its text.
  *
- * A "sentence" is a unit of the pinned text: each non-empty line of a fenced
- * code block, each table row, and otherwise each sentence of a paragraph or
- * list item, split after `.`, `!` or `?` followed by whitespace. That splits
- * finer than a grammarian would, which checks more, shorter units; the cost
- * is that a very short unit can also match the same words somewhere else, so
- * a dropped fragment of a few words passes when its exact text survives in
- * another place.
+ * What is compared is counts, not presence: every unit of the pinned copy is
+ * checked, rule word or not, and for each distinct unit the number of units
+ * of the new tree (`SKILL.md` plus every `reference/*.md`, split the same way)
+ * with exactly that text must be at least its number in the pinned copy. A
+ * unit that no longer occurs is reported MISSING; one that occurs fewer times
+ * is reported FEWER, with both counts and its pinned lines. So a reworded or
+ * deleted unit is reported, and so is one dropped copy of a line that also
+ * stands elsewhere. Not reported: a unit that moved (to any file, any step,
+ * any order), a copy added elsewhere that offsets one dropped (a checklist
+ * line repeating a reference sentence verbatim covers for that sentence), and
+ * any new text.
  *
  * It also checks the other direction the split could fail in (K3): every
  * `reference/*.md` file is linked from `SKILL.md` at least once, by a markdown
  * link on a line carrying the words "open only when", and no link in
  * `SKILL.md` points at a reference file that does not exist.
  *
- * Fail-loud: exits 1 when any rule sentence is missing, when a reference file
- * is unlinked or a link dangles, when `SKILL.md` is absent, and when zero
- * sentences were checked -- a check that examined nothing must not read as a
- * pass (review-standards section 6). It prints the counts before any verdict.
+ * Changing a rule. A PR that deliberately rewords, removes or adds rule text
+ * edits the live text in `SKILL.md` or `reference/*.md`, then runs
+ * `node scripts/check-skill-split.mjs --repin`. That writes `SKILL.md` and
+ * every `reference/*.md` (sorted by name), concatenated, over the pinned copy,
+ * re-runs the check against what it wrote, and prints its sha256, which the
+ * same commit puts into PINNED_SHA256 in `scripts/check-skill-split.test.mjs`.
+ * Each PR is then compared against the text it started from, and the pin's
+ * diff shows the rule change to its reviewer. Never leave the superseded
+ * sentence standing in a reference file to keep the check green: the
+ * reference text is the rule, so a sentence left there stays in force.
  *
- * What it does not prove: that a sentence still sits in the step where a
- * reader will look for it, that a new checklist line restates its rule
- * correctly (the reference text is the rule; SKILL.md says so), or anything
- * about sentences with no rule word.
+ * Fail-loud: exits 1 when any unit is missing or short of copies, when a
+ * reference file is unlinked or a link dangles, when `SKILL.md` is absent,
+ * and when zero units were checked -- a check that examined nothing must not
+ * read as a pass (review-standards section 6). It prints the counts before
+ * any verdict. `--repin` exits 1, after writing, if the tree does not pass
+ * against the pin it wrote, and refuses to write when `SKILL.md` is absent.
  *
- * Usage: node scripts/check-skill-split.mjs [--old <file>] [--skill-dir <dir>]
+ * What it does not prove: that a unit still sits in the step where a reader
+ * will look for it, or that a new checklist line restates its rule correctly
+ * (the reference text is the rule; SKILL.md says so).
+ *
+ * Usage: node scripts/check-skill-split.mjs [--repin] [--old <file>] [--skill-dir <dir>]
  * Defaults: the pinned pr-review-merge copy and .claude/skills/pr-review-merge.
  */
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -51,9 +73,6 @@ import { isMainModule } from "./lib/is-main.mjs";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 export const DEFAULT_OLD = path.join(ROOT, "scripts", "fixtures", "pr-review-merge-SKILL.pre-split.md");
 export const DEFAULT_SKILL_DIR = path.join(ROOT, ".claude", "skills", "pr-review-merge");
-
-/** The rule words of ugcportal-j13u's In scope (c), matched as word prefixes ("stops", "recorded"). */
-export const RULE_WORD = /\b(never|always|must|only|stop|fail|exit|before|after|exactly|record)/i;
 
 const FENCE = /^\s*```/;
 const ITEM_START = /^\s*(?:[-*]\s|\d+\.\s|>\s?)/;
@@ -129,23 +148,50 @@ function referenceLinks(text) {
   return links;
 }
 
+/** Each distinct unit text with how often it occurs and the lines it starts on, in first-seen order. */
+export function tallyUnits(units) {
+  const tally = new Map();
+  for (const u of units) {
+    const t = tally.get(u.text) ?? { count: 0, lines: [] };
+    t.count += 1;
+    t.lines.push(u.line);
+    tally.set(u.text, t);
+  }
+  return tally;
+}
+
+/** The text a repin writes: SKILL.md, then every reference file sorted by name, each ending in one newline. */
+export function buildPin({ skillText, references }) {
+  return [skillText, ...Object.keys(references).sort().map((n) => references[n])]
+    .map((t) => `${t.replace(/\n+$/, "")}\n`)
+    .join("\n");
+}
+
 /**
  * @param {{oldText: string, skillText: string|null, references: Record<string, string>}} input
  *   references is keyed by path relative to the skill directory, e.g. "reference/<name>.md".
  */
 export function checkSplit({ oldText, skillText, references }) {
   const units = splitUnits(oldText);
-  const ruled = units.filter((u) => RULE_WORD.test(u.text));
+  const old = tallyUnits(units);
   const refNames = Object.keys(references).sort();
-  const corpus = normalize([skillText ?? "", ...refNames.map((n) => references[n])].join("\n\n"));
-  const missing = skillText === null ? [] : ruled.filter((u) => !corpus.includes(u.text));
+  const now = tallyUnits(skillText === null ? [] : [skillText, ...refNames.map((n) => references[n])].flatMap(splitUnits));
+  const short = [];
+  if (skillText !== null) {
+    for (const [text, { count, lines }] of old) {
+      const have = now.get(text)?.count ?? 0;
+      if (have < count) short.push({ text, line: lines[0], lines, old: count, now: have });
+    }
+  }
   const links = skillText === null ? [] : referenceLinks(skillText);
   const unlinked = refNames.filter((n) => !links.some((l) => l.target === n && l.openOnlyWhen));
   const dangling = links.filter((l) => !(l.target in references));
   return {
     units: units.length,
-    checked: skillText === null ? 0 : ruled.length,
-    missing,
+    distinct: old.size,
+    checked: skillText === null ? 0 : units.length,
+    missing: short.filter((m) => m.now === 0),
+    fewer: short.filter((m) => m.now > 0),
     references: refNames,
     unlinked,
     dangling,
@@ -153,24 +199,28 @@ export function checkSplit({ oldText, skillText, references }) {
   };
 }
 
+const where = (m) => (m.lines.length === 1 ? `old line ${m.line}` : `old lines ${m.lines.join(", ")}`);
+
 export function formatResult(r, { oldLabel, skillLabel, skillBytes, refBytes }) {
   const lines = [
-    `check-skill-split: old ${oldLabel}: ${r.units} sentence(s), of which ${r.checked} carry a rule word`,
+    `check-skill-split: old ${oldLabel}: ${r.units} unit(s), ${r.distinct} distinct`,
     `new: ${skillLabel}/SKILL.md (${r.skillMissing ? "ABSENT" : `${skillBytes} bytes`}) + ${r.references.length} reference file(s) (${refBytes} bytes)`,
-    `checked: ${r.checked} rule sentence(s); found: ${r.checked - r.missing.length}; missing: ${r.missing.length}`,
+    `checked: ${r.checked} unit(s), ${r.skillMissing ? 0 : r.distinct} distinct; found with every copy: ${r.skillMissing ? 0 : r.distinct - r.missing.length - r.fewer.length}; missing: ${r.missing.length}; fewer copies: ${r.fewer.length}`,
   ];
-  for (const m of r.missing) lines.push(`  MISSING (old line ${m.line}): ${m.text}`);
+  for (const m of r.missing) lines.push(`  MISSING (${m.lines.length === 1 ? where(m) : `${where(m)}; old ${m.old}, new 0`}): ${m.text}`);
+  for (const m of r.fewer) lines.push(`  FEWER (${where(m)}; old ${m.old}, new ${m.now}): ${m.text}`);
   const linked = r.references.length - r.unlinked.length;
   lines.push(`reference files: ${r.references.length}; linked from SKILL.md on an "open only when" line: ${linked}; unlinked: ${r.unlinked.length}; dangling links: ${r.dangling.length}`);
   for (const u of r.unlinked) lines.push(`  UNLINKED: ${u}`);
   for (const d of r.dangling) lines.push(`  DANGLING (SKILL.md line ${d.line}): ${d.target}`);
   const reasons = [];
   if (r.skillMissing) reasons.push("SKILL.md is absent");
-  if (r.checked === 0) reasons.push("zero rule sentences checked -- a check that examined nothing is not a pass");
-  if (r.missing.length) reasons.push(`${r.missing.length} rule sentence(s) missing`);
+  if (r.checked === 0) reasons.push("zero units checked -- a check that examined nothing is not a pass");
+  if (r.missing.length) reasons.push(`${r.missing.length} unit(s) missing`);
+  if (r.fewer.length) reasons.push(`${r.fewer.length} unit(s) with fewer copies`);
   if (r.unlinked.length) reasons.push(`${r.unlinked.length} reference file(s) unlinked`);
   if (r.dangling.length) reasons.push(`${r.dangling.length} dangling link(s)`);
-  lines.push(reasons.length ? `FAIL: ${reasons.join("; ")}` : "OK: every rule sentence found, every reference file linked");
+  lines.push(reasons.length ? `FAIL: ${reasons.join("; ")}` : "OK: every unit found with every copy, every reference file linked");
   return { ok: reasons.length === 0, lines };
 }
 
@@ -191,20 +241,33 @@ export function readSkillDir(dir) {
 export function main(argv = process.argv.slice(2), log = console.log) {
   let oldPath = DEFAULT_OLD;
   let skillDir = DEFAULT_SKILL_DIR;
+  let repin = false;
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === "--old") oldPath = path.resolve(argv[++i] ?? "");
+    if (argv[i] === "--repin") repin = true;
+    else if (argv[i] === "--old") oldPath = path.resolve(argv[++i] ?? "");
     else if (argv[i] === "--skill-dir") skillDir = path.resolve(argv[++i] ?? "");
     else {
       log(`unknown argument: ${argv[i]}`);
       return 2;
     }
   }
+  const { skillText, references } = readSkillDir(skillDir);
+  if (repin) {
+    if (skillText === null) {
+      log(`FAIL: --repin refused: ${path.join(skillDir, "SKILL.md")} is absent`);
+      return 1;
+    }
+    const pin = buildPin({ skillText, references });
+    fs.writeFileSync(oldPath, pin);
+    const sha = crypto.createHash("sha256").update(pin).digest("hex");
+    log(`repinned ${path.relative(ROOT, oldPath) || oldPath} from SKILL.md + ${Object.keys(references).length} reference file(s): sha256 ${sha}`);
+    log("put that sha256 into PINNED_SHA256 in scripts/check-skill-split.test.mjs in the same commit");
+  }
   if (!fs.existsSync(oldPath)) {
-    log(`FAIL: pinned pre-split copy not found: ${oldPath}`);
+    log(`FAIL: pinned copy not found: ${oldPath}`);
     return 1;
   }
   const oldText = fs.readFileSync(oldPath, "utf8");
-  const { skillText, references } = readSkillDir(skillDir);
   const r = checkSplit({ oldText, skillText, references });
   const { ok, lines } = formatResult(r, {
     oldLabel: path.relative(ROOT, oldPath) || oldPath,

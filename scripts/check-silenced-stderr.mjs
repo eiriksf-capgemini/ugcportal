@@ -237,7 +237,7 @@ export const ALLOWLIST = [
     commandContains: "gh api repos/:owner/:repo/compare",
     lineContains: "--jq '.files[] | [.status, .filename] | @tsv'",
     reason:
-      "Read-only. Never executed: a byte-identical pinned copy of pr-review-merge/SKILL.md from before ugcportal-j13u split it, read as text by scripts/check-skill-split.mjs alone; the live copy of this same read-only step 4.2 probe is the entry above.",
+      "Read-only. Never executed: the pinned copy of pr-review-merge's text (origin/main 8993bb4's SKILL.md from before ugcportal-j13u split it, until a rule-changing PR rewrites it with `node scripts/check-skill-split.mjs --repin` from the live SKILL.md and reference/*.md), read as text by scripts/check-skill-split.mjs alone; the live copy of this same read-only step 4.2 probe is the entry above.",
   },
   {
     file: "scripts/lib/git-diff.mjs",
