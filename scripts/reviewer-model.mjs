@@ -12,8 +12,9 @@
  *
  * Rule (fails closed; each path takes the first of these that matches):
  *   1. GUARD_PATHS -> opus. The non-prose entries of the sensitive-path
- *      list in .claude/skills/pr-review-merge/SKILL.md step 2 (line 104
- *      names it the authority; mirrored in scripts/check-human-merge-labels.mjs
+ *      list in .claude/skills/pr-review-merge/SKILL.md step 2 (whose
+ *      "This list is the authority" sentence is in that skill's
+ *      reference/02-sensitive-paths.md; mirrored in scripts/check-human-merge-labels.mjs
  *      SENSITIVE_PATH_RES): the .claude/settings*.json permission files,
  *      auth, workflows, docker-compose.yml and the secret, credential, .env,
  *      .pem and .key paths. They come first so that no prose or allowlist

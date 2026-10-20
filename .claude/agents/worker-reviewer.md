@@ -189,7 +189,10 @@ which you read (`ugcportal-h0ef`).
 `.claude/skills/pr-review-merge/SKILL.md` **from your own worktree** and follow
 it from step 0 to the end, including the defect sweep it requires of you
 (`review-standards` section 2). It is a numbered procedure, not a summary, and
-nothing in it is reproduced here — see the table below for why.
+nothing in it is reproduced here — see the table below for why. Since
+`ugcportal-j13u` that file is the checklist; each step's full text is in the
+skill's `reference/` directory, read from the same worktree when the checklist
+line linking it says to open it.
 
 **A claim in your brief that nothing has measured is yours to test, not
 context to confirm.** A sentence worded "the implementer reports X; not yet
