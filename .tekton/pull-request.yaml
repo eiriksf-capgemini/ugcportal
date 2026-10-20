@@ -1,0 +1,49 @@
+# Pipelines-as-Code: build this PR's head commit on the platform-gitops kind
+# cluster and push it to the cluster's local registry as
+#   ugcportal:<sha>   and   ugcportal:pr-<number>
+# so the exact commit under review can be run in-cluster before merge.
+#
+# This file is only the trigger half. The Pipeline it names
+# (ugcportal-build), the git-clone and kaniko Tasks, the Repository binding
+# and the registry/cache/memory settings are all platform config and live
+# in platform-gitops under workloads/ugcportal/ -- change them there.
+# Dynamic {{ }} values are filled in by PaC from the GitHub event.
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  name: ugcportal-pr
+  annotations:
+    pipelinesascode.tekton.dev/on-event: "[pull_request]"
+    pipelinesascode.tekton.dev/on-target-branch: "[main]"
+    # Pin the run to the namespace that owns the Repository CR, so no other
+    # Repository on the cluster can claim this repo's events.
+    pipelinesascode.tekton.dev/target-namespace: "ugcportal"
+    # A newer push to the same PR cancels the build it supersedes -- same
+    # policy as .github/workflows/ci.yml's concurrency group.
+    pipelinesascode.tekton.dev/cancel-in-progress: "true"
+    pipelinesascode.tekton.dev/max-keep-runs: "3"
+spec:
+  pipelineRef:
+    name: ugcportal-build
+  params:
+    - name: repo-url
+      value: "{{ repo_url }}"
+    - name: revision
+      value: "{{ revision }}"
+    - name: image
+      value: "registry.registry.svc.cluster.local:5000/ugcportal:{{ revision }}"
+    - name: extra-args
+      value:
+        - "--destination=registry.registry.svc.cluster.local:5000/ugcportal:pr-{{ pull_request_number }}"
+  # A cold build (npm ci + next build under kaniko) can exceed Tekton's 1h
+  # default; cached rebuilds finish in a fraction of this.
+  timeouts:
+    pipeline: "3h0m0s"
+  workspaces:
+    - name: source
+      volumeClaimTemplate:
+        spec:
+          accessModes: [ReadWriteOnce]
+          resources:
+            requests:
+              storage: 1Gi
