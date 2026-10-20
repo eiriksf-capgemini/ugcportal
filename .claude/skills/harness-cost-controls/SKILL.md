@@ -68,6 +68,47 @@ diverging as more time passes.
    definition declaring its own `model:`) over bare `general-purpose` when one
    exists, since a named type does not depend on anyone remembering the
    argument.
+
+   **For a review round, the model comes from a written rule
+   (ugcportal-1mhn).** Before spawning the `worker-reviewer`, run
+   `node scripts/reviewer-model.mjs <pr-number>` from the main checkout and
+   pass the `model` it prints as the spawn's model. The spawn takes a model
+   only: effort comes from the agent definition, so the `effort` it prints is
+   for the record (the round comment's `Model:` line) and for a future
+   harness that accepts one. The classification fails closed: a path takes
+   the bead's `model` tier (floored at `sonnet`, never haiku for review) only
+   when it is process prose (`PROCESS_PROSE` in the script: markdown anywhere,
+   including `.claude/skills/**`, `.claude/agents/**`, `CLAUDE.md` and
+   `CHANGELOG.md`, and everything under `docs/`) or on the pinned
+   `PRESENTATION_ALLOWLIST` (the favicon, the `cn` re-export, the about page
+   and the visual-design checks under `src/lib/design/`, each entry with the
+   reason a defect in it cannot reach sellability, rights, auth, money, data
+   or the review and merge process). A test fails, naming the pair, when any
+   file the allowlist covers is imported by a module that routes `opus`
+   (ugcportal-gvrf): code that imports a module is shaped by it, which is why
+   `src/lib/design/scan-source.ts`, the scanning engine behind the privacy,
+   attestation, sellability and consent guards, routes `opus`. Every other
+   path is code or configuration and routes `opus` (`code default`), and the
+   non-prose `pr-review-merge` step 2 sensitive paths route `opus` ahead of
+   both lists (`GUARD_PATHS`); so does a file list gh's 100-file window
+   truncated. The cost consequence: most code PRs review on `opus`; PRs
+   whose every path is prose or allowlisted review at the bead's tier. That
+   covers the docs and process half of recommendation 4 of that cost review
+   (section 7 of the document named below); the script reads only the
+   changed paths and the bead's tier, so it has no notion of a lows-only PR,
+   and a lows-only round on a code PR routes `opus`. A later
+   measurement decides whether the allowlist should widen. The reason it
+   prints names the rule that fired (`truncated`, `guard`, `code default`,
+   `floor`, or the bead tier with its process-prose and allowlist counts).
+   Exit 2 (no bead id in the PR title, or no
+   `model` on the bead) means the orchestrator decides by hand and records
+   why; `opus`, the agent file's own `model:`, is the fallback.
+   Measured basis (`docs/process/release-cost-v0.8.1-vs-v0.9.0.md` section
+   3): 71 opus rounds, mean 1.02M ITE per round (883k per pass over 83
+   passes), against 36 sonnet rounds at a mean of 335k; the 61 rounds on
+   sonnet-tiered beads (45 opus, 16 sonnet) carry 45.1M of 85.3M review ITE,
+   53%; every medium was found by an opus round, on the larger PRs, an
+   association only (which is why code defaults to opus).
 2. **Set a default subagent model, so an omitted argument has a safe
    landing instead of inheriting Opus.** Claude Code (confirmed on the
    installed CLI, v2.1.267, against
