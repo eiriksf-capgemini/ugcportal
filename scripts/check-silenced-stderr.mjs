@@ -232,6 +232,14 @@ export const ALLOWLIST = [
       "Read-only. Step 4.2's trigger probes whether the previous round's head SHA still resolves; a 404 is an EXPECTED answer there (a captured GitHub Actions run id, a force-pushed branch), and the `if !` around it takes a live fail-safe branch that widens the review scope. The exit status is the signal; the text is not.",
   },
   {
+    file: "scripts/fixtures/pr-review-merge-SKILL.pre-split.md",
+    kind: "shell-devnull",
+    commandContains: "gh api repos/:owner/:repo/compare",
+    lineContains: "--jq '.files[] | [.status, .filename] | @tsv'",
+    reason:
+      "Read-only. Never executed: a byte-identical pinned copy of pr-review-merge/SKILL.md from before ugcportal-j13u split it, read as text by scripts/check-skill-split.mjs alone; the live copy of this same read-only step 4.2 probe is the entry above.",
+  },
+  {
     file: "scripts/lib/git-diff.mjs",
     kind: "stdio-array-ignore",
     // Single-line site: no `lineContains`, so the default applies and this

@@ -1460,7 +1460,8 @@ describe("findings_rN keys (ugcportal-2jvh)", () => {
   const ZERO_KEY = { findings_r1: "f1:0 f2:0 f3:0 f4:0 med:0 low:0" };
   const readSource = (rel) => fs.readFileSync(new URL(rel, import.meta.url), "utf8");
   const item5 = () => {
-    const skill = readSource("../.claude/skills/pr-review-merge/SKILL.md");
+    // step 4a item 5 lives in the step's reference file since ugcportal-j13u split the skill
+    const skill = readSource("../.claude/skills/pr-review-merge/reference/04a-record-qa-cost.md");
     const start = skill.indexOf("5. **Record the round's findings by family and severity");
     const end = skill.indexOf("\n**The reviewer run itself", start);
     expect(start).toBeGreaterThan(-1);

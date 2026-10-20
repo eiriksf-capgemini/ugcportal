@@ -1,0 +1,31 @@
+# pr-review-merge reference: step 1a, the per-PR review lock
+
+Moved verbatim from `SKILL.md` by ugcportal-j13u. The checklist in `../SKILL.md` is what a round follows; this file holds the rationale, catalogued incidents and worked examples behind it, and where the two differ, this text is the rule. The commands, templates, tables and headings the checklist carries verbatim are not repeated here; an italic line marks where each one stood. "Above", "below" and "this file" in the moved text refer to the original single file: read them as earlier or later in the same step, in the checklist or in this reference.
+
+Reading the round chain (step 4b) and stamping the next number (step 5) are separate steps with a full review (step 4's six finder angles) in between. Two runs that both read `N` both stamp `N + 1`; step 4b's duplicate check turns that into a permanently `broken` chain, and recovery then needs a human with a chain-reset comment. This is not an exotic interleaving: `CLAUDE.md` tells agents to run this skill immediately after opening a PR and a `/loop` babysitter runs it on a timer, so a manual invocation and a scheduled one overlap by ordinary accident (`ugcportal-5xj`).
+
+So serialise the whole run on a lock scoped to the PR number. The lock is **a git ref created through the API**, because `POST /git/refs` is a real server-side test-and-set: `201` if the ref did not exist, `422 Reference already exists` if it did, so two simultaneous callers cannot both win. Measured on this repo: the first call printed `refs/review-locks/test-pr-0`; the byte-identical second call exited 1 with `Reference already exists (HTTP 422)`; `DELETE` released it.
+
+The ref points at an **annotated tag object** rather than straight at a commit, for one reason: a tag object carries a date (`GET /git/tags/<sha>` → `tagger.date`), which is what makes a leaked lock recoverable without a human. Measured: the tag object came back with `"date": "2026-09-29T11:22:08Z"` plus the message it was created with.
+
+Acquire before step 2 — before this run posts anything at all, so a run that loses the race has not already dumped a second set of inline comments on the PR:
+
+*[A command or template kept verbatim in SKILL.md stood here.]*
+
+**If step 2 returned 422, or step 3 shows a sha that is not the tag you just minted, another run holds this PR.** Then: **stand down.** Post nothing, stamp nothing — not even a non-counting stop marker — do not run step 4's review, and report "another `pr-review-merge` run holds the lock on PR #`<n>`; no round was consumed". A run that stands down has reviewed nothing and must leave no trace, exactly like the CI-red stop except that it does not even comment.
+
+Before standing down, check whether the holder is a leaked lock from a run that died:
+
+*[A command or template kept verbatim in SKILL.md stood here.]*
+
+If that date is **more than 60 minutes old**, the holder is stale: delete the ref and retry the acquire **once**. If the retry also returns 422, a live run took it in between — stand down.
+
+*[A command or template kept verbatim in SKILL.md stood here.]*
+
+**Release the lock with that same `DELETE` on every path out of this skill** — after step 6 on a normal finish, and on each bail-out: the step-1 base-branch and mergeability bails (which happen *before* the acquire, so there is nothing to release), the step-3 CI stop, the step-2 sensitive-path stop, each stop of step 5's merge-readiness reads and BEHIND recovery (a `mergeStateStatus`/`mergeable` value that is not `CLEAN` or `BEHIND`, `UNKNOWN` twice, `CLEAN` with a head other than the reviewed one, head moved, update conflict, head not changed by the update within its bound, reviewed head not an ancestor of the new one, `sha not fetched`, new-head CI not green or stalled, a second `BEHIND` after the one update, the 15-minute limit, non-empty diff check), a refused `gh pr merge` or `squashMergeAllowed` false, a `broken`-chain stop, the "treat as 6" fallback, and the "escalation still outstanding" stop. A lock you forget to release costs the next run 60 minutes; say in your step 6 report that you released it.
+
+**Two limits, stated rather than discovered.** Breaking a stale lock is not itself atomic: two runs can both judge the same lock stale, both delete, and both create, after which the loser's `DELETE` may remove the winner's fresh lock. That is why step 3 above re-reads the ref, and why **step 5 re-reads it once more immediately before stamping** — the stamp is the operation that corrupts state, so that is where the check has to be. What remains is two runs whose pre-stamp re-reads interleave inside a single API round-trip, which is orders of magnitude narrower than the unprotected window this replaces (a whole review pass through step 4, minutes wide). And a run that takes longer than 60 minutes can have its own lock broken under it; the pre-stamp re-read catches that too, and the answer is to stand down rather than to raise the threshold.
+
+This mechanism deliberately touches no comment: it only creates and deletes a ref under `refs/review-locks/`, which is outside `refs/heads/*` and `refs/tags/*` and so invisible to an ordinary `git fetch`. It never edits or deletes a posted marker — an edit would trip step 4b's edit check and make the chain `broken`, i.e. the cure would be the disease.
+
+**Why not a `bd` primitive.** `bd gate` is an async *wait* condition that keeps a bead out of `bd ready` until something resolves it (`human`, `timer`, `gh:run`, `gh:pr`): no acquire-or-fail, no PR scoping, and the `human` type needs a person to close it. `bd merge-slot` *is* an exclusive acquire/release primitive, but there is exactly one slot per rig (`<prefix>-merge-slot`, for serialising merge-queue conflict resolution), so borrowing it here would serialise every review in the repo behind one lock and contend with the merge queue's own use of it. Both also live in the embedded Dolt DB under the main checkout (`bd context` → `beads dir: /Users/.../ugcportal/.beads`), which is machine-local — it cannot serialise a run in Actions, or on a second machine, against a local one. The lock has to be at least as global as the state it protects, and that state is on GitHub.

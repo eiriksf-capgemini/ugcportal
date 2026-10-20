@@ -4,7 +4,7 @@
  * loader module (scripts/bd-guard-fixtures.mjs) directly, with no hook call.
  * The two BLESSED inline-heredoc fixtures are pinned copies loaded by content
  * anchor (scripts/bd-guard-fixtures.mjs); the pr-review-merge 5a block is sliced
- * directly from the skill file by its heading in the test itself, never by line number.
+ * directly from the skill's step 5a reference file by an anchor in the test itself, never by line number.
  */
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -190,8 +190,10 @@ describe("allows (K2 must-pass, K4)", () => {
 });
 
 describe("pr-review-merge step 5a block (ugcportal-nr72)", () => {
-  const text = fs.readFileSync(skill("pr-review-merge"), "utf8");
-  const heading = text.indexOf("## 5a. File every deferred finding as a bead");
+  // ugcportal-j13u moved the block out of the checklist into step 5a's reference file, which the
+  // checklist links; the anchor is the paragraph that introduces the block there.
+  const text = fs.readFileSync(path.join(root, ".claude", "skills", "pr-review-merge", "reference", "05a-deferred-beads.md"), "utf8");
+  const heading = text.indexOf("Use quoted heredocs (`<<'BD_EOF'`)");
   const open = text.indexOf("```bash\n", heading) + "```bash\n".length;
   const block = text.slice(open, text.indexOf("\n```", open) + 1);
   it("the anchor is found and the block is the bd create block", () => {
