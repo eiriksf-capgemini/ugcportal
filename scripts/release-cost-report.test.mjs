@@ -72,6 +72,7 @@ import {
   fmt,
   formatAgentCost,
   pct,
+  perRoundCost,
   renderReport,
   runAgentCost,
   tierPerformance,
@@ -984,7 +985,8 @@ describe("agentCostFromPasses (ugcportal-cii0): the recording rule CLAUDE.md's o
       fs.writeFileSync(bead, JSON.stringify([{ id: "x", metadata: { tokens_qa: 231225, tokens_qa_r1: 231225 } }]));
       expect(runAgentCost(passes, "rev2", bead, "qa")).toMatch(/^INCOMPLETE .*uncovered=r1/);
       fs.writeFileSync(bead, JSON.stringify([{ id: "x", metadata: {} }]));
-      expect(runAgentCost(passes, "rev2", bead, "qa")).toBe("ite=2511477 calls=101 ctx=289552 agents=1 passes=1 missing=none uncovered=none");
+      // The summary line keeps its format; per-agent lines follow it (ugcportal-gmzi).
+      expect(runAgentCost(passes, "rev2", bead, "qa").split("\n")[0]).toBe("ite=2511477 calls=101 ctx=289552 agents=1 passes=1 missing=none uncovered=none");
       expect(() => runAgentCost(passes, "rev2")).toThrow(/usage/);
       fs.rmSync(dir, { recursive: true, force: true });
     });
@@ -1730,5 +1732,59 @@ describe("an excluded tokens_impl the notes call an estimate does not mark the t
     const cells = report.split("\n").find((l) => l.startsWith("| `impl1` |")).split("|").map((c) => c.trim());
     expect(cells).toContain(fmt(120000));
     expect(cells).not.toContain(`~${fmt(120000)}`);
+  });
+});
+
+describe("per-round review cost (ugcportal-gmzi): cost_ite_qa_rN beside tokens_qa_rN", () => {
+  const pass = (agentId, n, ite, calls) => ({ agentId, pass: n, ctxEnd: 5, notified: [5], ite, calls });
+  const render = (rs) => renderReport({ releases: ["v9.9.9"], rowsByRelease: new Map([["v9.9.9", rs]]), membershipChecks: [], unmerged: [], generatedAt: "2026-10-20", reviewer: "x", prCount: 0 });
+  const rowsFor = (beads) => buildRows({ version: "v9.9.9", ids: beads.map((b) => b.id), entries: new Map() }, new Map(beads.map((b) => [b.id, b])), new Map());
+  const tableLine = (out, short) => out.split("\n").find((l) => l.startsWith(`| \`${short}\` |`));
+
+  it("K1: runAgentCost prints one per-agent line per listed agent after the unchanged summary line", () => {
+    const dir = fs.mkdtempSync(`${os.tmpdir()}/gmzi-`);
+    const passes = `${dir}/passes.json`, bead = `${dir}/bead.json`;
+    // a1 resumed over two passes (whole figure on one line); a2 one pass; a3 has no transcript.
+    fs.writeFileSync(passes, JSON.stringify([pass("a1", 1, 100, 4), pass("a1", 2, 250, 6), pass("a2", 1, 7000, 90), pass("zz", 1, 1, 1)]));
+    fs.writeFileSync(bead, JSON.stringify([{ id: "x", metadata: {} }]));
+    const out = runAgentCost(passes, "a1,a2", bead, "qa").split("\n");
+    expect(out).toEqual([
+      "ite=7350 calls=100 ctx=10 agents=2 passes=3 missing=none uncovered=none",
+      "agent=a1 ite=350 calls=10 passes=2",
+      "agent=a2 ite=7000 calls=90 passes=1",
+    ]);
+    // A missing agent never prints an ite= of 0.
+    const gone = runAgentCost(passes, "a1,a3", bead, "qa").split("\n");
+    expect(gone[0]).toMatch(/^INCOMPLETE .*missing=a3/);
+    expect(gone.slice(1)).toEqual(["agent=a1 ite=350 calls=10 passes=2", "agent=a3 missing"]);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("K2: a bead with cost_ite_qa_r1..r3 shows three figures and 3/3; one missing r2 shows 2/3 and Data gaps names r2", () => {
+    const full = { id: "ugcportal-g001", metadata: { tokens_qa_r1: 10, tokens_qa_r2: 20, tokens_qa_r3: 30, cost_ite_qa_r1: 1000, cost_ite_qa_r2: 2000, cost_ite_qa_r3: 3000 } };
+    const gap = { id: "ugcportal-g002", metadata: { tokens_qa_r1: 10, tokens_qa_r2: 20, tokens_qa_r3: 30, cost_ite_qa_r1: 1000, cost_ite_qa_r3: 3000 } };
+    const out = render(rowsFor([full, gap]));
+    expect(tableLine(out, "g001")).toContain("r1 1,000; r2 2,000; r3 3,000 (3/3)");
+    expect(tableLine(out, "g002")).toContain("r1 1,000; r2 ?; r3 3,000 (2/3)");
+    expect(out).toContain("rounds with `tokens_qa_rN` but no `cost_ite_qa_rN` (1 beads): g002 (r2)");
+    expect(out).not.toContain("g001 (r");
+    // A bead with no per-round keys prints a dash and is not a gap.
+    const none = render(rowsFor([{ id: "ugcportal-g003", metadata: { cost_ite_qa: 5000 } }]));
+    expect(tableLine(none, "g003")).toContain("| — |");
+    expect(none).toContain("(0 beads): —");
+  });
+
+  it("K3: a 0 or non-integer cost_ite_qa_rN goes to Data gaps and is never read as a figure or summed", () => {
+    const bad = { id: "ugcportal-g004", metadata: { tokens_qa_r1: 10, tokens_qa_r2: 20, tokens_qa_r3: 30, tokens_qa_r4: 40, cost_ite_qa_r1: 1000, cost_ite_qa_r2: 0, cost_ite_qa_r3: "n/a", cost_ite_qa_r4: 12.5 } };
+    const pr = perRoundCost(bad.metadata);
+    expect(pr).toMatchObject({ withCost: 1, total: 4, rejected: ["r2=0", "r3=n/a", "r4=12.5"], without: [] });
+    expect(pr.rounds.map((r) => r.ite)).toEqual([1000, null, null, null]);
+    const out = render(rowsFor([bad]));
+    expect(tableLine(out, "g004")).toContain("r1 1,000; r2 ?; r3 ?; r4 ? (1/4)");
+    expect(out).toContain("`cost_ite_qa_rN` not a positive integer, not read as a round's cost (1): g004 (r2=0, r3=n/a, r4=12.5)");
+    // Nothing sums the per-round keys into the bead's QA total.
+    expect(rowsFor([bad])[0]).toMatchObject({ iteQa: null, iteTotal: null });
+    const ok = rowsFor([{ id: "ugcportal-g005", metadata: { tokens_qa_r1: 1, cost_ite_qa_r1: 1000, tokens_qa_r2: 1, cost_ite_qa_r2: 2000 } }])[0];
+    expect(ok.iteQa).toBeNull();
   });
 });
