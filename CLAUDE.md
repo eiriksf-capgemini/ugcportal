@@ -315,6 +315,19 @@ models whose transcripts under-record output (also section 1.2). Per side (`impl
   `tokens_<side> recorded before cost_agents_<side>`. Work done inline in an
   orchestrator or human session has no agent id and is not in these keys; say
   so here when it was material.
+- `cost_ite_qa_r<N>` / `cost_calls_qa_r<N>` — review round N's transcript
+  cost, beside `tokens_qa_r<N>` (ugcportal-gmzi). Copied from that round's
+  reviewer's `agent=<id> ite=<n> calls=<n> passes=<n>` line, which the command
+  below prints after its summary line, **only when** the summary says
+  `missing=none` and that agent's line carries an `ite=` (a line reading
+  `agent=<id> missing` has no transcript: write no key and say so in
+  `tokens_qa_r<N>_note`). It is the agent's whole cost over all its passes, so
+  on a resumed agent (same id as an earlier round M) it replaces round M's
+  `cost_ite_qa_r<M>` / `cost_calls_qa_r<M>` for that agent, the same rule as
+  `tokens_qa_rN`. Never summed into `cost_ite_qa`, which stays recomputed whole
+  from the agent list. `scripts/release-cost-report.mjs` reads them (a 0 or
+  non-integer value is a Data gap, not a figure); `pr-review-merge` step 4a
+  has the recording step.
 
 ```bash
 node scripts/agent-pass-cost.mjs --json /tmp/passes.json
@@ -323,12 +336,15 @@ bd show <id> --json > /tmp/bead.json          # the bead's current metadata, for
 # (it ships with ugcportal-cii0's #261); all four arguments are required, side is impl or qa
 node -e 'import("./scripts/release-cost-report.mjs").then((m)=>console.log(m.runAgentCost(...process.argv.slice(1))))' /tmp/passes.json <agent-id>,<agent-id> /tmp/bead.json impl
 # prints:  ite=<ite> calls=<calls> ctx=<ctx> agents=<n> passes=<n> missing=none uncovered=none
+#      then one line per listed agent: agent=<id> ite=<n> calls=<n> passes=<n>   (agent=<id> missing when it has no transcript)
 #     or:  INCOMPLETE ... missing=<ids> uncovered=<what> -- write no cost_ite_*/cost_calls_* and unset any already there, do not overwrite tokens_* ...
 # missing=none uncovered=none:
 bd update <id> --set-metadata tokens_impl=<ctx> --set-metadata tokens_impl_convention=last-per-agent \
   --set-metadata cost_agents_impl=<ids> --set-metadata cost_ite_impl=<ite> --set-metadata cost_calls_impl=<calls> \
   --set-metadata cost_note_impl="all transcripts present"
 node scripts/bd-verify-metadata.mjs <id> tokens_impl=<ctx> cost_ite_impl=<ite> cost_calls_impl=<calls>
+# qa side, review round N: also the round's own agent line (only on missing=none and an ite= on that line)
+bd update <id> --set-metadata cost_ite_qa_r<N>=<that agent's ite> --set-metadata cost_calls_qa_r<N>=<that agent's calls>
 # INCOMPLETE: no cost_ite_*/cost_calls_* (old ones removed), the side marked, tokens_impl by the per-agent rule by hand (never from ctx=):
 bd update <id> --set-metadata tokens_impl=<figure> --set-metadata tokens_impl_convention=last-per-agent \
   --set-metadata cost_agents_impl=<ids> --set-metadata cost_note_impl="<the note the output names>" \
