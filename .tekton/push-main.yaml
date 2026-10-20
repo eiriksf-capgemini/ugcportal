@@ -1,0 +1,41 @@
+# Pipelines-as-Code: on every push to main, build the merged commit on the
+# platform-gitops kind cluster and push it as
+#   ugcportal:<sha>   and   ugcportal:local
+# :local is the tag the in-cluster Deployment pulls (imagePullPolicy:
+# Always), so after this run a pod restart picks the new image up:
+#   kubectl rollout restart deployment/ugcportal -n ugcportal
+#
+# Trigger half only -- see pull-request.yaml's header for where the
+# Pipeline, Tasks and registry settings live.
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  name: ugcportal-main
+  annotations:
+    pipelinesascode.tekton.dev/on-event: "[push]"
+    pipelinesascode.tekton.dev/on-target-branch: "[main]"
+    pipelinesascode.tekton.dev/target-namespace: "ugcportal"
+    pipelinesascode.tekton.dev/max-keep-runs: "3"
+spec:
+  pipelineRef:
+    name: ugcportal-build
+  params:
+    - name: repo-url
+      value: "{{ repo_url }}"
+    - name: revision
+      value: "{{ revision }}"
+    - name: image
+      value: "registry.registry.svc.cluster.local:5000/ugcportal:{{ revision }}"
+    - name: extra-args
+      value:
+        - "--destination=registry.registry.svc.cluster.local:5000/ugcportal:local"
+  timeouts:
+    pipeline: "3h0m0s"
+  workspaces:
+    - name: source
+      volumeClaimTemplate:
+        spec:
+          accessModes: [ReadWriteOnce]
+          resources:
+            requests:
+              storage: 1Gi
