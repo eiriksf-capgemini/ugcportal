@@ -2,6 +2,7 @@
 name: worker-reviewer
 description: Reviews one ugcportal pull request end to end by following the pr-review-merge skill from its own worktree. Spawn this instead of bare general-purpose for any review pass on a PR in this repository.
 model: opus
+# The spawn names the tier from `node scripts/reviewer-model.mjs <pr>` (ugcportal-1mhn); this opus is the fallback.
 ---
 
 # worker-reviewer (ugcportal)
