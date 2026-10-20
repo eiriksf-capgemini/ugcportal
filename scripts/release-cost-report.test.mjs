@@ -942,7 +942,7 @@ describe("agentCostFromPasses (ugcportal-cii0): the recording rule CLAUDE.md's o
     expect(none).toMatchObject({ complete: false, passes: 0, missing: ["gone1", "gone2"], ite: null, calls: null, ctx: null });
     const part = agentCostFromPasses([pass("a1", 1, 5, [5])], ["a1", "gone"]);
     expect(part).toMatchObject({ complete: false, missing: ["gone"], ite: null });
-    expect(formatAgentCost(none)).toMatch(/^INCOMPLETE .*missing=gone1,gone2 uncovered=none -- write no cost_ite_\*/);
+    expect(formatAgentCost(none)).toMatch(/^INCOMPLETE .*missing=gone1,gone2 uncovered=none -- write no cost_ite_<side>\/cost_calls_<side> total/);
     expect(formatAgentCost(none)).not.toMatch(/ite=0/);
     expect(agentCostFromPasses([], [])).toMatchObject({ complete: false });
   });
@@ -954,7 +954,7 @@ describe("agentCostFromPasses (ugcportal-cii0): the recording rule CLAUDE.md's o
       const c = agentCostFromPasses(r2, ["rev2"], { meta, side: "qa" });
       expect(c).toMatchObject({ complete: false, missing: [], uncoveredFigures: ["r1"], ite: null, calls: null, ctx: null });
       const line = formatAgentCost(c);
-      expect(line).toMatch(/^INCOMPLETE .*uncovered=r1 -- write no cost_ite_\*\/cost_calls_\* and unset any already there, do not overwrite tokens_\*/);
+      expect(line).toMatch(/^INCOMPLETE .*uncovered=r1 -- write no cost_ite_qa\/cost_calls_qa total and unset any already there \(per-round cost_ite_qa_r<N> keys are not touched\), do not overwrite tokens_\*/);
       expect(line).toContain('"rounds without agent ids: r1"');
       expect(line).not.toMatch(/ctx=/);
     });
@@ -1740,6 +1740,14 @@ describe("per-round review cost (ugcportal-gmzi): cost_ite_qa_rN beside tokens_q
   const render = (rs) => renderReport({ releases: ["v9.9.9"], rowsByRelease: new Map([["v9.9.9", rs]]), membershipChecks: [], unmerged: [], generatedAt: "2026-10-20", reviewer: "x", prCount: 0 });
   const rowsFor = (beads) => buildRows({ version: "v9.9.9", ids: beads.map((b) => b.id), entries: new Map() }, new Map(beads.map((b) => [b.id, b])), new Map());
   const tableLine = (out, short) => out.split("\n").find((l) => l.startsWith(`| \`${short}\` |`));
+  // The "QA ITE by round" column's own cell, located by its header, so another "—" in the row cannot satisfy it.
+  const roundCell = (out, short) => {
+    const lines = out.split("\n");
+    const header = lines.find((l) => l.startsWith("| Bead |")).split("|").map((c) => c.trim());
+    const col = header.findIndex((c) => c.startsWith("QA ITE by round"));
+    expect(col).toBeGreaterThan(0);
+    return tableLine(out, short).split("|").map((c) => c.trim())[col];
+  };
 
   it("K1: runAgentCost prints one per-agent line per listed agent after the unchanged summary line", () => {
     const dir = fs.mkdtempSync(`${os.tmpdir()}/gmzi-`);
@@ -1770,7 +1778,7 @@ describe("per-round review cost (ugcportal-gmzi): cost_ite_qa_rN beside tokens_q
     expect(out).not.toContain("g001 (r");
     // A bead with no per-round keys prints a dash and is not a gap.
     const none = render(rowsFor([{ id: "ugcportal-g003", metadata: { cost_ite_qa: 5000 } }]));
-    expect(tableLine(none, "g003")).toContain("| — |");
+    expect(roundCell(none, "g003")).toBe("—");
     expect(none).toContain("(0 beads): —");
   });
 
@@ -1786,5 +1794,39 @@ describe("per-round review cost (ugcportal-gmzi): cost_ite_qa_rN beside tokens_q
     expect(rowsFor([bad])[0]).toMatchObject({ iteQa: null, iteTotal: null });
     const ok = rowsFor([{ id: "ugcportal-g005", metadata: { tokens_qa_r1: 1, cost_ite_qa_r1: 1000, tokens_qa_r2: 1, cost_ite_qa_r2: 2000 } }])[0];
     expect(ok.iteQa).toBeNull();
+  });
+  it("M1: an INCOMPLETE line names the side totals only and says the per-round keys are not touched", () => {
+    const dir = fs.mkdtempSync(`${os.tmpdir()}/gmzi-`);
+    const passes = `${dir}/passes.json`, bead = `${dir}/bead.json`;
+    // The round-1 reviewer's fixture: round 1 was a1, this round's reviewer a2 is the only id listed.
+    fs.writeFileSync(passes, JSON.stringify([pass("a2", 1, 7000, 90)]));
+    fs.writeFileSync(bead, JSON.stringify([{ id: "x", metadata: { tokens_qa_r1: 10, tokens_qa_r1_agent: "a1" } }]));
+    expect(runAgentCost(passes, "a2", bead, "qa").split("\n")).toEqual([
+      'INCOMPLETE agents=1 passes=1 missing=none uncovered=r1 unlisted -- write no cost_ite_qa/cost_calls_qa total and unset any already there (per-round cost_ite_qa_r<N> keys are not touched), do not overwrite tokens_* from this; set cost_note_qa to "rounds whose agents are not in the list: r1" and cost_coverage_qa to "incomplete: rounds whose agents are not in the list: r1"',
+      "agent=a2 ite=7000 calls=90 passes=1",
+    ]);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("L4: ids may be space-separated after commas, and a repeated id prints one line", () => {
+    const dir = fs.mkdtempSync(`${os.tmpdir()}/gmzi-`);
+    const passes = `${dir}/passes.json`, bead = `${dir}/bead.json`;
+    fs.writeFileSync(passes, JSON.stringify([pass("a1", 1, 100, 4), pass("a2", 1, 7000, 90)]));
+    fs.writeFileSync(bead, JSON.stringify([{ id: "x", metadata: {} }]));
+    const both = ["ite=7100 calls=94 ctx=10 agents=2 passes=2 missing=none uncovered=none", "agent=a1 ite=100 calls=4 passes=1", "agent=a2 ite=7000 calls=90 passes=1"];
+    expect(runAgentCost(passes, "a1, a2", bead, "qa").split("\n")).toEqual(both);
+    expect(runAgentCost(passes, "a1,a2", bead, "qa").split("\n")).toEqual(both);
+    expect(runAgentCost(passes, "a1,a1", bead, "qa").split("\n")).toEqual(["ite=100 calls=4 ctx=5 agents=1 passes=1 missing=none uncovered=none", "agent=a1 ite=100 calls=4 passes=1"]);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("L5: only cost_ite_qa_r<N> with N a canonical positive integer is a round; r01 and r0 are listed as malformed", () => {
+    const pr = perRoundCost({ cost_ite_qa_r01: 100, cost_ite_qa_r0: 200, tokens_qa_r2: 5, cost_ite_qa_r2: 300 });
+    expect(pr.rounds.map((r) => r.n)).toEqual([2]);
+    expect(pr).toMatchObject({ withCost: 1, total: 1, without: [], rejected: [], malformed: ["cost_ite_qa_r0", "cost_ite_qa_r01"] });
+    const out = render(rowsFor([{ id: "ugcportal-g006", metadata: { cost_ite_qa_r01: 100, cost_ite_qa_r0: 200, tokens_qa_r2: 5, cost_ite_qa_r2: 300 } }]));
+    expect(roundCell(out, "g006")).toBe("r2 300 (1/1)");
+    expect(out).toContain("rounds with `tokens_qa_rN` but no `cost_ite_qa_rN` (0 beads): —");
+    expect(out).toContain("`cost_ite_qa_rN` key whose N is not a round number (1-based, no leading zero), not read (1): g006 (cost_ite_qa_r0, cost_ite_qa_r01)");
   });
 });

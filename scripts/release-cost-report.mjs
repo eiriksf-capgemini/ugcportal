@@ -60,8 +60,10 @@
  * accepted cost_ite_* figure (absent, 0, malformed, or on a side marked incomplete) is read in context size; see costUnitOf.
  *
  * Per-round review figures: tokens_qa_rN holds round N's reviewer figure
- * (context size, not cost) on many beads and this report does not read it;
- * cost_ite_qa_rN (ugcportal-gmzi) holds round N's transcript cost and is
+ * (context size, not cost) on many beads. This report does not read its
+ * value as a figure; perRoundCost uses the key only to mark which rounds
+ * exist, and the Data gaps line names a round that has one but no
+ * cost_ite_qa_rN. cost_ite_qa_rN (ugcportal-gmzi) holds round N's transcript cost and is
  * read by perRoundCost below. The qa/round column is still the bead's QA
  * figure / rounds, a crude mean, and is labelled as such. The per-round
  * keys are never summed into cost_ite_qa (that total is recomputed whole
@@ -1320,19 +1322,24 @@ export function coverageIncomplete(meta, side) {
  * costed only when its cost_ite_qa_rN is a positive integer; a 0 or a
  * non-integer is listed in `rejected` (with its value) and never read as a
  * figure, the same rule costUnitOf applies to cost_ite_qa (a 0 is what an
- * empty transcript sum gives). Nothing here sums the rounds.
+ * empty transcript sum gives). Nothing here sums the rounds. A round number
+ * is 1-based with no leading zero, and the value is read under exactly the
+ * key that matched; a cost_ite_qa_r key whose suffix is any other run of
+ * digits (r0, r01) is listed in `malformed` and read as no round at all.
  */
 export function perRoundCost(meta = {}) {
   const ns = new Set();
+  const malformed = [];
   for (const k of Object.keys(meta)) {
-    const m = /^(?:tokens_qa|cost_ite_qa)_r(\d+)$/.exec(k);
-    if (m) ns.add(Number(m[1]));
+    const m = /^(?:tokens_qa|cost_ite_qa)_r([1-9]\d*)$/.exec(k);
+    if (m) ns.add(m[1]);
+    else if (/^cost_ite_qa_r\d+$/.test(k)) malformed.push(k);
   }
-  const rounds = [...ns].sort((a, b) => a - b).map((n) => {
+  const rounds = [...ns].sort((a, b) => Number(a) - Number(b)).map((n) => {
     const raw = meta[`cost_ite_qa_r${n}`];
     const present = raw !== undefined && raw !== null && raw !== "";
     const ite = positiveInt(raw);
-    return { n, ite, rejected: present && ite === null ? String(raw) : null };
+    return { n: Number(n), ite, rejected: present && ite === null ? String(raw) : null };
   });
   return {
     rounds,
@@ -1340,6 +1347,7 @@ export function perRoundCost(meta = {}) {
     total: rounds.length,
     without: rounds.filter((r) => r.ite === null && r.rejected === null).map((r) => `r${r.n}`),
     rejected: rounds.filter((r) => r.rejected !== null).map((r) => `r${r.n}=${r.rejected}`),
+    malformed: malformed.sort(),
   };
 }
 
@@ -1461,7 +1469,7 @@ export function formatAgentCost(c) {
     const s = c.side ?? "<side>";
     // An existing marker is kept as it is: only a human who backfilled clears it.
     const marker = c.marker ?? `incomplete: ${why}`;
-    return `INCOMPLETE agents=${c.agents} passes=${c.passes} missing=${c.missing.join(",") || "none"} uncovered=${uncovered.join(",") || "none"} -- write no cost_ite_*/cost_calls_* and unset any already there, do not overwrite tokens_* from this; set cost_note_${s} to "${why}" and cost_coverage_${s} to "${marker}"`;
+    return `INCOMPLETE agents=${c.agents} passes=${c.passes} missing=${c.missing.join(",") || "none"} uncovered=${uncovered.join(",") || "none"} -- write no cost_ite_${s}/cost_calls_${s} total and unset any already there (per-round cost_ite_qa_r<N> keys are not touched), do not overwrite tokens_* from this; set cost_note_${s} to "${why}" and cost_coverage_${s} to "${marker}"`;
   }
   return `ite=${c.ite} calls=${c.calls} ctx=${c.ctx} agents=${c.agents} passes=${c.passes} missing=none uncovered=none`;
 }
@@ -1925,6 +1933,8 @@ function renderDataGaps(rowsByRelease, prAnalysesByNumber, unmerged) {
     lines.push(`  - rounds with \`tokens_qa_rN\` but no \`cost_ite_qa_rN\` (${noRoundCost.length} beads): ${noRoundCost.join("; ") || "—"}`);
     const badRoundCost = rows.filter((r) => r.roundCost.rejected.length).map((r) => `${r.id.replace("ugcportal-", "")} (${r.roundCost.rejected.join(", ")})`);
     if (badRoundCost.length) lines.push(`  - \`cost_ite_qa_rN\` not a positive integer, not read as a round's cost (${badRoundCost.length}): ${badRoundCost.join("; ")}`);
+    const oddRoundKey = rows.filter((r) => r.roundCost.malformed.length).map((r) => `${r.id.replace("ugcportal-", "")} (${r.roundCost.malformed.join(", ")})`);
+    if (oddRoundKey.length) lines.push(`  - \`cost_ite_qa_rN\` key whose N is not a round number (1-based, no leading zero), not read (${oddRoundKey.length}): ${oddRoundKey.join("; ")}`);
     if (unstated.length) lines.push(`  - rounds whose verdict states no severity: ${unstated.join(", ")}`);
     const split = roundsSplit(rows);
     lines.push(`  - rounds whose severity came from \`findings_rN\` keys: ${split.fromKeys}; rounds that fell back to the prose parse: ${split.fromProse}${split.fellBack.length ? ` -- ${split.fellBack.join(", ")}` : ""}`);
